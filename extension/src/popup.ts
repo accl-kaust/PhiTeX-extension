@@ -41,7 +41,7 @@ async function render(): Promise<void> {
   news.checked = !s.newsOff;
   news.onchange = () => chrome.storage.local.set({ newsOff: !news.checked });
   $("terms").textContent = accepted
-    ? "You accepted: this is an unofficial, experimental extension, provided as is, without any warranty, used at your own risk."
+    ? "Accepted: unofficial, experimental, as is, no warranty, at your own risk."
     : "Not accepted yet: ⚡ Instant asks before its first use.";
   $("terms").className = `terms${accepted ? "" : " warn"}`;
   const withdraw = $<HTMLButtonElement>("withdraw");
@@ -70,7 +70,7 @@ async function render(): Promise<void> {
       reset.classList.add("confirm");
       armed = setTimeout(() => {
         armed = null;
-        reset.textContent = "Reset";
+        reset.textContent = "Reset extension";
         reset.classList.remove("confirm");
       }, 4000);
       return;

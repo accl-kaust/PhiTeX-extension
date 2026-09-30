@@ -125,21 +125,28 @@ const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
  * finds it). Crisp at any zoom; positions are PhiTeX's, glyphs the browser's.
  */
 export function svg(d: Draws, cssWidth: number): string {
-  const lines = new Map<string, [number, string][]>();
+  const lines = new Map<string, [number, string, number | undefined][]>();
   const order: string[] = [];
-  for (const [x, y, size, f, text] of d.t) {
+  for (const [x, y, size, f, text, width] of d.t) {
     const k = `${y}|${size}|${f}`;
     if (!lines.has(k)) {
       lines.set(k, []);
       order.push(k);
     }
-    lines.get(k)!.push([x, text]);
+    lines.get(k)!.push([x, text, width]);
   }
   let body = "";
   for (const k of order) {
     const [y, size, f] = k.split("|");
     const words = lines.get(k)!.sort((a, b) => a[0] - b[0]);
-    const spans = words.map(([x, t], i) => `<tspan x="${x}">${esc(t)}${i < words.length - 1 ? " " : ""}</tspan>`).join("");
+    // (each word fitted to the width PhiTeX laid it out with: the browser's glyphs, TeX's layout)
+    const spans = words
+      .map(([x, t, width], i) => {
+        const fit = width && [...t].length > 1 ? ` textLength="${width}" lengthAdjust="spacingAndGlyphs"` : "";
+        const space = i < words.length - 1 ? `<tspan> </tspan>` : "";
+        return `<tspan x="${x}"${fit}>${esc(t)}</tspan>${space}`;
+      })
+      .join("");
     body += `<text y="${y}" style="font:${esc(cssFont(d.f[Number(f)], Number(size)))}">${spans}</text>\n`;
   }
   for (const [x, y, w, h] of d.r) body += `<rect x="${x}" y="${y}" width="${Math.max(w, 0.4)}" height="${Math.max(h, 0.4)}"/>`;
@@ -493,7 +500,7 @@ export class Panel {
       this.win.style.setProperty("--pane", getComputedStyle(pane).backgroundColor);
       this.win.classList.toggle("pdf-dark", pane.classList.contains("pdf-dark-mode"));
       this.win.classList.toggle("light", document.body.dataset.theme === "light");
-      Object.assign(h, { position: "absolute", left: "0", right: "0", bottom: "0", top: `${top}px`, zIndex: "5", flexDirection: "column" });
+      Object.assign(h, { position: "absolute", left: "0", right: "0", bottom: "0", top: `${top}px`, zIndex: "12", flexDirection: "column" });
     }
     if (pane === this.docked && this.host.isConnected) return;
     this.docked = pane;

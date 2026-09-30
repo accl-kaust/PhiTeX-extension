@@ -7,13 +7,15 @@
   :root { --bg: #fff; --bg2: #f4f5f6; --fg: #1b222c; --fg2: #495365; --line: #e7e9ee; --accent: #098842; --accent2: #1e6b41; --warn: #8f5514; color-scheme: light dark; }
   @media (prefers-color-scheme: dark) { :root { --bg: #1b222c; --bg2: #2f3a4c; --fg: #f4f5f6; --fg2: #afb5c0; --line: #2f3a4c; --warn: #de8014; } }
   * { box-sizing: border-box; }
-  body { margin: 0; width: 340px; background: var(--bg); color: var(--fg); font: 13px/1.45 "Noto Sans", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: linear-gradient(135deg, #098842, #1e6b41); color: #fff; }
+  /* (Chrome caps a popup at 800×600: this fits, without scrolling) */
+  html { overflow-x: hidden; }
+  body { margin: 0; width: 340px; background: var(--bg); color: var(--fg); font: 12.5px/1.35 "Noto Sans", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: linear-gradient(135deg, #098842, #1e6b41); color: #fff; }
   header img { width: 28px; height: 28px; border-radius: 6px; box-shadow: 0 0 0 1.5px rgb(255 255 255 / 35%); }
   header b { font-size: 15px; display: block; } header small { opacity: .85; }
-  section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  h2 { margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg2); }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+  section { padding: 7px 14px; border-bottom: 1px solid var(--line); }
+  h2 { margin: 0 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg2); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; }
   .row span small { display: block; color: var(--fg2); font-size: 11px; }
   .seg { display: inline-flex; background: var(--bg2); border-radius: 9999px; padding: 2px; }
   .seg button { all: unset; cursor: pointer; padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; color: var(--fg2); }
@@ -30,7 +32,7 @@
   button.btn.danger { background: #b83a33; color: #fff; } button.btn.danger.confirm { background: #942f2a; } button.btn:disabled { opacity: .5; cursor: default; }
   .note { color: var(--fg2); font-size: 11px; margin: 4px 0 0; }
   .terms { font-size: 12px; } .terms.warn { color: var(--warn); }
-  footer { padding: 10px 14px; color: var(--fg2); font-size: 11px; }
+  footer { padding: 8px 14px; color: var(--fg2); font-size: 10.5px; line-height: 1.35; }
   footer b { color: var(--fg); }
   footer a { color: var(--accent); }
 </style>
@@ -49,7 +51,7 @@
     <span class="seg" id="view"><button data-v="pdf">PDF</button><button data-v="phitex">⚡ Instant</button></span></div>
   <div class="row"><span>Page<small>Vector: selectable text · PNG: PhiTeX's raster</small></span>
     <span class="seg" id="format"><button data-v="vector">Vector</button><button data-v="png">PNG</button></span></div>
-  <p class="note" id="viewnote"></p>
+  <p class="note" id="viewnote" style="margin:0"></p>
 </section>
 
 <section>
@@ -59,19 +61,14 @@
   <div class="row"><span>Show what's new after updates</span>
     <label class="switch"><input type="checkbox" id="news"><i></i></label></div>
   <div class="btns" style="margin-top:6px"><button class="btn" id="whatsnew">What's new</button><button class="btn" id="tour">Take the tour</button></div>
-  <p class="note" id="tabnote"></p>
+  <p class="note" id="tabnote" style="margin:4px 0 0"></p>
 </section>
 
 <section>
-  <h2>Terms</h2>
-  <p class="terms" id="terms"></p>
-  <div class="btns"><button class="btn" id="withdraw">Withdraw consent</button></div>
-</section>
-
-<section>
-  <h2>Reset</h2>
-  <div class="row"><span>Reset the extension<small>Wipes its settings, terms and layout: as just installed</small></span>
-    <button class="btn danger" id="reset">Reset</button></div>
+  <h2>Terms and reset</h2>
+  <p class="terms" id="terms" style="margin:2px 0 6px"></p>
+  <div class="btns"><button class="btn" id="withdraw">Withdraw consent</button>
+    <button class="btn danger" id="reset" title="Wipes its settings, terms and layout: as just installed">Reset extension</button></div>
 </section>
 
 <footer><b>PhiTeX Instant for Overleaf (unofficial)</b> <span id="version"></span><br>

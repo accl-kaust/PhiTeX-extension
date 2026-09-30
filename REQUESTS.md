@@ -266,3 +266,25 @@ wasm32-wasip1` line in AGENTS.md's checks, building phitex-layout for
 wasm. Better still, a tiny `phitex-wasm` crate in PhiTeX with the ABI of
 `core/`, run under `node:wasi` for one open and one edit
 (`test/wasm-harness.mjs` does exactly this).
+
+## 17. Plain-TeX parameters that print as text
+
+In the pinned `241bd29`, `\parindent=0pt` typesets "=0pt" at the top of
+the page: the assignment isn't read, and its text is. The same goes, likely,
+for other dimen/glue parameters a plain-TeX document sets (`\parskip`,
+`\baselineskip`). Found making the store's showcase document. Check again
+at `9d3ed5e`, which reworks the builder towards TRIP.
+
+## 18. Font names that real TeX also knows (resolved upstream, to adopt)
+
+In `241bd29`, fonts are the PDF base 14 by name (`\font\rm=Times-Roman`),
+with one width table for all of them (`metrics::width(char, size)`): bold
+and italic are laid out with Times-Roman's widths. A document written that
+way fails on Overleaf's pdfTeX ("Metric (TFM) file not found"), and one
+written for pdfTeX (`\font\tenrm=cmr10`) fails in PhiTeX. **`9d3ed5e`
+fixes this** with real TFM fonts (Computer Modern carried in the repository,
+others read from the project) and a per-character draw list. The
+extension's next update adopts it (the port, the OT1/OML/OMS/OMX → Unicode
+mapping, Latin Modern webfonts for the glyphs). Meanwhile, the extension
+fits each drawn word to the width PhiTeX laid it out with (`textLength`),
+so the browser's bold does not overrun.

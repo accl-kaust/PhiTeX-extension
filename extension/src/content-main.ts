@@ -147,6 +147,8 @@ const ZOOMS: [string, string][] = [["fit", "Fit width"], ["0.75", "75%"], ["1", 
 const DOCK_CSS = `
   /* Overleaf's viewer stays laid out, only unseen: pdf.js scrolls it (recompile, SyncTeX) and needs its offsetParent */
   .phitex-on .pdf-viewer { visibility: hidden !important; pointer-events: none !important; }
+  /* Overleaf's logs (its compiler's) too, while Instant shows: back as they were on the PDF tab */
+  .phitex-on .new-logs-pane, .phitex-on .logs-pane { visibility: hidden !important; pointer-events: none !important; }
   /* in PhiTeX mode, Overleaf's viewer controls go, all but its invert-colors button (which works on ours too) */
   .phitex-on #toolbar-pdf-controls *:not(:has(.theme-toggle-btn)):not(.theme-toggle-btn):not(.theme-toggle-btn *) { display: none !important; }
   .phitex-on .toolbar-pdf-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
@@ -197,6 +199,7 @@ const DOCK_CSS = `
     background: var(--green-50, #098842); border-left: 1.5px solid var(--green-40, #53b57f); border-top: 1.5px solid var(--green-40, #53b57f); }
   #phitex-tour .popover-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #fff; border: 0;
     background: linear-gradient(135deg, var(--green-50, #098842), var(--green-60, #1e6b41)); padding: 10px 14px; }
+  #phitex-tour.no-arrow::before { display: none; }
   #phitex-tour .phitex-step { font-size: 11px; font-weight: 600; opacity: .8; white-space: nowrap; }
   #phitex-tour .phitex-tip-clip { overflow: hidden; border-radius: 11px; }
   #phitex-tour .phitex-tip-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; }
@@ -604,10 +607,15 @@ function dockInOverleaf(panel: Panel): Dock {
         <div class="small text-muted">From the unofficial PhiTeX extension, not Overleaf.</div>
         <div class="phitex-tip-actions"><button type="button" class="btn btn-primary btn-sm" id="phitex-news-ok">Got it</button></div></div></div>`;
     document.body.append(t);
-    const r = label.getBoundingClientRect(), w = t.offsetWidth;
-    const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
-    Object.assign(t.style, { left: `${left}px`, top: `${r.bottom + 10}px` });
-    t.style.setProperty("--arrow", `${r.left + r.width / 2 - left}px`);
+    const place = () => {
+      if (!t.isConnected) return removeEventListener("resize", place);
+      const r = label.getBoundingClientRect(), w = t.offsetWidth;
+      const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
+      Object.assign(t.style, { left: `${left}px`, top: `${r.bottom + 10}px` });
+      t.style.setProperty("--arrow", `${r.left + r.width / 2 - left}px`);
+    };
+    place();
+    addEventListener("resize", place);
     t.querySelector<HTMLElement>("#phitex-news-ok")!.onclick = () => {
       t.remove();
       label.classList.remove("phitex-dot-new");
@@ -636,7 +644,7 @@ function dockInOverleaf(panel: Panel): Dock {
     target.classList.add("phitex-ring");
     const t = document.createElement("div");
     t.id = "phitex-tour";
-    t.className = "popover bs-popover-bottom show";
+    t.className = `popover bs-popover-bottom show${step.inside ? " no-arrow" : ""}`;
     t.setAttribute("role", "dialog");
     t.setAttribute("aria-label", `Tour, step ${k + 1} of ${STEPS.length}`);
     t.innerHTML = `<div class="phitex-tip-clip"><div class="popover-header"><span>${step.title}</span><span class="phitex-step">${k + 1} of ${STEPS.length}</span></div>
@@ -646,11 +654,17 @@ function dockInOverleaf(panel: Panel): Dock {
           ${k ? `<button type="button" class="btn btn-secondary btn-sm" data-t="back">Back</button>` : ""}
           <button type="button" class="btn btn-primary btn-sm" data-t="next">${k === STEPS.length - 1 ? "Done" : "Next"}</button></div></div></div>`;
     document.body.append(t);
-    const r = target.getBoundingClientRect(), w = t.offsetWidth;
-    const left = Math.max(8, Math.min((step.inside ? r.left + r.width / 2 : r.left + r.width / 2) - w / 2, innerWidth - w - 8));
-    t.style.left = `${left}px`;
-    t.style.top = `${step.inside ? r.top + 24 : r.bottom + 10}px`;
-    t.style.setProperty("--arrow", step.inside ? "-100px" : `${r.left + r.width / 2 - left}px`);
+    // (placed again when the window resizes: it points at its target, wherever that went)
+    const place = () => {
+      if (!t.isConnected) return removeEventListener("resize", place);
+      const r = target.getBoundingClientRect(), w = t.offsetWidth;
+      const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
+      t.style.left = `${left}px`;
+      t.style.top = `${step.inside ? r.top + 24 : r.bottom + 10}px`;
+      t.style.setProperty("--arrow", step.inside ? "-100px" : `${r.left + r.width / 2 - left}px`);
+    };
+    place();
+    addEventListener("resize", place);
     t.onclick = (e) => {
       const a = (e.target as HTMLElement).closest<HTMLElement>("[data-t]")?.dataset.t;
       if (a === "next") void tour(k + 1);
@@ -741,7 +755,11 @@ function dockInOverleaf(panel: Panel): Dock {
   };
 }
 
+/** Only Overleaf's editor (/project/<24 hex id>), not its other pages under /project/. */
+const EDITOR = /^\/project\/[0-9a-f]{24}\/?$/;
+
 (async () => {
+  if (!EDITOR.test(location.pathname) && !location.hostname.startsWith("localhost")) return;
   let session: PreviewSession;
   let dock: Dock | undefined;
   const panel = new Panel({

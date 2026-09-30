@@ -37,6 +37,15 @@ Development:
     scripts/sandbox node --test test/               # TypeScript + wasm tests
     scripts/sandbox node bench/latency.mjs          # latencies of the wasm core
 
+After a change to the core (`core/`, or PhiTeX), **restart the extension**
+(`scripts/chrome.sh`). The offscreen document keeps its worker, and the
+wasm loaded in it, across page reloads.
+
+Store kit: `scripts/package.sh` builds the upload zip; `STORE.md` has the
+listing, justifications and reviewer notes; `store/` has the screenshots
+(`scripts/store-shot.mjs`, 1280×800), the promo tile and the icon;
+`PRIVACY.md` is the privacy policy.
+
 Everything runs through `scripts/sandbox` (bubblewrap: this repo writable,
 PhiTeX read-only, `$HOME` empty, no network unless `--net`).
 

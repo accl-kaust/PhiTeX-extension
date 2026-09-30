@@ -243,14 +243,20 @@ pub fn draws_json(b: &BoxVal) -> String {
                         fonts.push(font.name.clone());
                         fonts.len() - 1
                     });
+                // (the width PhiTeX laid the word out with, for the host to fit its glyphs to)
+                let width: i64 = text
+                    .chars()
+                    .map(|c| phitex_ssa::metrics::width(c, font.size))
+                    .sum();
                 let _ = write!(
                     t,
-                    "{}[{},{},{},{k},{}]",
+                    "{}[{},{},{},{k},{},{}]",
                     if t.is_empty() { "" } else { "," },
                     bp(x),
                     bp(y),
                     bp(font.size),
-                    esc(&text)
+                    esc(&text),
+                    bp(width)
                 );
             }
             Draw::Rule {

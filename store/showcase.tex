@@ -1,0 +1,31 @@
+\font\title=Times-Bold at 22pt
+\font\head=Times-Bold at 13pt
+\font\it=Times-Italic at 11pt
+\font\rm=Times-Roman at 11pt
+\rm
+\hsize=430pt
+
+{\title Instant TeX}
+
+{\it A page that repaints as you type.}
+
+{\head Every keystroke, incrementally}
+
+PhiTeX compiles a TeX document into a program in SSA form, and keeps that
+program up to date as the document is edited. A keystroke rebuilds only the
+chunk of the document it touched; everything else is reused. The page you
+are looking at is painted first, and the rest follows, to the same fixed
+point a fresh build would reach.
+
+{\head Right in your browser}
+
+The engine runs locally, as WebAssembly: your document is never sent
+anywhere. Switch between Overleaf's compiled PDF and this instant preview
+whenever you like.
+
+{\head Honest about its limits}
+
+It is experimental and handles a subset of plain TeX today. What it cannot
+read yet is listed, with a click to the line.
+
+\bye

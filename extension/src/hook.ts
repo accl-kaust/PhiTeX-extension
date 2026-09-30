@@ -4,6 +4,8 @@
 // never changes the editor. No imports (a classic script).
 
 (() => {
+  // (only Overleaf's editor: /project/<24 hex id>; the local mock too)
+  if (!/^\/project\/([0-9a-f]{24}|mock)\/?$/.test(location.pathname)) return;
   const SRC = "phitex-hook";
   let view: any = null;
   let file: string | null = null;

@@ -38,8 +38,8 @@ export interface Draws {
   h: number;
   /** Font names (Times-Roman, ...), indexed by `t`'s font. */
   f: string[];
-  /** Words: x, y (baseline), size, font, text. */
-  t: [number, number, number, number, string][];
+  /** Words: x, y (baseline), size, font, text, and the width PhiTeX laid it out with. */
+  t: [number, number, number, number, string, number?][];
   /** Rules: x, y (top), width, height. */
   r: [number, number, number, number][];
 }

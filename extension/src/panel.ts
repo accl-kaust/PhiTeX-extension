@@ -250,10 +250,12 @@ footer .msg.err { color: var(--danger); }
 .win.docked .sum:hover { background: var(--dark3); }
 .win.docked .sum .first { color: var(--fg-dark); }
 .win.docked .sum .n.error { color: var(--danger-dark); } .win.docked .sum .n.warning { color: var(--warn-dark); } .win.docked .sum .n.info { color: #97b6e5; }
-.win.docked .stage { background: transparent; padding: 12px 20px; }
+/* as Overleaf's pdf.js viewer: the scrollbar always there, pages 12 px apart and centered */
+.win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
+.win.docked .stage svg.page, .win.docked .stage img { display: block; margin: 12px auto; }
 .win.docked .stage svg.page, .win.docked .stage img { border-radius: 0;
   box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
-.win.docked .banner { margin: -12px -20px 10px; }
+.win.docked .banner { margin: 0; top: 0; }
 .win.docked .empty { color: var(--fg2-dark); }
 .win.collapsed { resize: none; min-height: 0; min-width: 0; border-radius: 9999px; }
 .win.collapsed > :not(header) { display: none; }
@@ -580,13 +582,16 @@ export class Panel {
     for (const f of this.listeners) f(s);
   }
 
-  /** CSS pixels per PDF point at 96 dpi: 1 is 100%. */
+  /**
+   * The zoom, 1 being 100% (a PDF point at 96/72 CSS pixels). Fit is
+   * pdf.js's "page-width", as Overleaf's viewer: (clientWidth − 40) / the
+   * page's width, 40 being its SCROLLBAR_PADDING.
+   */
   private scale(): number {
-    const d = this.last && "draws" in this.last ? this.last.draws : null;
     if (this.prefs.zoom !== "fit") return Number(this.prefs.zoom);
-    const stage = this.$("#stage");
-    const pad = this.docked ? 40 : 24;
-    return d ? Math.max(stage.clientWidth - pad, 200) / (d.w * (96 / 72)) : 1;
+    const d = this.last && "draws" in this.last ? this.last.draws : null;
+    const pageW = (d?.w ?? 612) * (96 / 72);
+    return Math.max(this.$("#stage").clientWidth - (this.docked ? 40 : 24), 200) / pageW;
   }
 
   goPage(k: number): void {
@@ -724,7 +729,7 @@ export class Panel {
     if ("draws" in img) {
       stage.querySelector("img")?.remove();
       stage.classList.toggle("fit", this.prefs.zoom === "fit");
-      const w = this.prefs.zoom === "fit" ? Math.max(stage.clientWidth - (this.docked ? 40 : 24), 200) : img.draws.w * (96 / 72) * Number(this.prefs.zoom);
+      const w = img.draws.w * (96 / 72) * this.scale();
       // (a selection in the old page is lost on repaint: keep typing smooth, don't repaint while selecting)
       const sel = this.root instanceof ShadowRoot ? (this.root as any).getSelection?.() : null;
       if (sel && !sel.isCollapsed && stage.querySelector("svg.page")?.contains(sel.anchorNode)) {

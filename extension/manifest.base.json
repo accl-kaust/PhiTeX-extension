@@ -44,6 +44,7 @@
         "dist/panel.js",
         "dist/session.js",
         "dist/diagnostics.js",
+        "dist/viewer.js",
         "dist/news.js",
         "LICENSE.txt"
       ],

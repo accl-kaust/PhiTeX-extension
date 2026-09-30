@@ -9,6 +9,7 @@
 // diagnostics jump to their line.
 
 import type { Draws, PageImage, Status } from "./session.ts";
+import { Viewer } from "./viewer.ts";
 
 /** What the panel shows, for controls that live outside it (a host's own toolbar). */
 export interface ViewState {
@@ -31,7 +32,10 @@ export interface ViewState {
 }
 
 export interface PanelEvents {
+  /** The page in view changed (the one an edit paints first). */
   onPage(p: number): void;
+  /** Page `k` is wanted: in view, not drawn at its current hash. */
+  onNeed?(k: number): void;
   onPdf(): void;
   onDebug(on: boolean): void;
   onMain(m: string): void;
@@ -313,7 +317,11 @@ footer .msg.err { color: var(--danger); }
    viewer min-height 100% with the first page's margin collapsing through it (so it scrolls by 12 px, as native) */
 .win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
-.win.docked .stage svg.page, .win.docked .stage img { display: block; margin: 12px auto; }
+.slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); }
+.slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
+.win.docked .slot { box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
+.win.docked.pdf-dark .slot { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }
+.stage.stale .slot { opacity: .45; filter: grayscale(1); }
 .win.docked .stage svg.page, .win.docked .stage img { border-radius: 0;
   box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked .banner { margin: 0; top: 0; }
@@ -340,7 +348,7 @@ export class Panel {
   private debugOn = false;
   private ev!: PanelEvents;
   /** A page that came while text in the shown one was selected: shown once the selection ends. */
-  private pendingRedraw: PageImage | null = null;
+  private viewer!: Viewer;
 
   private $ = <T extends HTMLElement = HTMLElement>(sel: string) => this.root.querySelector(sel) as T;
 
@@ -399,8 +407,8 @@ export class Panel {
     host.style.display = "none";
     (document.body ?? document.documentElement).append(host);
     this.win = this.$(".win");
-    this.$("#prev").onclick = () => ev.onPage(this.at - 1);
-    this.$("#next").onclick = () => ev.onPage(this.at + 1);
+    this.$("#prev").onclick = () => this.prev();
+    this.$("#next").onclick = () => this.next();
     this.$("#pdf").onclick = () => ev.onPdf();
     this.$("#reload").onclick = () => ev.onReload();
     const dbg = this.$("#dbg");
@@ -425,6 +433,7 @@ export class Panel {
     this.$<HTMLSelectElement>("#fmt").onchange = (e) => {
       this.prefs.format = (e.target as HTMLSelectElement).value as PanelPrefs["format"];
       this.save();
+      this.viewer.invalidate();
       ev.onFormat(this.prefs.format);
     };
     this.$("#min").onclick = () => this.collapse(!this.prefs.collapsed);
@@ -453,13 +462,16 @@ export class Panel {
       }
     });
     this.drag();
-    document.addEventListener("selectionchange", () => {
-      const sel = (this.root as any).getSelection?.();
-      if (this.pendingRedraw && (!sel || sel.isCollapsed)) {
-        const p = this.pendingRedraw;
-        this.pendingRedraw = null;
-        this.show(p);
-      }
+    this.viewer = new Viewer(this.$("#viewer"), this.$("#stage"), {
+      need: (k) => ev.onNeed?.(k),
+      inView: (k) => {
+        this.at = k;
+        this.nav();
+        ev.onPage(k);
+      },
+      svg: (img, w) => ("draws" in img ? svg(img.draws, w) : null),
+      scale: () => this.scale(),
+      box: (d, w) => pageBox(d, w),
     });
     // (keep it on screen when the window shrinks)
     window.addEventListener("resize", () => this.place());
@@ -680,7 +692,7 @@ export class Panel {
   }
 
   goPage(k: number): void {
-    this.ev.onPage(k);
+    this.viewer.goTo(k);
   }
 
   /** One zoom step in or out, from where it is (as Overleaf's − +). */
@@ -698,10 +710,10 @@ export class Panel {
   }
 
   prev(): void {
-    this.ev.onPage(this.at - 1);
+    this.viewer.goTo(this.at - 1);
   }
   next(): void {
-    this.ev.onPage(this.at + 1);
+    this.viewer.goTo(this.at + 1);
   }
   pdf(): void {
     this.ev.onPdf();
@@ -720,6 +732,7 @@ export class Panel {
     if (this.prefs.format === f) return;
     this.prefs.format = f;
     this.$<HTMLSelectElement>("#fmt").value = f;
+    this.viewer.invalidate();
     this.ev.onFormat(f);
   }
 
@@ -792,18 +805,32 @@ export class Panel {
   }
 
   private redraw(): void {
-    if (this.last) this.show(this.last);
+    this.viewer?.redraw();
   }
 
-  page(img: PageImage | null, k: number, n: number): void {
-    this.at = k;
+  /** ⌃ ⌄ and the page number, for the page in view. */
+  private nav(): void {
+    const n = this.viewer.pages;
+    const k = this.at;
     this.$("#pno").textContent = n ? `${k + 1} / ${n}` : "– / 0";
-    queueMicrotask(() => this.emit());
     this.$<HTMLButtonElement>("#prev").disabled = k <= 0;
     this.$<HTMLButtonElement>("#next").disabled = k >= n - 1;
+    queueMicrotask(() => this.emit());
+  }
+
+  /** The pages there are, by hash (the viewer draws the changed ones it shows). */
+  layout(hashes: string[]): void {
+    this.$("#empty").style.display = "none";
+    this.$("#stage").classList.remove("stale");
+    this.viewer.layout(hashes);
+    if (this.at >= hashes.length) this.at = Math.max(0, hashes.length - 1);
+    this.nav();
+  }
+
+  page(img: PageImage | null, k: number, n: number, hash?: string | null): void {
     const empty = !img || ("draws" in img && !img.draws.t.length && !img.draws.r.length);
     if (empty) {
-      // (nothing new to show: the last page stays, dimmed; see stale())
+      // (nothing new to show: the pages shown stay, dimmed; see stale())
       if (!this.last) {
         this.$("#empty").textContent = n ? "This page is empty." : "No page shipped yet.";
         this.$("#empty").style.display = "";
@@ -812,36 +839,12 @@ export class Panel {
       return;
     }
     this.last = img;
-    this.$("#stage").classList.remove("stale");
-    this.show(img);
-  }
-
-  private show(img: PageImage): void {
-    const stage = this.$("#stage");
     this.$("#empty").style.display = "none";
-    if ("draws" in img) {
-      stage.querySelector("img")?.remove();
-      stage.classList.toggle("fit", this.prefs.zoom === "fit");
-      const w = img.draws.w * (96 / 72) * this.scale();
-      // (a selection in the old page is lost on repaint: keep typing smooth, don't repaint while selecting)
-      const sel = this.root instanceof ShadowRoot ? (this.root as any).getSelection?.() : null;
-      if (sel && !sel.isCollapsed && stage.querySelector("svg.page")?.contains(sel.anchorNode)) {
-        this.pendingRedraw = img;
-        return;
-      }
-      const viewer = this.$("#viewer");
-      viewer.querySelector("img")?.remove();
-      viewer.querySelector("svg.page")?.remove();
-      viewer.insertAdjacentHTML("beforeend", svg(img.draws, w));
-      return;
-    }
-    stage.querySelector("svg.page")?.remove();
-    if (this.url) URL.revokeObjectURL(this.url);
-    this.url = URL.createObjectURL(new Blob([img.png as BlobPart], { type: "image/png" }));
-    let im = stage.querySelector("img");
-    if (!im) im = this.$("#viewer").appendChild(document.createElement("img"));
-    im.alt = `page ${this.at + 1}`;
-    im.src = this.url;
-    im.style.maxWidth = this.prefs.zoom === "fit" ? "" : "none";
+    this.$("#stage").classList.remove("stale");
+    this.$("#stage").classList.toggle("fit", this.prefs.zoom === "fit");
+    // (a view with no layout yet: this page's slots, up to it)
+    if (this.viewer.pages <= k) this.viewer.layout(Array.from({ length: Math.max(n, k + 1) }, (_, i) => (i === k && hash) || `?${i}`));
+    this.viewer.set(k, img, hash ?? null);
+    this.nav();
   }
 }

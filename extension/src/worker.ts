@@ -16,6 +16,7 @@ export type Req =
   | { id: number; client: string; op: "png"; page: number; dpi: number }
   | { id: number; client: string; op: "pdf" }
   | { id: number; client: string; op: "status" }
+  | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" };
 
@@ -45,6 +46,7 @@ interface Core {
   ph_pdf(h: number): void;
   ph_check(h: number): void;
   ph_status(h: number): void;
+  ph_pages(h: number): void;
   ph_text(h: number, p: number, n: number): void;
   _initialize?(): void;
 }
@@ -180,6 +182,9 @@ function handle(r: Req): Res {
       return { id: r.id, ok: true, png: outBytes() };
     case "status":
       core.ph_status(h);
+      return { id: r.id, ok: true, json: outJson() };
+    case "pages":
+      core.ph_pages(h);
       return { id: r.id, ok: true, json: outJson() };
     case "pdf":
       core.ph_pdf(h);

@@ -30,6 +30,7 @@ export type CoreReq =
   | { op: "png"; page: number; dpi: number }
   | { op: "pdf" }
   | { op: "status" }
+  | { op: "pages" }
   | { op: "check"; file?: string; expect?: string };
 
 /** A page as PhiTeX draws it, in PDF points from the top left (core's draws_json). */
@@ -73,7 +74,10 @@ export interface Status {
 }
 
 export interface PreviewSink {
-  page(img: PageImage | null, k: number, n: number): void;
+  /** Page `k` of `n` drawn (`hash`: its box's, if known). */
+  page(img: PageImage | null, k: number, n: number, hash?: string | null): void;
+  /** The pages there are, by their boxes' hashes (a continuous view draws the changed ones it shows). */
+  layout?(hashes: string[]): void;
   status(s: Status): void;
   /** A one-line summary, and (optionally) the details behind it. */
   latency(summary: string, details?: string): void;
@@ -174,6 +178,11 @@ export class PreviewSession {
 
   setFormat(f: Options["format"]): Promise<void> {
     this.o.format = f;
+    // (every page again, in the new format)
+    if (this.sink.layout) {
+      this.hashes = [];
+      return this.layout();
+    }
     return this.showPage();
   }
 
@@ -237,13 +246,37 @@ export class PreviewSession {
     this.sink.status({ pages: this.pages, pending, main: this.main, file: this.open, diagnostics: this.diags });
   }
 
+  /** The page in view (the one an edit paints first). */
   setPage(p: number): Promise<void> {
     this.page = Math.max(0, Math.min(p, Math.max(this.pages - 1, 0)));
-    return this.showPage();
+    return this.sink.layout ? Promise.resolve() : this.showPage();
+  }
+
+  /** The pages' hashes, as the core has them now. */
+  private hashes: string[] = [];
+
+  /** Tell the view which pages there are (by hash). */
+  private async layout(): Promise<void> {
+    if (!this.sink.layout) return;
+    const r = await this.core.request({ op: "pages" });
+    if (!r.ok || !r.json?.pages) return;
+    this.hashes = r.json.pages;
+    this.pages = this.hashes.length;
+    // (no page shipped: the view keeps what it shows, dimmed; see the sink)
+    if (this.hashes.length) this.sink.layout(this.hashes);
+  }
+
+  /** Page `k`, for a view that wants it. */
+  async fetch(k: number): Promise<void> {
+    if (!this.opened) return;
+    const r = await this.core.request({ op: "png", page: k, dpi: this.dpi() });
+    const img = image(r);
+    if (img) this.sink.page(img, k, this.pages, this.hashes[k] ?? null);
   }
 
   async showPage(): Promise<void> {
     if (!this.opened) return;
+    if (this.sink.layout) return this.layout();
     const r = await this.core.request({ op: "png", page: this.page, dpi: this.dpi() });
     this.sink.page(image(r), this.page, this.pages);
   }
@@ -322,6 +355,8 @@ export class PreviewSession {
           if (!round.length) break;
           for (const [file, b] of round) if (!(await this.send(file, b))) return;
         }
+        // (then the other pages: the view draws those it shows that changed)
+        await this.layout();
         this.statusSoon();
       } finally {
         this.busy = false;
@@ -370,8 +405,8 @@ export class PreviewSession {
       this.pages = j.pages;
       this.status(this.pending);
       const img = image(r);
-      if (img) this.sink.page(img, this.page, this.pages);
-      else await this.showPage();
+      if (img) this.sink.page(img, this.page, this.pages, j.painted_hash ?? null);
+      else if (!this.sink.layout) await this.showPage();
       const e2e = this.now() - t0;
       this.sink.painted?.(e2e);
       this.sink.latency(

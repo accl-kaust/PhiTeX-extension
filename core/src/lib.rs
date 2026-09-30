@@ -493,8 +493,9 @@ pub unsafe extern "C" fn ph_edit(h: u32, ptr: *const u8, len: usize, page: u32, 
             });
             LAST_PNG.with(|p| *p.borrow_mut() = paint_png);
             format!(
-                "{{\"stats\":{},\"paint_ms\":{},\"total_ms\":{},\"call_ms\":{},\"wrong\":{}",
+                "{{\"stats\":{},\"painted_hash\":{},\"paint_ms\":{},\"total_ms\":{},\"call_ms\":{},\"wrong\":{}",
                 stats_json(&v.stats),
+                v.painted.as_ref().map_or("null".to_string(), |b| format!("\"{:016x}\"", b.hash)),
                 ms(v.paint),
                 ms(v.total),
                 ms(t.elapsed()),
@@ -575,6 +576,18 @@ pub extern "C" fn ph_png(h: u32, page: u32, dpi: u32) {
             }
         })
         .unwrap_or_default());
+}
+
+/// The shipped pages, each as its box's hash (out: JSON `{"pages":
+/// ["<hex>", ...]}`): a page whose hash is unchanged need not be drawn
+/// again.
+#[unsafe(no_mangle)]
+pub extern "C" fn ph_pages(h: u32) {
+    let j = with(h, |s| {
+        let hs: Vec<String> = s.doc.ships().iter().map(|b| format!("\"{:016x}\"", b.hash)).collect();
+        format!("{{\"pages\":[{}]}}", hs.join(","))
+    });
+    out_json(j.unwrap_or_else(|| "{\"error\":\"no such handle\"}".into()));
 }
 
 /// The whole PDF (out).

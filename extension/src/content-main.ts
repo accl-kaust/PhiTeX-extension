@@ -763,7 +763,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}\/?$/;
   let session: PreviewSession;
   let dock: Dock | undefined;
   const panel = new Panel({
-    onPage: (p) => session.setPage(p),
+    onPage: (p) => session?.setPage(p),
+    onNeed: (k) => session?.fetch(k),
     onPdf: async () => {
       const pdf = await session.pdf();
       if (!pdf) return;

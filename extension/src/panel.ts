@@ -287,7 +287,9 @@ footer .msg.err { color: var(--danger); }
 .win.docked .sum:hover { background: var(--dark3); }
 .win.docked .sum .first { color: var(--fg-dark); }
 .win.docked .sum .n.error { color: var(--danger-dark); } .win.docked .sum .n.warning { color: var(--warn-dark); } .win.docked .sum .n.info { color: #97b6e5; }
-/* as Overleaf's pdf.js viewer: the scrollbar always there, pages 12 px apart and centered */
+/* as Overleaf's pdf.js viewer: the scrollbar always there, pages 12 px apart and centered, and the
+   viewer min-height 100% with the first page's margin collapsing through it (so it scrolls by 12 px, as native) */
+.win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
 .win.docked .stage svg.page, .win.docked .stage img { display: block; margin: 12px auto; }
 .win.docked .stage svg.page, .win.docked .stage img { border-radius: 0;
@@ -356,7 +358,7 @@ export class Panel {
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
-    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div></div>
+    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div><div class="viewer" id="viewer"></div></div>
   </div>
   <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
 </div>`).replace(/<span class="icon"(?: aria-hidden="true")?>(\w+)<\/span>/g, (_, n) => icon(n, n === "download" ? 16 : 18));
@@ -773,15 +775,17 @@ export class Panel {
         this.pendingRedraw = img;
         return;
       }
-      stage.querySelector("svg.page")?.remove();
-      stage.insertAdjacentHTML("beforeend", svg(img.draws, w));
+      const viewer = this.$("#viewer");
+      viewer.querySelector("img")?.remove();
+      viewer.querySelector("svg.page")?.remove();
+      viewer.insertAdjacentHTML("beforeend", svg(img.draws, w));
       return;
     }
     stage.querySelector("svg.page")?.remove();
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = URL.createObjectURL(new Blob([img.png as BlobPart], { type: "image/png" }));
     let im = stage.querySelector("img");
-    if (!im) im = stage.appendChild(document.createElement("img"));
+    if (!im) im = this.$("#viewer").appendChild(document.createElement("img"));
     im.alt = `page ${this.at + 1}`;
     im.src = this.url;
     im.style.maxWidth = this.prefs.zoom === "fit" ? "" : "none";

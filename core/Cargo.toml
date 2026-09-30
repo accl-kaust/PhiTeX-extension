@@ -1,0 +1,19 @@
+[package]
+name = "phitex-overleaf-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+phitex-ssa = { path = "../../../tmp/phitex-241bd29/crates/phitex-ssa" }
+phitex-layout = { path = "../../../tmp/phitex-241bd29/crates/phitex-layout" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

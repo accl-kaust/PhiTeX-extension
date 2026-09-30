@@ -1,0 +1,86 @@
+diff --git a/crates/phitex-layout/Cargo.toml b/crates/phitex-layout/Cargo.toml
+index d6cdfc0..e973a1a 100644
+--- a/crates/phitex-layout/Cargo.toml
++++ b/crates/phitex-layout/Cargo.toml
+@@ -9,6 +9,10 @@ phitex-ssa = { path = "../phitex-ssa" }
+ rustc-hash = "2"
+ tracing = "0.1.44"
+ tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi"] }
++web-time = { version = "1", optional = true }
++
++[features]
++web-time = ["dep:web-time", "phitex-ssa/web-time"]
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/phitex-layout/src/lib.rs b/crates/phitex-layout/src/lib.rs
+index cb971a6..f1ba709 100644
+--- a/crates/phitex-layout/src/lib.rs
++++ b/crates/phitex-layout/src/lib.rs
+@@ -25,7 +25,12 @@ pub mod png;
+ use std::cell::{Cell, RefCell};
+ use std::ops::Range;
+ use std::rc::Rc;
+-use std::time::{Duration, Instant};
++use std::time::Duration;
++// (std's Instant panics on wasm32-unknown-unknown: `web-time` has one there)
++#[cfg(not(feature = "web-time"))]
++use std::time::Instant;
++#[cfg(feature = "web-time")]
++use web_time::Instant;
+ 
+ use phitex_ssa::material::BoxVal;
+ use phitex_ssa::{Doc, EditStats, Files, MemFiles, View};
+diff --git a/crates/phitex-ssa/Cargo.toml b/crates/phitex-ssa/Cargo.toml
+index 37501c8..d7fa44c 100644
+--- a/crates/phitex-ssa/Cargo.toml
++++ b/crates/phitex-ssa/Cargo.toml
+@@ -9,8 +9,12 @@ phitex-syntax = { path = "../phitex-syntax" }
+ rustc-hash = "2"
+ tracing = "0.1.44"
+ tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi"] }
++web-time = { version = "1", optional = true }
+ 
+ [features]
++# `Instant` from the `web-time` crate (performance.now() in a browser), for
++# wasm32-unknown-unknown, where std's panics.
++web-time = ["dep:web-time"]
+ # A tracing span per chunk built (with its paragraphs, values, imports and
+ # time). Off by default: even disabled, 10^4 spans a megabyte cost ~3%.
+ chunk-spans = []
+diff --git a/crates/phitex-ssa/src/doc.rs b/crates/phitex-ssa/src/doc.rs
+index fe4cf18..f97cac3 100644
+--- a/crates/phitex-ssa/src/doc.rs
++++ b/crates/phitex-ssa/src/doc.rs
+@@ -78,7 +78,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
+ use std::hash::{Hash, Hasher};
+ use std::ops::{Bound, Range};
+ use std::rc::Rc;
+-use std::time::{Duration, Instant};
++use std::time::Duration;
++// (std's Instant panics on wasm32-unknown-unknown: `web-time` has one there)
++#[cfg(not(feature = "web-time"))]
++use std::time::Instant;
++#[cfg(feature = "web-time")]
++use web_time::Instant;
+ 
+ use phitex_syntax::Tree;
+ use rustc_hash::{FxHashMap, FxHasher};
+diff --git a/crates/phitex-ssa/src/prof.rs b/crates/phitex-ssa/src/prof.rs
+index 1d3235c..2953ef3 100644
+--- a/crates/phitex-ssa/src/prof.rs
++++ b/crates/phitex-ssa/src/prof.rs
+@@ -7,7 +7,12 @@
+ 
+ use std::cell::RefCell;
+ use std::sync::atomic::{AtomicBool, Ordering};
+-use std::time::{Duration, Instant};
++use std::time::Duration;
++// (std's Instant panics on wasm32-unknown-unknown: `web-time` has one there)
++#[cfg(not(feature = "web-time"))]
++use std::time::Instant;
++#[cfg(feature = "web-time")]
++use web_time::Instant;
+ 
+ use rustc_hash::FxHashMap;
+ 

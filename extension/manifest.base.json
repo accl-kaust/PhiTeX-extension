@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "PhiTeX Preview for Overleaf (experimental)",
+  "short_name": "PhiTeX Preview",
+  "version": "0.1.0",
+  "description": "An experimental, live, incremental PhiTeX preview beside Overleaf's own PDF. Plain TeX subset. Everything runs locally.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "offscreen",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.overleaf.com/project/*"
+      ],
+      "js": [
+        "dist/hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.overleaf.com/project/*"
+      ],
+      "js": [
+        "dist/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dist/content-main.js",
+        "dist/edits.js",
+        "dist/zip.js",
+        "dist/panel.js",
+        "dist/session.js",
+        "dist/diagnostics.js"
+      ],
+      "matches": [
+        "https://www.overleaf.com/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

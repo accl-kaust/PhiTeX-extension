@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock Overleaf</title>
+<style>
+  body { margin: 0; font: 14px system-ui, sans-serif; display: grid; grid-template-columns: 200px 1fr; height: 100vh; }
+  nav { border-right: 1px solid #ddd; padding: 8px; background: #f7f7f7; }
+  .file-tree-list { list-style: none; padding: 0; }
+  [role=treeitem] { padding: 3px 6px; cursor: pointer; border-radius: 3px; }
+  [role=treeitem][aria-selected=true] { background: #138a07; color: #fff; }
+  main { display: flex; flex-direction: column; }
+  .bar { padding: 6px; border-bottom: 1px solid #ddd; display: flex; gap: 6px; }
+  .cm-editor { flex: 1; display: flex; }
+  .cm-content { flex: 1; font: 13px/1.5 ui-monospace, monospace; border: 0; padding: 8px; resize: none; }
+</style>
+</head>
+<body>
+<nav>
+  <b>Mock Overleaf</b>
+  <p style="color:#666;font-size:12px">The DOM surface the extension reads: the file tree, <code>.cm-content.cmView.view</code>, and the project endpoints.</p>
+  <ul class="list-unstyled file-tree-folder-list file-tree-list" role="tree" id="tree"></ul>
+</nav>
+<main>
+  <div class="bar">
+    <button id="collab" title="A remote transaction: two changes at once, non-ASCII">Collaborator edit</button>
+    <span id="info" style="color:#666"></span>
+  </div>
+  <div class="cm-editor"><textarea class="cm-content" spellcheck="false"></textarea></div>
+</main>
+<script type="module">
+// A mock of CodeMirror 6's EditorView, as far as the extension uses it:
+// state.doc, update(transactions) with changes.iterChanges, setState.
+class Text {
+  constructor(s) { this.s = s; }
+  get length() { return this.s.length; }
+  toString() { return this.s; }
+  sliceString(a, b) { return this.s.slice(a, b); }
+  get lines() { return this.s.split("\n").length; }
+  line(n) {
+    let from = 0;
+    for (let k = 1; k < n; k++) from = this.s.indexOf("\n", from) + 1;
+    const to = this.s.indexOf("\n", from);
+    return { number: n, from, to: to < 0 ? this.s.length : to };
+  }
+}
+/** Changes in the start doc's positions, sorted, not overlapping (as CM's). */
+class ChangeSet {
+  constructor(changes) { this.changes = changes; }
+  get length() { return this.changes.length; }
+  iterChanges(f) {
+    let shift = 0;
+    for (const c of this.changes) {
+      const fromB = c.from + shift;
+      f(c.from, c.to, fromB, fromB + c.insert.length, new Text(c.insert));
+      shift += c.insert.length - (c.to - c.from);
+    }
+  }
+  apply(s) {
+    let out = "", at = 0;
+    for (const c of this.changes) { out += s.slice(at, c.from) + c.insert; at = c.to; }
+    return out + s.slice(at);
+  }
+}
+class EditorView {
+  constructor(el, doc) { this.el = el; this.state = { doc: new Text(doc) }; }
+  update(trs) {
+    for (const tr of trs) this.state = tr.state;
+    if (this.el.value !== this.state.doc.toString()) this.el.value = this.state.doc.toString();
+  }
+  setState(s) { this.state = s; this.el.value = s.doc.toString(); }
+  focus() { this.el.focus(); }
+  dispatch(spec) {
+    if (spec.selection) {
+      this.state = { ...this.state, selection: { main: { head: spec.selection.anchor } } };
+      this.el.focus();
+      this.el.setSelectionRange(spec.selection.anchor, spec.selection.anchor);
+      if (!spec.changes) return;
+    }
+    const cs = new ChangeSet([].concat(spec.changes ?? []).sort((a, b) => a.from - b.from).map((c) => ({ from: c.from, to: c.to ?? c.from, insert: c.insert ?? "" })));
+    const tr = { changes: cs, docChanged: cs.length > 0, state: { doc: new Text(cs.apply(this.state.doc.toString())) } };
+    this.update([tr]);
+  }
+}
+
+const ta = document.querySelector(".cm-content");
+const view = new EditorView(ta, "");
+ta.cmView = { view };
+let docs = await (await fetch("/project/mock/docs")).json();
+let current = null;
+
+function renderTree() {
+  const tree = document.getElementById("tree");
+  tree.innerHTML = "";
+  for (const d of docs) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "treeitem");
+    li.setAttribute("aria-label", d.path);
+    li.setAttribute("aria-selected", String(d.id === current?.id));
+    li.innerHTML = `<div class="entity" data-file-id="${d.id}" data-file-type="doc"><div class="item-name"><span></span></div></div>`;
+    li.querySelector("span").textContent = d.path;
+    li.onclick = () => openDoc(d);
+    tree.append(li);
+  }
+}
+async function save() {
+  if (!current) return;
+  current.text = view.state.doc.toString();
+  await fetch(`/project/mock/doc/${current.id}`, { method: "POST", body: current.text });
+}
+async function openDoc(d) {
+  await save();
+  current = d;
+  const fresh = await (await fetch(`/project/mock/doc/${d.id}/download`)).text();
+  view.setState({ doc: new Text(fresh) });
+  prev = fresh;
+  renderTree();
+}
+
+// Typing: the textarea's change as one transaction (as CM would make).
+let prev = "";
+ta.addEventListener("input", () => {
+  const s = ta.value;
+  let a = 0; while (a < prev.length && a < s.length && prev[a] === s[a]) a++;
+  let z = 0; while (z < prev.length - a && z < s.length - a && prev[prev.length - 1 - z] === s[s.length - 1 - z]) z++;
+  view.dispatch({ changes: { from: a, to: prev.length - z, insert: s.slice(a, s.length - z) } });
+  prev = s;
+});
+setInterval(save, 2000);
+
+document.getElementById("collab").onclick = () => {
+  const n = view.state.doc.length;
+  view.dispatch({ changes: [{ from: 0, insert: "% ✎ collaborator 😀\n" }, { from: Math.floor(n / 2), to: Math.floor(n / 2), insert: " (ünïcode) " }] });
+  prev = view.state.doc.toString();
+};
+
+// For tests driving the page: type as a user would, at a UTF-16 position.
+window.mockEditor = {
+  view,
+  type(at, text) { view.dispatch({ changes: { from: at, insert: text } }); prev = view.state.doc.toString(); },
+  replace(from, to, text) { view.dispatch({ changes: { from, to, insert: text } }); prev = view.state.doc.toString(); },
+  multi(changes) { view.dispatch({ changes }); prev = view.state.doc.toString(); },
+  open: (path) => openDoc(docs.find((d) => d.path === path)),
+  text: () => view.state.doc.toString(),
+};
+await openDoc(docs.find((d) => d.path === "main.tex"));
+document.getElementById("info").textContent = "Mock: edits kept in the mock server's memory.";
+</script>
+</body>
+</html>

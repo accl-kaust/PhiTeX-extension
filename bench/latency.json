@@ -1,0 +1,182 @@
+[
+ {
+  "doc": "small (3 paragraphs)",
+  "bytes": 199,
+  "pages": 1,
+  "open_ms": 16,
+  "edit": "start, page 1",
+  "first_paint_ms": 0.06,
+  "fixed_point_ms": 0.06,
+  "with_draws_ms": 0.19,
+  "passes": 1
+ },
+ {
+  "doc": "small (3 paragraphs)",
+  "bytes": 199,
+  "pages": 1,
+  "open_ms": 16,
+  "edit": "middle, its page",
+  "first_paint_ms": 0.08,
+  "fixed_point_ms": 0.08,
+  "with_draws_ms": 0.21,
+  "passes": 1
+ },
+ {
+  "doc": "small (3 paragraphs)",
+  "bytes": 199,
+  "pages": 1,
+  "open_ms": 16,
+  "edit": "end, last page",
+  "first_paint_ms": 0.09,
+  "fixed_point_ms": 0.09,
+  "with_draws_ms": 0.19,
+  "passes": 1
+ },
+ {
+  "doc": "small (3 paragraphs)",
+  "edit": "status scan (idle, not per edit)",
+  "pending": 0,
+  "fixed_point_ms": 0.03
+ },
+ {
+  "doc": "small (3 paragraphs)",
+  "edit": "debug check (fresh build + compare)",
+  "ok": true,
+  "fixed_point_ms": 0.8
+ },
+ {
+  "doc": "synthetic 200 paragraphs",
+  "bytes": 18295,
+  "pages": 4,
+  "open_ms": 10.4,
+  "edit": "start, page 1",
+  "first_paint_ms": 0.26,
+  "fixed_point_ms": 0.26,
+  "with_draws_ms": 1.94,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 200 paragraphs",
+  "bytes": 18295,
+  "pages": 4,
+  "open_ms": 10.4,
+  "edit": "middle, its page",
+  "first_paint_ms": 0.12,
+  "fixed_point_ms": 0.12,
+  "with_draws_ms": 1.32,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 200 paragraphs",
+  "bytes": 18295,
+  "pages": 4,
+  "open_ms": 10.4,
+  "edit": "end, last page",
+  "first_paint_ms": 0.1,
+  "fixed_point_ms": 0.1,
+  "with_draws_ms": 0.93,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 200 paragraphs",
+  "edit": "status scan (idle, not per edit)",
+  "pending": 0,
+  "fixed_point_ms": 0.61
+ },
+ {
+  "doc": "synthetic 200 paragraphs",
+  "edit": "debug check (fresh build + compare)",
+  "ok": true,
+  "fixed_point_ms": 5.2
+ },
+ {
+  "doc": "synthetic 2000 paragraphs",
+  "bytes": 184895,
+  "pages": 38,
+  "open_ms": 62.2,
+  "edit": "start, page 1",
+  "first_paint_ms": 0.23,
+  "fixed_point_ms": 0.28,
+  "with_draws_ms": 1.44,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 2000 paragraphs",
+  "bytes": 184895,
+  "pages": 38,
+  "open_ms": 62.2,
+  "edit": "middle, its page",
+  "first_paint_ms": 0.26,
+  "fixed_point_ms": 0.26,
+  "with_draws_ms": 1.44,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 2000 paragraphs",
+  "bytes": 184895,
+  "pages": 38,
+  "open_ms": 62.2,
+  "edit": "end, last page",
+  "first_paint_ms": 0.26,
+  "fixed_point_ms": 0.26,
+  "with_draws_ms": 0.33,
+  "passes": 1
+ },
+ {
+  "doc": "synthetic 2000 paragraphs",
+  "edit": "status scan (idle, not per edit)",
+  "pending": 0,
+  "fixed_point_ms": 4.21
+ },
+ {
+  "doc": "synthetic 2000 paragraphs",
+  "edit": "debug check (fresh build + compare)",
+  "ok": true,
+  "fixed_point_ms": 47.5
+ },
+ {
+  "doc": "book.tex + main.tex (refs, .aux loop)",
+  "bytes": 27608,
+  "pages": 6,
+  "open_ms": 14.5,
+  "edit": "start, page 1",
+  "first_paint_ms": 0.21,
+  "fixed_point_ms": 0.21,
+  "with_draws_ms": 1.36,
+  "passes": 1
+ },
+ {
+  "doc": "book.tex + main.tex (refs, .aux loop)",
+  "bytes": 27608,
+  "pages": 6,
+  "open_ms": 14.5,
+  "edit": "middle, its page",
+  "first_paint_ms": 0.17,
+  "fixed_point_ms": 0.17,
+  "with_draws_ms": 1.37,
+  "passes": 1
+ },
+ {
+  "doc": "book.tex + main.tex (refs, .aux loop)",
+  "bytes": 27608,
+  "pages": 6,
+  "open_ms": 14.5,
+  "edit": "end, last page",
+  "first_paint_ms": 0.14,
+  "fixed_point_ms": 0.14,
+  "with_draws_ms": 0.86,
+  "passes": 1
+ },
+ {
+  "doc": "book.tex + main.tex (refs, .aux loop)",
+  "edit": "status scan (idle, not per edit)",
+  "pending": 0,
+  "fixed_point_ms": 0.96
+ },
+ {
+  "doc": "book.tex + main.tex (refs, .aux loop)",
+  "edit": "debug check (fresh build + compare)",
+  "ok": true,
+  "fixed_point_ms": 8.8
+ }
+]

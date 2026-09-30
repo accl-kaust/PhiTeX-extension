@@ -1,0 +1,751 @@
+// The preview panel: a floating window in Overleaf's own visual language
+// (its CSS custom properties inherit into the shadow root, so it follows
+// Overleaf's theme; fallbacks are its default values), beside Overleaf's
+// PDF, never replacing it. Experimental, and says so.
+//
+// Quality of life: drag by the header, resize from the corner, collapse to
+// a pill (Alt+Shift+P toggles), position/size/zoom/format remembered; a
+// build that ships nothing keeps the last good page, dimmed, with why;
+// diagnostics jump to their line.
+
+import type { Draws, PageImage, Status } from "./session.ts";
+
+/** What the panel shows, for controls that live outside it (a host's own toolbar). */
+export interface ViewState {
+  page: number;
+  pages: number;
+  zoom: string;
+  debug: boolean;
+  /** "ok" | "warning" | "error". */
+  level: string;
+  chip: string;
+  chipTitle: string;
+  /** The last repaint's keystroke→page time, and when it was (for a flourish). */
+  speed?: { ms: number; at: number };
+  sheet: boolean;
+  /** Diagnostics: how many, and the worst severity (or ""). */
+  diagCount: number;
+  diagWorst: string;
+  /** The zoom as a percentage (fit: what fitting the width comes to), as Overleaf's viewer shows it. */
+  percent: number;
+}
+
+export interface PanelEvents {
+  onPage(p: number): void;
+  onPdf(): void;
+  onDebug(on: boolean): void;
+  onMain(m: string): void;
+  onReload(): void;
+  onFormat(f: "vector" | "png"): void;
+  onGoto(file: string, line: number): void;
+  /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
+  onShortcut?(): boolean;
+}
+
+/** Where the panel keeps its preferences (chrome.storage.local in the extension). */
+export interface Prefs {
+  load(): Promise<Partial<PanelPrefs>>;
+  save(p: PanelPrefs): void;
+}
+
+export interface PanelPrefs {
+  x: number | null;
+  y: number | null;
+  w: number;
+  h: number;
+  zoom: string;
+  format: "vector" | "png";
+  collapsed: boolean;
+  details: boolean;
+}
+
+const DEFAULTS: PanelPrefs = { x: null, y: null, w: 440, h: 620, zoom: "fit", format: "vector", collapsed: false, details: false };
+
+/** PhiTeX's fonts (the PDF base 14) as the browser's. */
+function cssFont(name: string, px: number): string {
+  const bold = /Bold/.test(name),
+    italic = /Italic|Oblique/.test(name);
+  const family = /^Times/.test(name)
+    ? '"Times New Roman", Times, "Liberation Serif", "Nimbus Roman", "Noto Serif", serif'
+    : /^Helvetica/.test(name)
+      ? 'Helvetica, Arial, "Liberation Sans", "Nimbus Sans", "Noto Sans", sans-serif'
+      : /^Courier/.test(name)
+        ? '"Courier New", Courier, "Liberation Mono", "DM Mono", monospace'
+        : '"Noto Serif", serif';
+  return `${italic ? "italic " : ""}${bold ? "bold " : ""}${px}px ${family}`;
+}
+
+const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+/**
+ * A draw list as SVG: a <text> per line (words on one baseline in one
+ * font), a <tspan> per word at PhiTeX's x, each word but a line's last
+ * followed by a space, so the text selects and copies as text (and Ctrl+F
+ * finds it). Crisp at any zoom; positions are PhiTeX's, glyphs the browser's.
+ */
+export function svg(d: Draws, cssWidth: number): string {
+  const lines = new Map<string, [number, string][]>();
+  const order: string[] = [];
+  for (const [x, y, size, f, text] of d.t) {
+    const k = `${y}|${size}|${f}`;
+    if (!lines.has(k)) {
+      lines.set(k, []);
+      order.push(k);
+    }
+    lines.get(k)!.push([x, text]);
+  }
+  let body = "";
+  for (const k of order) {
+    const [y, size, f] = k.split("|");
+    const words = lines.get(k)!.sort((a, b) => a[0] - b[0]);
+    const spans = words.map(([x, t], i) => `<tspan x="${x}">${esc(t)}${i < words.length - 1 ? " " : ""}</tspan>`).join("");
+    body += `<text y="${y}" style="font:${esc(cssFont(d.f[Number(f)], Number(size)))}">${spans}</text>\n`;
+  }
+  for (const [x, y, w, h] of d.r) body += `<rect x="${x}" y="${y}" width="${Math.max(w, 0.4)}" height="${Math.max(h, 0.4)}"/>`;
+  const h = (d.h * cssWidth) / d.w;
+  return `<svg class="page" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.w} ${d.h}" width="${cssWidth}" height="${h}" xml:space="preserve"><rect class="paper" width="${d.w}" height="${d.h}"/>${body}</svg>`;
+}
+
+/** Material icons (Apache-2.0), inline: no dependency on the page's icon font. */
+const PATHS: Record<string, string> = {
+  preview: "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
+  chevron_left: "M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z",
+  chevron_right: "M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z",
+  bug_report:
+    "M20 8h-2.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H4v2h2.09c-.05.33-.09.66-.09 1v1H4v2h2v1c0 .34.04.67.09 1H4v2h2.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H20v-2h-2.09c.05-.33.09-.66.09-1v-1h2v-2h-2v-1c0-.34-.04-.67-.09-1H20V8zm-6 8h-4v-2h4v2zm0-4h-4v-2h4v2z",
+  close_fullscreen: "M19 13H5v-2h14v2z",
+  open_in_full: "M21 11V3h-8l3.29 3.29-10 10L3 13v8h8l-3.29-3.29 10-10z",
+  sync: "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z",
+  download: "M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z",
+  error: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z",
+  warning: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
+  info: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z",
+};
+const icon = (name: string, size = 18) =>
+  `<svg class="icon" viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path fill="currentColor" d="${PATHS[name]}"/></svg>`;
+
+const CSS = `
+:host { all: initial; }
+* { box-sizing: border-box; }
+.win {
+  --dark: var(--bg-dark-primary, #1b222c); --dark2: var(--bg-dark-secondary, #2f3a4c); --dark3: var(--bg-dark-tertiary, #495365);
+  --light: var(--bg-light-primary, #fff); --light2: var(--bg-light-secondary, #f4f5f6); --light3: var(--bg-light-tertiary, #e7e9ee);
+  --accent: var(--bg-accent-01, #098842); --accent2: var(--bg-accent-02, #1e6b41);
+  --fg: var(--content-primary, #1b222c); --fg2: var(--content-secondary, #495365); --fg-dark: var(--content-primary-dark, #f4f5f6);
+  --fg2-dark: var(--content-placeholder-dark, #8d96a5);
+  --danger: var(--content-danger, #b83a33); --warn: var(--content-warning, #8f5514); --info: var(--content-info, #366cbf);
+  --ok-dark: var(--content-positive-dark, #53b57f); --warn-dark: var(--content-warning-dark, #de8014); --danger-dark: var(--content-danger-dark, #e36d66);
+  --divider: var(--border-divider, #e7e9ee); --r: var(--border-radius-base, 4px); --r2: var(--border-radius-medium, 8px);
+  position: fixed; z-index: 2147483000; display: flex; flex-direction: column;
+  min-width: 300px; min-height: 180px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
+  resize: both; overflow: hidden;
+  background: var(--light); color: var(--fg); border: 1px solid var(--dark3); border-radius: var(--r2);
+  box-shadow: 0 8px 28px rgba(27,34,44,.35);
+  font: 13px/1.4 "Noto Sans", system-ui, sans-serif;
+}
+.icon { display: block; flex: none; }
+header { display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 6px 0 10px; background: var(--dark); color: var(--fg-dark);
+  cursor: grab; user-select: none; flex: none; }
+header:active { cursor: grabbing; }
+.title { font-weight: 600; font-size: 14px; margin: 0 6px 0 4px; white-space: nowrap; }
+.badge { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 9999px; background: var(--dark2); color: var(--fg2-dark); white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px; border-radius: 9999px; background: var(--dark2);
+  white-space: nowrap; cursor: pointer; margin-right: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg2-dark); }
+.chip.ok .dot { background: var(--ok-dark); } .chip.warning .dot { background: var(--warn-dark); } .chip.error .dot { background: var(--danger-dark); }
+.chip.busy .dot { animation: pulse 1s infinite; } @keyframes pulse { 50% { opacity: .3; } }
+.grow { flex: 1; }
+.group { display: inline-flex; align-items: center; }
+button.ib { all: unset; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r); color: inherit; cursor: pointer; }
+header button.ib:hover { background: var(--dark2); } .bar button.ib:hover { background: var(--light3); }
+button.ib:focus-visible { outline: 2px solid var(--info); }
+button.ib[aria-pressed=true] { background: var(--dark3); }
+button.ib:disabled { opacity: .35; cursor: default; }
+.pno { font-size: 12px; min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+.bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--light2); border-bottom: 1px solid var(--divider);
+  color: var(--fg2); flex: none; flex-wrap: wrap; }
+.bar label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+select { font: inherit; font-size: 12px; color: var(--fg); background: var(--light); border: 1px solid var(--border-primary, #677283);
+  border-radius: var(--r); padding: 2px 4px; max-width: 140px; }
+button.btn { font: inherit; font-size: 12px; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 9999px;
+  padding: 4px 12px 4px 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+button.btn:hover { background: var(--accent2); }
+
+.sum { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; font-size: 12px; color: var(--fg2); flex: none;
+  border-bottom: 1px solid var(--divider); cursor: pointer; white-space: nowrap; overflow: hidden; user-select: none; }
+.sum:hover { background: var(--light2); }
+.sum .n { display: inline-flex; align-items: center; gap: 2px; font-weight: 600; }
+.sum .n.error { color: var(--danger); } .sum .n.warning { color: var(--warn); } .sum .n.info { color: var(--info); }
+.sum .first { overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.sum .caret { margin-left: auto; transition: transform .15s; }
+.win.diags-open .sum .caret { transform: rotate(90deg); }
+.body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.diags { position: absolute; z-index: 2; left: 0; right: 0; top: 0; max-height: 50%; overflow: auto; background: var(--light);
+  border-bottom: 1px solid var(--divider); box-shadow: 0 6px 16px rgba(27,34,44,.18); display: none; }
+.win.diags-open .diags { display: block; }
+.diag { display: flex; gap: 6px; align-items: flex-start; padding: 5px 10px; font-size: 12px; border-top: 1px solid var(--divider); }
+.diag:first-child { border-top: 0; }
+.diag[data-line] { cursor: pointer; } .diag[data-line]:hover { background: var(--light2); }
+.diag .icon { margin-top: 1px; }
+.diag.error .icon { color: var(--danger); } .diag.warning .icon { color: var(--warn); } .diag.info .icon { color: var(--info); }
+.diag .where { color: var(--fg2); white-space: nowrap; margin-left: auto; padding-left: 8px; font-family: "DM Mono", monospace; font-size: 11px; }
+.stage { position: relative; flex: 1; overflow: auto; background: var(--light3); padding: 12px; text-align: center; min-height: 0; }
+.stage svg.page { display: inline-block; vertical-align: top; user-select: text; cursor: text; }
+.stage svg.page .paper { fill: #fff; }
+.stage svg.page text { fill: #000; white-space: pre; }
+.stage svg.page ::selection { fill: #fff; background: var(--info); }
+.stage svg.page, .stage img { background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); border-radius: 2px; }
+.stage img { max-width: 100%; }
+.stage.stale svg.page, .stage.stale img { opacity: .45; filter: grayscale(1); }
+.banner { position: sticky; top: -12px; z-index: 1; display: none; margin: -12px -12px 10px; padding: 6px 10px; text-align: left; font-size: 12px;
+  background: var(--bg-warning-03, #fcf1e3); color: var(--warn); border-bottom: 1px solid var(--divider); }
+.stage.stale .banner { display: block; }
+.stage.fit { overflow-x: hidden; }
+.empty { color: var(--fg2); padding: 40px 12px; font-size: 13px; }
+footer { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: var(--light2); border-top: 1px solid var(--divider);
+  color: var(--fg2); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; white-space: nowrap; overflow: hidden; }
+footer .lat { cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+footer .msg { overflow: hidden; text-overflow: ellipsis; }
+footer .msg.err { color: var(--danger); }
+.details { display: none; flex-basis: 100%; padding: 6px 0 0; font-size: 11px; color: var(--fg2); border-top: 1px solid var(--divider);
+  white-space: pre-wrap; text-align: left; font-family: "DM Mono", monospace; }
+.win.details-open .details { display: block; }
+/* docked: the preview fills the host's pane, in place of its PDF viewer */
+.win.docked { position: relative; left: auto !important; top: auto !important; width: 100% !important; height: 100% !important;
+  max-width: none; max-height: none; min-width: 0; min-height: 0; resize: none; border: 0; border-radius: 0; box-shadow: none; }
+.win.docked header { height: 34px; background: var(--light2); color: var(--fg); border-bottom: 1px solid var(--divider); cursor: default; }
+.win.docked header button.ib:hover { background: var(--light3); } .win.docked header button.ib[aria-pressed=true] { background: var(--light3); }
+.win.docked .chip { background: var(--light3); }
+.win.docked .badge { background: var(--light3); color: var(--fg2); }
+.win.docked .hide-docked { display: none; }
+.win:not(.docked) .show-docked { display: none; }
+.win.docked { background: var(--pdf-bg, var(--pane, #2f3a4c)); border: 0; }
+/* Overleaf's "dark mode PDF preview" (.pdf-dark-mode on the pane): its own filter, no shadow */
+.win.docked.pdf-dark .stage svg.page, .win.docked.pdf-dark .stage img { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }
+.win.docked.light .sum { background: var(--light2); color: var(--fg2); border-bottom-color: var(--divider); }
+.win.docked.light .sum:hover { background: var(--light3); } .win.docked.light .sum .first { color: var(--fg); }
+.win.docked.light .sum .n.error { color: var(--danger); } .win.docked.light .sum .n.warning { color: var(--warn); } .win.docked.light .sum .n.info { color: var(--info); }
+.win.docked.light .empty { color: var(--fg2); }
+.win.docked > header, .win.docked > footer { display: none; }
+.win.docked > .bar { display: none; }
+.win.docked.sheet-open > .bar { display: flex; position: absolute; z-index: 4; top: 6px; right: 8px; width: min(340px, calc(100% - 16px));
+  flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; border-radius: var(--r2); border: 1px solid var(--divider);
+  background: var(--light); box-shadow: 0 8px 24px rgba(27,34,44,.3); animation: sheet .14s ease-out; }
+.win.docked.sheet-open > .bar label { justify-content: space-between; } .win.docked.sheet-open > .bar .grow { display: none; }
+.win.docked.sheet-open .details { display: block; }
+@keyframes sheet { from { opacity: 0; transform: translateY(-4px); } }
+.win.docked > .sum { display: none; }
+.win.docked .diags { max-height: 60%; }
+.speedchip { display: none; position: absolute; right: 16px; bottom: 14px; z-index: 3; pointer-events: none; white-space: nowrap;
+  height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.3); opacity: 0; }
+.win.docked .speedchip { display: inline-flex; }
+.speedchip.slow { background: var(--bg-warning-01, #8f5514); }
+.speedchip.pop { animation: chip 1.8s cubic-bezier(.2,1.6,.4,1) forwards; }
+@keyframes chip { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 12% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .speedchip.pop { animation: none; opacity: 1; } }
+.win.docked .sum { background: var(--dark2); color: var(--fg2-dark); border-bottom: 1px solid var(--dark); height: 26px; }
+.win.docked .sum:hover { background: var(--dark3); }
+.win.docked .sum .first { color: var(--fg-dark); }
+.win.docked .sum .n.error { color: var(--danger-dark); } .win.docked .sum .n.warning { color: var(--warn-dark); } .win.docked .sum .n.info { color: #97b6e5; }
+.win.docked .stage { background: transparent; padding: 12px 20px; }
+.win.docked .stage svg.page, .win.docked .stage img { border-radius: 0;
+  box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
+.win.docked .banner { margin: -12px -20px 10px; }
+.win.docked .empty { color: var(--fg2-dark); }
+/* the speed flourish: a scanline across the page on each repaint */
+.scan { position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--ok-dark), transparent); }
+.scan.go { animation: scan .45s ease-out; }
+@keyframes scan { 0% { opacity: .9; transform: translateY(0); } 100% { opacity: 0; transform: translateY(160px); } }
+@media (prefers-reduced-motion: reduce) { .scan.go { animation: none; } .win.docked.sheet-open > .bar { animation: none; } }
+.win.collapsed { resize: none; min-height: 0; min-width: 0; border-radius: 9999px; }
+.win.collapsed > :not(header) { display: none; }
+.win.collapsed header { border-radius: 9999px; padding-right: 4px; }
+.win.collapsed .hide-collapsed { display: none; }
+`;
+
+export class Panel {
+  private root: ShadowRoot;
+  private host: HTMLElement;
+  private docked: HTMLElement | null = null;
+  private win: HTMLElement;
+  private prefs: PanelPrefs = { ...DEFAULTS };
+  private store?: Prefs;
+  private at = 0;
+  private last: PageImage | null = null;
+  private url: string | null = null;
+  private lastStatus: Status | null = null;
+  private listeners: ((s: ViewState) => void)[] = [];
+  private speed?: { ms: number; at: number };
+  private debugOn = false;
+  private ev!: PanelEvents;
+  /** A page that came while text in the shown one was selected: shown once the selection ends. */
+  private pendingRedraw: PageImage | null = null;
+
+  private $ = <T extends HTMLElement = HTMLElement>(sel: string) => this.root.querySelector(sel) as T;
+
+  constructor(ev: PanelEvents, store?: Prefs) {
+    this.store = store;
+    this.ev = ev;
+    const host = document.createElement("phitex-preview");
+    this.root = host.attachShadow({ mode: "open" });
+    this.root.innerHTML = (`<style>${CSS}</style>
+<div class="win" role="dialog" aria-label="PhiTeX preview">
+  <header>
+    <span class="icon" aria-hidden="true">preview</span>
+    <span class="title">PhiTeX</span>
+    <span class="badge hide-collapsed" title="PhiTeX handles a subset of plain TeX. Overleaf's PDF is the real one.">Experimental</span>
+    <span class="grow"></span>
+    <span class="chip" id="chip" title="Status"><span class="dot"></span><span id="chiptext">starting…</span></span>
+    <span class="group hide-collapsed">
+      <button class="ib" id="prev" title="Previous page" aria-label="Previous page"><span class="icon">chevron_left</span></button>
+      <span class="pno" id="pno">–</span>
+      <button class="ib" id="next" title="Next page" aria-label="Next page"><span class="icon">chevron_right</span></button>
+      <button class="ib" id="dbg" title="Debug: check against a fresh build every 5 s" aria-pressed="false"><span class="icon">bug_report</span></button>
+    </span>
+    <button class="ib hide-docked" id="min" title="Collapse (Alt+Shift+P)" aria-label="Collapse"><span class="icon">close_fullscreen</span></button>
+  </header>
+  <div class="bar">
+    <label>Main <select id="main" title="The file PhiTeX typesets"></select></label>
+    <label>Zoom <select id="zoom"><option value="fit">Fit</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
+    <label title="Vector: PhiTeX's positions and line breaks, the browser's glyphs. PNG: PhiTeX's own raster (a box per glyph).">View <select id="fmt"><option value="vector">Vector</option><option value="png">PNG</option></select></label>
+    <span class="grow"></span>
+    <label class="show-docked" title="Check against a fresh build every 5 s"><input type="checkbox" id="dbg2"> Debug check</label>
+    <button class="ib" id="reload" title="Fetch the project's files again" aria-label="Reload files"><span class="icon">sync</span></button>
+    <button class="btn" id="pdf" title="PhiTeX's PDF, made locally"><span class="icon">download</span>PDF</button>
+    <div class="details" id="details"></div>
+  </div>
+  <div class="sum" id="sum" role="button" aria-expanded="false" tabindex="0" title="Diagnostics (click to list)"></div>
+  <div class="body">
+    <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
+    <div class="scan" id="scan"></div>
+    <div class="speedchip" id="speedchip" aria-live="off"></div>
+    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div></div>
+  </div>
+  <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
+</div>`).replace(/<span class="icon"(?: aria-hidden="true")?>(\w+)<\/span>/g, (_, n) => icon(n, n === "download" ? 16 : 18));
+    this.host = host;
+    // (hidden until the host docks it, or decides it floats: no flash of a window on load)
+    host.style.display = "none";
+    (document.body ?? document.documentElement).append(host);
+    this.win = this.$(".win");
+    this.$("#prev").onclick = () => ev.onPage(this.at - 1);
+    this.$("#next").onclick = () => ev.onPage(this.at + 1);
+    this.$("#pdf").onclick = () => ev.onPdf();
+    this.$("#reload").onclick = () => ev.onReload();
+    const dbg = this.$("#dbg");
+    dbg.onclick = () => this.toggleDebug();
+    this.$("#dbg2").onchange = () => this.toggleDebug();
+    this.$<HTMLSelectElement>("#main").onchange = (e) => ev.onMain((e.target as HTMLSelectElement).value);
+    this.$<HTMLSelectElement>("#zoom").onchange = (e) => this.zoomTo((e.target as HTMLSelectElement).value);
+    this.$<HTMLSelectElement>("#fmt").onchange = (e) => {
+      this.prefs.format = (e.target as HTMLSelectElement).value as PanelPrefs["format"];
+      this.save();
+      ev.onFormat(this.prefs.format);
+    };
+    this.$("#min").onclick = () => this.collapse(!this.prefs.collapsed);
+    this.$("#chip").onclick = () => this.prefs.collapsed && this.collapse(false);
+    this.$("#lat").onclick = () => {
+      this.prefs.details = !this.prefs.details;
+      this.win.classList.toggle("details-open", this.prefs.details);
+      this.save();
+    };
+    this.$("#diags").onclick = (e) => {
+      const d = (e.target as HTMLElement).closest<HTMLElement>(".diag[data-line]");
+      if (d) ev.onGoto(d.dataset.file!, Number(d.dataset.line));
+    };
+    const sum = this.$("#sum");
+    sum.onclick = () => this.diagsOpen(!this.win.classList.contains("diags-open"));
+    sum.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), sum.click());
+    this.$("#stage").addEventListener("pointerdown", () => {
+      this.diagsOpen(false);
+      this.sheet(false);
+    });
+    this.root.addEventListener("keydown", (e) => (e as KeyboardEvent).key === "Escape" && this.diagsOpen(false));
+    window.addEventListener("keydown", (e) => {
+      if (e.altKey && e.shiftKey && e.code === "KeyP") {
+        e.preventDefault();
+        if (!ev.onShortcut?.()) this.collapse(!this.prefs.collapsed);
+      }
+    });
+    this.drag();
+    document.addEventListener("selectionchange", () => {
+      const sel = (this.root as any).getSelection?.();
+      if (this.pendingRedraw && (!sel || sel.isCollapsed)) {
+        const p = this.pendingRedraw;
+        this.pendingRedraw = null;
+        this.show(p);
+      }
+    });
+    // (keep it on screen when the window shrinks)
+    window.addEventListener("resize", () => this.place());
+    new ResizeObserver(() => {
+      if (this.docked) return this.prefs.zoom === "fit" ? this.redraw() : undefined;
+      if (this.prefs.collapsed) return;
+      const r = this.win.getBoundingClientRect();
+      if (Math.abs(r.width - this.prefs.w) + Math.abs(r.height - this.prefs.h) > 2) {
+        this.prefs.w = Math.round(r.width);
+        this.prefs.h = Math.round(r.height);
+        this.save();
+        if (this.prefs.zoom === "fit") this.redraw();
+      }
+    }).observe(this.win);
+    this.place();
+    store?.load().then((p) => {
+      this.prefs = { ...DEFAULTS, ...p };
+      this.place();
+      if (this.prefs.format !== "vector") ev.onFormat(this.prefs.format);
+    });
+  }
+
+  /**
+   * Dock into `pane` (after `after`, filling the rest of it), or float
+   * (null): the fallback when the host's layout is not found.
+   */
+  dock(pane: HTMLElement | null, below?: Element | null): void {
+    const h = this.host.style;
+    if (pane) {
+      // (fill the pane under its toolbar, whatever the pane's own layout)
+      const top = below ? Math.max(0, below.getBoundingClientRect().bottom - pane.getBoundingClientRect().top) : 0;
+      if (getComputedStyle(pane).position === "static") pane.style.position = "relative";
+      // (the pane's own background, as its PDF viewer shows it)
+      this.win.style.setProperty("--pane", getComputedStyle(pane).backgroundColor);
+      this.win.classList.toggle("pdf-dark", pane.classList.contains("pdf-dark-mode"));
+      this.win.classList.toggle("light", document.body.dataset.theme === "light");
+      Object.assign(h, { position: "absolute", left: "0", right: "0", bottom: "0", top: `${top}px`, zIndex: "5", flexDirection: "column" });
+    }
+    if (pane === this.docked && this.host.isConnected) return;
+    this.docked = pane;
+    if (pane) {
+      pane.append(this.host);
+      this.win.classList.add("docked");
+      this.win.classList.remove("collapsed");
+      this.win.setAttribute("role", "region");
+    } else {
+      (document.body ?? document.documentElement).append(this.host);
+      Object.assign(h, { position: "", left: "", right: "", bottom: "", top: "", zIndex: "" });
+      this.win.classList.remove("docked");
+      this.win.setAttribute("role", "dialog");
+      this.place();
+    }
+    this.redraw();
+  }
+
+  /** Shown or not (docked: the host's own PDF is showing instead). */
+  shown(on: boolean): void {
+    this.host.style.display = on ? (this.docked ? "flex" : "") : "none";
+    if (on) this.redraw();
+  }
+
+  private save(): void {
+    this.store?.save(this.prefs);
+  }
+
+  private place(): void {
+    if (this.docked) return;
+    const p = this.prefs,
+      s = this.win.style;
+    // (the default: bottom right, over the corner of Overleaf's PDF pane)
+    const x = p.x ?? window.innerWidth - p.w - 16,
+      y = p.y ?? window.innerHeight - p.h - 16;
+    s.left = `${Math.max(0, Math.min(x, window.innerWidth - 120))}px`;
+    s.top = `${Math.max(0, Math.min(y, window.innerHeight - 40))}px`;
+    this.$<HTMLSelectElement>("#zoom").value = p.zoom;
+    this.$<HTMLSelectElement>("#fmt").value = p.format;
+    this.win.classList.toggle("details-open", p.details);
+    this.collapse(p.collapsed, false);
+  }
+
+  private collapse(on: boolean, save = true): void {
+    this.prefs.collapsed = on;
+    this.win.classList.toggle("collapsed", on);
+    const b = this.$("#min");
+    b.title = on ? "Expand (Alt+Shift+P)" : "Collapse (Alt+Shift+P)";
+    b.innerHTML = icon(on ? "open_in_full" : "close_fullscreen");
+    this.win.style.width = on ? "" : `${this.prefs.w}px`;
+    this.win.style.height = on ? "" : `${this.prefs.h}px`;
+    if (!on) this.redraw();
+    if (save) this.save();
+  }
+
+  private drag(): void {
+    this.$("header").onpointerdown = (d: PointerEvent) => {
+      if ((d.target as HTMLElement).closest("button, .chip")) return;
+      const r = this.win.getBoundingClientRect();
+      const move = (m: PointerEvent) => {
+        this.prefs.x = Math.max(0, Math.min(r.left + m.clientX - d.clientX, window.innerWidth - 120));
+        this.prefs.y = Math.max(0, Math.min(r.top + m.clientY - d.clientY, window.innerHeight - 40));
+        this.win.style.left = `${this.prefs.x}px`;
+        this.win.style.top = `${this.prefs.y}px`;
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener(
+        "pointerup",
+        () => {
+          window.removeEventListener("pointermove", move);
+          this.save();
+        },
+        { once: true },
+      );
+    };
+  }
+
+  status(s: Status): void {
+    this.lastStatus = s;
+    const diags = s.diagnostics ?? [];
+    const worst = diags[0]?.severity;
+    const chip = this.$("#chip");
+    const partial = !!s.pending || s.pages === 0;
+    chip.className = `chip ${worst === "error" ? "error" : partial || worst === "warning" ? "warning" : "ok"}`;
+    this.$("#chiptext").textContent = `${s.pages} page${s.pages === 1 ? "" : "s"}${s.pending ? " · partial" : ""}`;
+    chip.title =
+      (s.pending ? `${s.pending} parts not read (out of fuel or unsupported). ` : "") +
+      (diags.length ? `${diags.length} diagnostic${diags.length === 1 ? "" : "s"}` : "No problems found") +
+      (s.file ? ` · editing ${s.file}` : "");
+    const list = this.$("#diags");
+    list.innerHTML = "";
+    for (const d of diags.slice(0, 50)) {
+      const row = document.createElement("div");
+      row.className = `diag ${d.severity}`;
+      row.setAttribute("role", "listitem");
+      if (d.file && d.line) {
+        row.dataset.file = d.file;
+        row.dataset.line = String(d.line);
+        row.title = `Go to ${d.file}:${d.line}`;
+      }
+      row.innerHTML = `${icon(d.severity, 16)}<span class="text"></span><span class="where"></span>`;
+      row.querySelector(".text")!.textContent = d.message;
+      row.querySelector(".where")!.textContent = d.file ? `${d.file}${d.line ? `:${d.line}` : ""}` : "";
+      list.append(row);
+    }
+    if (diags.length > 50) {
+      const more = document.createElement("div");
+      more.className = "diag info";
+      more.textContent = `… and ${diags.length - 50} more`;
+      list.append(more);
+    }
+    // (one line, whatever the count: the counts by severity, and the worst)
+    const sum = this.$("#sum");
+    sum.style.display = diags.length ? "" : "none";
+    if (!diags.length) this.diagsOpen(false);
+    const count = (sev: string) => diags.filter((d) => d.severity === sev).length;
+    sum.innerHTML = (["error", "warning", "info"] as const)
+      .filter((k) => count(k))
+      .map((k) => `<span class="n ${k}">${icon(k, 14)}${count(k)}</span>`)
+      .join("") + `<span class="first"></span>${icon("chevron_right", 16).replace('class="icon"', 'class="icon caret"')}`;
+    if (diags[0]) sum.querySelector(".first")!.textContent = diags[0].message;
+    this.stale(s);
+    queueMicrotask(() => this.emit());
+  }
+
+  /** Keep the last good page when a build ships nothing (or not this page): dimmed, with why. */
+  private stale(s: Status): void {
+    const stage = this.$("#stage");
+    const gone = s.pages === 0 || this.at >= s.pages;
+    const on = gone && !!this.last;
+    stage.classList.toggle("stale", on);
+    if (on) {
+      const why = s.diagnostics?.find((d) => d.severity !== "info" && d.code !== "no-pages");
+      this.$("#banner").textContent = `Showing the last complete render: ${why ? why.message + (why.line ? ` (${why.file}:${why.line})` : "") : "this build shipped no page"}.`;
+    }
+  }
+
+  /** Follow what the panel shows (a host toolbar's controls). */
+  onState(cb: (s: ViewState) => void): void {
+    this.listeners.push(cb);
+    cb(this.state());
+  }
+
+  private state(): ViewState {
+    const chip = this.$("#chip");
+    return {
+      page: this.at,
+      pages: this.lastStatus?.pages ?? 0,
+      zoom: this.prefs.zoom,
+      debug: this.debugOn,
+      level: ["error", "warning", "ok"].find((c) => chip.classList.contains(c)) ?? "ok",
+      chip: this.$("#chiptext").textContent ?? "",
+      chipTitle: chip.title,
+      speed: this.speed,
+      sheet: this.win.classList.contains("sheet-open"),
+      diagCount: this.lastStatus?.diagnostics?.length ?? 0,
+      diagWorst: this.lastStatus?.diagnostics?.[0]?.severity ?? "",
+      percent: Math.round(this.scale() * 100),
+    };
+  }
+
+  private emit(): void {
+    const s = this.state();
+    for (const f of this.listeners) f(s);
+  }
+
+  /** CSS pixels per PDF point at 96 dpi: 1 is 100%. */
+  private scale(): number {
+    const d = this.last && "draws" in this.last ? this.last.draws : null;
+    if (this.prefs.zoom !== "fit") return Number(this.prefs.zoom);
+    const stage = this.$("#stage");
+    const pad = this.docked ? 40 : 24;
+    return d ? Math.max(stage.clientWidth - pad, 200) / (d.w * (96 / 72)) : 1;
+  }
+
+  goPage(k: number): void {
+    this.ev.onPage(k);
+  }
+
+  /** One zoom step in or out, from where it is (as Overleaf's − +). */
+  zoomStep(dir: 1 | -1): void {
+    const steps = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+    const now = this.scale();
+    const next = dir > 0 ? steps.find((z) => z > now + 0.01) : [...steps].reverse().find((z) => z < now - 0.01);
+    this.zoomTo(String(next ?? now));
+  }
+
+  /** The diagnostics drawer. */
+  diagnostics(on = !this.win.classList.contains("diags-open")): void {
+    this.diagsOpen(on);
+    this.emit();
+  }
+
+  prev(): void {
+    this.ev.onPage(this.at - 1);
+  }
+  next(): void {
+    this.ev.onPage(this.at + 1);
+  }
+  pdf(): void {
+    this.ev.onPdf();
+  }
+
+  zoomTo(z: string): void {
+    this.prefs.zoom = z;
+    this.$<HTMLSelectElement>("#zoom").value = z;
+    this.save();
+    this.redraw();
+    this.emit();
+  }
+
+  toggleDebug(): void {
+    this.debugOn = !this.debugOn;
+    this.$("#dbg").setAttribute("aria-pressed", String(this.debugOn));
+    this.$<HTMLInputElement>("#dbg2").checked = this.debugOn;
+    this.ev.onDebug(this.debugOn);
+    this.msg(this.debugOn ? "debug check on" : "debug check off");
+    this.emit();
+  }
+
+  /** The settings sheet (docked: main file, view, reload, the latency details). */
+  sheet(on = !this.win.classList.contains("sheet-open")): void {
+    this.win.classList.toggle("sheet-open", on && !!this.docked);
+    this.emit();
+  }
+
+  /** A repaint reached the screen, `ms` after its keystroke: the flourish. */
+  painted(ms: number): void {
+    this.speed = { ms, at: performance.now() };
+    const scan = this.$("#scan");
+    scan.classList.remove("go");
+    void scan.offsetWidth; // (restart the animation)
+    scan.classList.add("go");
+    const chip = this.$("#speedchip");
+    chip.textContent = `⚡ ${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`;
+    chip.classList.toggle("slow", ms > 100);
+    chip.classList.remove("pop");
+    void chip.offsetWidth;
+    chip.classList.add("pop");
+    this.emit();
+  }
+
+  /** The diagnostics list: a drawer over the page, so it never takes the page's room. */
+  private diagsOpen(on: boolean): void {
+    this.win.classList.toggle("diags-open", on);
+    this.$("#sum").setAttribute("aria-expanded", String(on));
+  }
+
+  latency(summary: string, details?: string): void {
+    this.$("#lat").textContent = summary;
+    if (details) this.$("#details").textContent = details;
+  }
+
+  busy(on: boolean): void {
+    this.$("#chip").classList.toggle("busy", on);
+  }
+
+  msg(t: string, err = false): void {
+    const m = this.$("#msg");
+    m.textContent = t;
+    m.className = `msg${err ? " err" : ""}`;
+    m.title = t;
+  }
+
+  error(t: string): void {
+    this.msg(t, true);
+  }
+
+  check(r: { ok: boolean; ms: number; mismatch?: string }): void {
+    if (r.ok) this.msg(`✓ incremental = fresh build (${r.ms.toFixed(1)} ms)`);
+    else this.error(`✗ mismatch vs fresh build: ${r.mismatch}`);
+  }
+
+  files(names: string[], _skipped: string[], took: string): void {
+    this.msg(`${names.length} file${names.length === 1 ? "" : "s"} · ${took} · all local`);
+  }
+
+  mains(names: string[], main: string | null): void {
+    const s = this.$<HTMLSelectElement>("#main");
+    s.innerHTML = "";
+    for (const n of names) s.append(new Option(n, n, n === main, n === main));
+  }
+
+  private redraw(): void {
+    if (this.last) this.show(this.last);
+  }
+
+  page(img: PageImage | null, k: number, n: number): void {
+    this.at = k;
+    this.$("#pno").textContent = n ? `${k + 1} / ${n}` : "– / 0";
+    queueMicrotask(() => this.emit());
+    this.$<HTMLButtonElement>("#prev").disabled = k <= 0;
+    this.$<HTMLButtonElement>("#next").disabled = k >= n - 1;
+    const empty = !img || ("draws" in img && !img.draws.t.length && !img.draws.r.length);
+    if (empty) {
+      // (nothing new to show: the last page stays, dimmed; see stale())
+      if (!this.last) {
+        this.$("#empty").textContent = n ? "This page is empty." : "No page shipped yet.";
+        this.$("#empty").style.display = "";
+      }
+      if (this.lastStatus) this.stale({ ...this.lastStatus, pages: n });
+      return;
+    }
+    this.last = img;
+    this.$("#stage").classList.remove("stale");
+    this.show(img);
+  }
+
+  private show(img: PageImage): void {
+    const stage = this.$("#stage");
+    this.$("#empty").style.display = "none";
+    if ("draws" in img) {
+      stage.querySelector("img")?.remove();
+      stage.classList.toggle("fit", this.prefs.zoom === "fit");
+      const w = this.prefs.zoom === "fit" ? Math.max(stage.clientWidth - (this.docked ? 40 : 24), 200) : img.draws.w * (96 / 72) * Number(this.prefs.zoom);
+      // (a selection in the old page is lost on repaint: keep typing smooth, don't repaint while selecting)
+      const sel = this.root instanceof ShadowRoot ? (this.root as any).getSelection?.() : null;
+      if (sel && !sel.isCollapsed && stage.querySelector("svg.page")?.contains(sel.anchorNode)) {
+        this.pendingRedraw = img;
+        return;
+      }
+      stage.querySelector("svg.page")?.remove();
+      stage.insertAdjacentHTML("beforeend", svg(img.draws, w));
+      return;
+    }
+    stage.querySelector("svg.page")?.remove();
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = URL.createObjectURL(new Blob([img.png as BlobPart], { type: "image/png" }));
+    let im = stage.querySelector("img");
+    if (!im) im = stage.appendChild(document.createElement("img"));
+    im.alt = `page ${this.at + 1}`;
+    im.src = this.url;
+    im.style.maxWidth = this.prefs.zoom === "fit" ? "" : "none";
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker.ImportScripts"],
+    "strict": true,
+    "noImplicitAny": false,
+    "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": false,
+    "erasableSyntaxOnly": true,
+    "rootDir": "extension/src",
+    "outDir": "extension/dist",
+    "types": ["chrome"],
+    "skipLibCheck": true
+  },
+  "include": ["extension/src"]
+}

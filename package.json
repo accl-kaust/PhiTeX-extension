@@ -1,0 +1,15 @@
+{
+  "name": "phitex-overleaf",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "scripts/build.sh",
+    "//": "run through scripts/sandbox: scripts/sandbox npm test",
+    "test": "node --test test/",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.0",
+    "typescript": "^6.0.0"
+  }
+}

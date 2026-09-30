@@ -1,0 +1,52 @@
+% book: a small format for the layers demo. Sections, labels and
+% references (through the .aux), citations (through BibTeX and the .bbl),
+% footnotes (inserts), an index (through makeindex and the .ind), running
+% heads (marks) and page numbers (the output routine).
+\catcode`\@=11
+\font\rm=Times-Roman at 10pt
+\font\bf=Times-Bold at 12pt
+\font\it=Times-Italic at 10pt
+\rm
+\count0=1
+\count10=0
+\count11=0
+\def\thesection{\the\count10}
+
+\output={\shipout\vbox{\hbox{\it\firstmark\hfil}\vskip 6pt\box255
+  \ifvoid100 \else\vskip 6pt\box100\fi
+  \vskip 12pt\hbox{\hfil\rm\the\count0\hfil}}\global\advance\count0 by 1}
+
+\def\section#1{\par\penalty-50\global\advance\count10 by 1
+  \vskip 12pt plus 4pt\noindent{\bf\thesection. #1}\par\mark{\thesection. #1}\vskip 6pt}
+\def\label#1{\edef\@tmp{\write1{\string\newlabel{#1}{\thesection}{\noexpand\the\count0}}}\@tmp}
+\def\newlabel#1#2#3{\expandafter\gdef\csname r@#1\endcsname{#2}%
+  \expandafter\gdef\csname p@#1\endcsname{#3}}
+\def\ref#1{\expandafter\ifx\csname r@#1\endcsname\relax ??\else\csname r@#1\endcsname\fi}
+\def\pageref#1{\expandafter\ifx\csname p@#1\endcsname\relax ??\else\csname p@#1\endcsname\fi}
+
+\def\cite#1{[\expandafter\ifx\csname b@#1\endcsname\relax ?\else\csname b@#1\endcsname\fi]%
+  \immediate\write1{\string\citation{#1}}}
+\def\bibcite#1#2{\expandafter\gdef\csname b@#1\endcsname{#2}}
+\def\citation#1{}
+\def\bibdata#1{}
+\def\bibstyle#1{}
+\def\bibliography#1{\immediate\write1{\string\bibdata{#1}}\input \jobname.bbl\relax}
+\def\thebibliography{\section{References}\global\count11=0 }
+\def\bibitem#1{\par\global\advance\count11 by 1 [\the\count11] %
+  \immediate\write1{\string\bibcite{#1}{\the\count11}}}
+\def\endthebibliography{\par}
+
+\def\footnote#1{\insert100{\hsize=300pt\rm #1}}
+
+\def\index#1{\edef\@tmp{\write2{\string\indexentry{#1}{\noexpand\the\count0}}}\@tmp}
+\def\printindex{\input \jobname.ind\relax}
+\def\theindex{\section{Index}}
+\def\indexitem#1#2{\par\noindent #1, #2}
+\def\endtheindex{\par}
+
+\def\begindocument{\input \jobname.aux\relax
+  \immediate\openout1=\jobname.aux\relax
+  \immediate\write1{\string\bibstyle{plain}}%
+  \immediate\openout2=\jobname.idx\relax}
+\def\enddocument{\par\end}
+

@@ -61,6 +61,33 @@ async function render(): Promise<void> {
     };
   }
   $("tabnote").textContent = tab ? "" : "Open an Overleaf project to see these.";
+  // (two clicks: the second, within 4 s, confirms)
+  const reset = $<HTMLButtonElement>("reset");
+  let armed: ReturnType<typeof setTimeout> | null = null;
+  reset.onclick = async () => {
+    if (!armed) {
+      reset.textContent = "Click again to reset";
+      reset.classList.add("confirm");
+      armed = setTimeout(() => {
+        armed = null;
+        reset.textContent = "Reset";
+        reset.classList.remove("confirm");
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = null;
+    await resetAll();
+    reset.textContent = "Reset ✓";
+    reset.classList.remove("confirm");
+    void render();
+  };
+}
+
+/** As just installed: everything stored goes, and this version's notes count as seen (as an install's). */
+export async function resetAll(): Promise<void> {
+  await chrome.storage.local.clear();
+  await chrome.storage.local.set({ newsSeen: chrome.runtime.getManifest().version });
 }
 
 void render();

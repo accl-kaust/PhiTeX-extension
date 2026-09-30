@@ -104,7 +104,10 @@ zoom and view are remembered.
     PNG);
   - the tip and What's new, on or off;
   - "What's new" and "Take the tour" for the open tab;
-  - the terms.
+  - the terms;
+  - **Reset**, with a second click to confirm. It wipes all the extension's
+    state (settings, terms, layout, tour) and it is as just installed; open
+    tabs follow.
 - **Terms:** before its first use, ⚡ Instant asks you to confirm that it is
   an unofficial, experimental extension, provided as is, without any
   warranty, used at your own risk. It is Overleaf's modal, with a checkbox.
@@ -167,7 +170,9 @@ Overleaf page ──────────────────────
 ## License
 
 GNU Affero General Public License, **version 3 only** (`AGPL-3.0-only`); see
-`LICENSE` and `NOTICE` (third-party parts: PhiTeX MIT OR Apache-2.0, a
+`LICENSE` (also shipped in the extension as `LICENSE.txt`, linked from the
+consent, the About and the settings) and `NOTICE` (© 2026 Ammar Seliaman;
+third-party parts: PhiTeX MIT OR Apache-2.0, a
 pdf.js function and Material icons Apache-2.0). Provided as is, without any
 warranty.
 

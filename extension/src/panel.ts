@@ -293,6 +293,7 @@ footer .msg.err { color: var(--danger); }
 .about.open { display: block; }
 .about .about-foot { margin-top: 8px; color: var(--fg2-dark); }
 .about code { font-size: 11px; }
+.about a { color: var(--ok-dark); }
 .speedchip.slow { background: var(--bg-warning-01, #8f5514); }
 .speedchip.pop { animation: chip 1.8s cubic-bezier(.2,1.6,.4,1) forwards; }
 @keyframes chip { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 12% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: 0; } }
@@ -378,7 +379,8 @@ export class Panel {
       <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
       endorsed or supported by Overleaf: an experimental incremental TeX engine that runs entirely in your browser. Nothing is
       sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
-      <div class="about-foot">Plain TeX only for now. Free software (AGPL-3.0-only), provided as is, without any warranty.
+      <div class="about-foot">Plain TeX only for now. Free software (AGPL-3.0-only,
+      <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
       To turn it off: <code>chrome://extensions</code>.</div>
     </div>
     <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div><div class="viewer" id="viewer"></div></div>
@@ -397,6 +399,7 @@ export class Panel {
     const dbg = this.$("#dbg");
     dbg.onclick = () => this.toggleDebug();
     this.$("#dbg2").onchange = () => this.toggleDebug();
+    (this.$("#license") as HTMLAnchorElement).href = globalThis.chrome?.runtime?.getURL?.("LICENSE.txt") ?? "LICENSE.txt";
     this.$("#byline").onclick = (e) => {
       e.stopPropagation();
       this.$("#about").classList.toggle("open");

@@ -44,7 +44,8 @@
         "dist/panel.js",
         "dist/session.js",
         "dist/diagnostics.js",
-        "dist/news.js"
+        "dist/news.js",
+        "LICENSE.txt"
       ],
       "matches": [
         "https://www.overleaf.com/*"

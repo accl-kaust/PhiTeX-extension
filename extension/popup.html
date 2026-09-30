@@ -26,11 +26,13 @@
   .switch input:focus-visible + i { outline: 2px solid #366cbf; outline-offset: 2px; }
   .btns { display: flex; gap: 8px; }
   button.btn { font: inherit; font-size: 12px; font-weight: 600; border: 0; border-radius: 9999px; padding: 5px 12px; cursor: pointer; background: var(--bg2); color: var(--fg); }
-  button.btn.primary { background: var(--accent); color: #fff; } button.btn:disabled { opacity: .5; cursor: default; }
+  button.btn.primary { background: var(--accent); color: #fff; }
+  button.btn.danger { background: #b83a33; color: #fff; } button.btn.danger.confirm { background: #942f2a; } button.btn:disabled { opacity: .5; cursor: default; }
   .note { color: var(--fg2); font-size: 11px; margin: 4px 0 0; }
   .terms { font-size: 12px; } .terms.warn { color: var(--warn); }
   footer { padding: 10px 14px; color: var(--fg2); font-size: 11px; }
   footer b { color: var(--fg); }
+  footer a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -66,8 +68,15 @@
   <div class="btns"><button class="btn" id="withdraw">Withdraw consent</button></div>
 </section>
 
+<section>
+  <h2>Reset</h2>
+  <div class="row"><span>Reset the extension<small>Wipes its settings, terms and layout: as just installed</small></span>
+    <button class="btn danger" id="reset">Reset</button></div>
+</section>
+
 <footer><b>PhiTeX Instant for Overleaf (unofficial)</b> <span id="version"></span><br>
-  Free software under the GNU AGPL, version 3 only, provided as is, without any warranty. Not made, endorsed or supported by Overleaf.
+  Free software under the GNU AGPL, version 3 only (<a href="LICENSE.txt" target="_blank" rel="noopener">full license</a>),
+  provided as is, without any warranty. © 2026 Ammar Seliaman. Not made, endorsed or supported by Overleaf.
   Runs locally: nothing is sent anywhere.</footer>
 <script type="module" src="dist/popup.js"></script>
 </body>

@@ -310,8 +310,9 @@ function dockInOverleaf(panel: Panel): Dock {
               <b>unofficial, experimental</b> browser extension that typesets a plain-TeX subset in your browser.</p>
               <p>It runs locally: your documents are not sent anywhere. Its preview and PDF can differ from, or be missing what,
               Overleaf's compiler makes. For anything that matters, use Overleaf's <b>PDF</b>.</p>
-              <p class="small text-muted">Free software under the GNU AGPL, version 3 only, provided as is, without any warranty
-              (sections 15 and 16 of the license). The authors bear no responsibility for its use.</p>
+              <p class="small text-muted">Free software under the GNU AGPL, version 3 only
+              (<a href="${chrome.runtime.getURL("LICENSE.txt")}" target="_blank" rel="noopener">full license</a>), provided as is,
+              without any warranty (its sections 15 and 16). The authors bear no responsibility for its use.</p>
               <div class="form-check"><input class="form-check-input" type="checkbox" id="phitex-consent-check">
                 <label class="form-check-label" for="phitex-consent-check">I understand this is an unofficial, experimental extension,
                 provided as is, without any warranty, and I use it at my own risk.</label></div>
@@ -712,7 +713,8 @@ function dockInOverleaf(panel: Panel): Dock {
     panel.shown(false);
   }
   chrome.storage.onChanged.addListener((c) => {
-    if (c.view && c.view.newValue !== mode) void set(c.view.newValue === "phitex" ? "phitex" : "pdf");
+    // (a reset removes the keys: newValue undefined is the default)
+    if (c.view && (c.view.newValue ?? "pdf") !== mode) void set(c.view.newValue === "phitex" ? "phitex" : "pdf");
     if (c.tipOff) {
       tipOff = !!c.tipOff.newValue;
       if (tipOff) hideTip();
@@ -784,8 +786,11 @@ function dockInOverleaf(panel: Panel): Dock {
         session?.pause(false);
       }
     }
-    const f = (c.panel?.newValue as { format?: "vector" | "png" } | undefined)?.format;
-    if (f) panel.formatTo(f);
+    if (c.panel) {
+      const p = c.panel.newValue as { format?: "vector" | "png"; zoom?: string } | undefined;
+      panel.formatTo(p?.format ?? "vector");
+      if (!p) panel.zoomTo("fit");
+    }
   });
   chrome.runtime.onMessage.addListener((m) => {
     if (m?.type === "phitex-tour") dock?.tour();

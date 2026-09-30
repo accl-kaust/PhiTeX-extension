@@ -21,6 +21,8 @@ flags="-C link-arg=$sysroot/lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-re
   cargo build --release --target wasm32-wasip1)
 rm -rf extension/dist && mkdir -p extension/dist
 cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
+# (the full license, shipped in the extension, where its links point)
+cp LICENSE extension/LICENSE.txt
 scripts/sandbox npx tsc -p .
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.

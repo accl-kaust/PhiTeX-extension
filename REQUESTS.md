@@ -219,3 +219,50 @@ one.
 Real Overleaf projects are LaTeX. Until the kernel is there, the preview
 drops `\documentclass`, `\usepackage`, `\begin{…}` and `\section` and shows
 the words left over (see REPORT.md).
+
+## 14. `Typeset` usable as the whole backend
+
+`phitex_layout::Typeset` is what the extension should wrap, but:
+- It has no fuel parameter: `Typeset::project` uses `build::FUEL`, and the
+  preview needs a lower one (a runaway `\def\a{\a}\a` costs ~220 ms a
+  keystroke at 10^6).
+- It gives no `&mut Doc` for `edit_view`'s full `View` or the status.
+- Its drawn-stream cache is private.
+
+So the core wraps `Doc` directly and redoes `Typeset::pdf`'s cache
+(`core/src/lib.rs`, `Session::pdf`).
+
+**Shape.** `Typeset::project_with_fuel`, and a `View` from
+`Typeset::edit_view` that carries the page's draw list (see 8).
+
+## 15. Errors, not panics, at the API
+
+`Doc::edit_file`/`edit_view` panic when a range is outside the file or off
+a character boundary (`# Panics` in their docs). In wasm, built with
+`panic = "abort"`, a panic kills the instance, and every tab's session with
+it. The worker then has to reload the module and reopen each project.
+
+**Shape.** `try_edit_file(..) -> Result<EditStats, EditError>` (range,
+boundary, unknown file), or the same checks in `edit_file` returning an
+error.
+
+**Meanwhile.** `Session::valid` checks the range and boundaries before
+every edit (`core/src/lib.rs`), and a test covers the refusals.
+
+## 16. A wasm build, checked in PhiTeX
+
+A change in PhiTeX can break the wasm build without any native test
+noticing, and it did twice here:
+- `Instant::now()` panics on wasm32-unknown-unknown (see 10).
+- On wasm32-wasip1, a cdylib has no `_initialize`, so wasi-libc's
+  constructors never run and std's thread-local destructor registration
+  spins forever (`__pthread_key_delete`). The fix is linking the
+  toolchain's `crt1-reactor.o` and exporting `_initialize`
+  (`scripts/build.sh`), which a `-Zwasi-exec-model=reactor` flag does not
+  do for a cdylib.
+
+**Shape.** A CI job, or a `scripts/sandbox cargo build --target
+wasm32-wasip1` line in AGENTS.md's checks, building phitex-layout for
+wasm. Better still, a tiny `phitex-wasm` crate in PhiTeX with the ABI of
+`core/`, run under `node:wasi` for one open and one edit
+(`test/wasm-harness.mjs` does exactly this).

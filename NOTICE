@@ -1,0 +1,28 @@
+PhiTeX Instant for Overleaf (unofficial)
+Copyright (C) 2026 Ammar Seliaman
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, version 3 of the License only
+(SPDX-License-Identifier: AGPL-3.0-only). See LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+for more details.
+
+This is an UNOFFICIAL extension. It is not made, endorsed or supported by
+Overleaf, and "Overleaf" is used only to say which site it works with.
+
+Third-party material:
+
+- PhiTeX (phitex-ssa, phitex-layout, phitex-syntax), linked into core.wasm:
+  MIT OR Apache-2.0.
+- extension/src/panel.ts: approximateFraction, ported from pdf.js
+  (pdfjs-dist 5.1.91, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
+  Apache-2.0.
+- extension/src/panel.ts: icon paths from Google's Material Icons,
+  Apache-2.0.
+- The toolbar and popover markup the extension adds to Overleaf's page
+  follows Overleaf's own (overleaf/overleaf, services/web/frontend),
+  AGPL-3.0.

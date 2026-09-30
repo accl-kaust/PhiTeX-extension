@@ -1,4 +1,7 @@
-# PhiTeX Preview for Overleaf (experimental)
+# PhiTeX Instant for Overleaf (unofficial, experimental)
+
+> **Unofficial.** This extension is not made, endorsed or supported by
+> Overleaf. "Overleaf" names the site it works with, nothing more.
 
 A Chrome extension (Manifest V3) that shows a live, incremental
 [PhiTeX](../PhiTeX) preview **next to** Overleaf's own PDF. It is not a
@@ -93,6 +96,24 @@ zoom and view are remembered.
   Change it from the list. **Sync** fetches every doc again and diffs each
   one in.
 
+## Settings, terms and news
+
+- **Settings:** click the extension's icon (the green ⚡) to open them:
+  - enable on Overleaf (off: Overleaf exactly as it is, live);
+  - which preview opens (PDF or ⚡ Instant), and the page view (Vector or
+    PNG);
+  - the tip and What's new, on or off;
+  - "What's new" and "Take the tour" for the open tab;
+  - the terms.
+- **Terms:** before its first use, ⚡ Instant asks you to confirm that it is
+  an unofficial, experimental extension, provided as is, without any
+  warranty, used at your own risk. It is Overleaf's modal, with a checkbox.
+  The acceptance is remembered, and you can withdraw it in the settings.
+- **What's new:** release notes ship with the extension
+  (`extension/src/news.ts`; add an entry when bumping the version) and
+  show once after an update, never after a fresh install. They are never
+  fetched.
+
 ## How it works
 
 ```
@@ -137,9 +158,18 @@ Overleaf page ──────────────────────
   never changes your documents.
 - No analytics, no storage of your content (it lives in memory while the
   tab is open).
-- Permissions: `offscreen` (the core's worker) and `storage` (the panel's
-  own layout preferences, never document content), plus content scripts on
-  `https://www.overleaf.com/project/*`.
+- Permissions:
+  - `offscreen`: the core's worker;
+  - `storage`: settings and layout, never document content;
+  - `activeTab`: the settings popup's buttons act on the open tab;
+  - content scripts on `https://www.overleaf.com/project/*`.
+
+## License
+
+GNU Affero General Public License, **version 3 only** (`AGPL-3.0-only`); see
+`LICENSE` and `NOTICE` (third-party parts: PhiTeX MIT OR Apache-2.0, a
+pdf.js function and Material icons Apache-2.0). Provided as is, without any
+warranty.
 
 ## Limits
 
@@ -159,10 +189,14 @@ Overleaf page ──────────────────────
 ## Chrome Web Store listing notes
 
 - Free, no monetization, no ads, no accounts: a **non-trader** listing.
+- The title and description say **unofficial** and "not affiliated with
+  Overleaf". Source: AGPL-3.0-only, and the store listing must link to it
+  (the AGPL's source offer).
 - Single purpose: "Show an experimental, locally computed PhiTeX preview of
   the Overleaf project being edited."
 - Permission justification: `offscreen` runs the WebAssembly typesetter in a
-  worker outside the Overleaf page. `storage` remembers the panel's layout.
+  worker outside the Overleaf page. `storage` keeps the settings. `activeTab`
+  lets the settings popup start the tour or What's new in the open tab.
   The host match reads the project being edited.
 - Data use: no data collected, sold or transferred. Remote code: none (the
   wasm ships in the package; CSP `script-src 'self' 'wasm-unsafe-eval'`).

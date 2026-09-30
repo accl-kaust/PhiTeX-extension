@@ -19,3 +19,11 @@ chrome.runtime.onMessage.addListener((m, _sender, reply) => {
     return true;
   }
 });
+
+// What's new: after an update, the notes the user hasn't seen show once in
+// Overleaf; a fresh install sees the welcome tip instead, so its notes count
+// as seen.
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  const version = chrome.runtime.getManifest().version;
+  if (reason === "install") void chrome.storage.local.set({ newsSeen: version });
+});

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PhiTeX Instant settings</title>
+<style>
+  :root { --bg: #fff; --bg2: #f4f5f6; --fg: #1b222c; --fg2: #495365; --line: #e7e9ee; --accent: #098842; --accent2: #1e6b41; --warn: #8f5514; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b222c; --bg2: #2f3a4c; --fg: #f4f5f6; --fg2: #afb5c0; --line: #2f3a4c; --warn: #de8014; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 340px; background: var(--bg); color: var(--fg); font: 13px/1.45 "Noto Sans", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: linear-gradient(135deg, #098842, #1e6b41); color: #fff; }
+  header img { width: 28px; height: 28px; border-radius: 6px; box-shadow: 0 0 0 1.5px rgb(255 255 255 / 35%); }
+  header b { font-size: 15px; display: block; } header small { opacity: .85; }
+  section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  h2 { margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg2); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+  .row span small { display: block; color: var(--fg2); font-size: 11px; }
+  .seg { display: inline-flex; background: var(--bg2); border-radius: 9999px; padding: 2px; }
+  .seg button { all: unset; cursor: pointer; padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; color: var(--fg2); }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  .switch { position: relative; width: 34px; height: 20px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch i { position: absolute; inset: 0; border-radius: 9999px; background: #afb5c0; transition: .15s; cursor: pointer; }
+  .switch i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .15s; }
+  .switch input:checked + i { background: var(--accent); } .switch input:checked + i::after { left: 16px; }
+  .switch input:focus-visible + i { outline: 2px solid #366cbf; outline-offset: 2px; }
+  .btns { display: flex; gap: 8px; }
+  button.btn { font: inherit; font-size: 12px; font-weight: 600; border: 0; border-radius: 9999px; padding: 5px 12px; cursor: pointer; background: var(--bg2); color: var(--fg); }
+  button.btn.primary { background: var(--accent); color: #fff; } button.btn:disabled { opacity: .5; cursor: default; }
+  .note { color: var(--fg2); font-size: 11px; margin: 4px 0 0; }
+  .terms { font-size: 12px; } .terms.warn { color: var(--warn); }
+  footer { padding: 10px 14px; color: var(--fg2); font-size: 11px; }
+  footer b { color: var(--fg); }
+</style>
+</head>
+<body>
+<header><img src="icons/icon48.png" alt=""><div><b>PhiTeX Instant</b><small>Unofficial · experimental · not part of Overleaf</small></div></header>
+
+<section>
+  <div class="row"><span>Enable on Overleaf<small>Off: Overleaf exactly as it is</small></span>
+    <label class="switch"><input type="checkbox" id="enabled"><i></i></label></div>
+</section>
+
+<section>
+  <h2>Preview</h2>
+  <div class="row"><span>Opens with</span>
+    <span class="seg" id="view"><button data-v="pdf">PDF</button><button data-v="phitex">⚡ Instant</button></span></div>
+  <div class="row"><span>Page<small>Vector: selectable text · PNG: PhiTeX's raster</small></span>
+    <span class="seg" id="format"><button data-v="vector">Vector</button><button data-v="png">PNG</button></span></div>
+  <p class="note" id="viewnote"></p>
+</section>
+
+<section>
+  <h2>Tips</h2>
+  <div class="row"><span>Show the ⚡ Instant tip<small>On Overleaf's PDF, until turned off</small></span>
+    <label class="switch"><input type="checkbox" id="tips"><i></i></label></div>
+  <div class="row"><span>Show what's new after updates</span>
+    <label class="switch"><input type="checkbox" id="news"><i></i></label></div>
+  <div class="btns" style="margin-top:6px"><button class="btn" id="whatsnew">What's new</button><button class="btn" id="tour">Take the tour</button></div>
+  <p class="note" id="tabnote"></p>
+</section>
+
+<section>
+  <h2>Terms</h2>
+  <p class="terms" id="terms"></p>
+  <div class="btns"><button class="btn" id="withdraw">Withdraw consent</button></div>
+</section>
+
+<footer><b>PhiTeX Instant for Overleaf (unofficial)</b> <span id="version"></span><br>
+  Free software under the GNU AGPL, version 3 only, provided as is, without any warranty. Not made, endorsed or supported by Overleaf.
+  Runs locally: nothing is sent anywhere.</footer>
+<script type="module" src="dist/popup.js"></script>
+</body>
+</html>

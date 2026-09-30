@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "PhiTeX Preview for Overleaf (experimental)",
-  "short_name": "PhiTeX Preview",
+  "name": "PhiTeX Instant for Overleaf (unofficial)",
+  "short_name": "PhiTeX Instant",
   "version": "0.1.0",
-  "description": "An experimental, live, incremental PhiTeX preview beside Overleaf's own PDF. Plain TeX subset. Everything runs locally.",
+  "description": "Unofficial, experimental: an instant, incremental PhiTeX preview beside Overleaf's PDF. Not affiliated with Overleaf. Runs locally.",
   "minimum_chrome_version": "116",
   "permissions": [
     "offscreen",
-    "storage"
+    "storage",
+    "activeTab"
   ],
   "background": {
     "service_worker": "dist/background.js",
@@ -42,7 +43,8 @@
         "dist/zip.js",
         "dist/panel.js",
         "dist/session.js",
-        "dist/diagnostics.js"
+        "dist/diagnostics.js",
+        "dist/news.js"
       ],
       "matches": [
         "https://www.overleaf.com/*"
@@ -51,5 +53,19 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PhiTeX Instant (unofficial): settings",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
   }
 }

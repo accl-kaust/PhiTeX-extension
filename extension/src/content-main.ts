@@ -5,6 +5,7 @@
 import type { Edit } from "./edits.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
+import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
 
 /** The panel's preferences, in the extension's own storage (not the page's). */
@@ -171,6 +172,24 @@ const DOCK_CSS = `
     font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; color: #fff; background: var(--bg-info-01, #366cbf); }
   .phitex-badge.warning { background: var(--bg-warning-01, #8f5514); } .phitex-badge.error { background: var(--bg-danger-01, #b83a33); }
   #phitex-zoom-menu { min-width: 120px; }
+  #phitex-consent .modal { z-index: 1070; } #phitex-consent .modal-backdrop { z-index: 1065; }
+  #phitex-consent .form-check { margin-top: 12px; }
+  #phitex-news { position: fixed; z-index: 1060; width: 340px; max-width: calc(100vw - 16px); overflow: visible;
+    border: 1.5px solid var(--green-40, #53b57f); border-radius: 12px; box-shadow: 0 0 0 4px rgb(83 181 127 / 18%), 0 18px 48px rgb(0 0 0 / 45%);
+    animation: phitex-tip-in .45s cubic-bezier(.2,1.3,.4,1); }
+  #phitex-news::before { content: ""; position: absolute; top: -8px; left: var(--arrow, 50%); width: 14px; height: 14px; transform: translateX(-50%) rotate(45deg);
+    background: var(--green-50, #098842); border-left: 1.5px solid var(--green-40, #53b57f); border-top: 1.5px solid var(--green-40, #53b57f); }
+  #phitex-news .popover-header { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #fff; border: 0;
+    background: linear-gradient(135deg, var(--green-50, #098842), var(--green-60, #1e6b41)); padding: 10px 14px; }
+  #phitex-news .phitex-tip-clip { overflow: hidden; border-radius: 11px; }
+  #phitex-news .popover-body { max-height: 50vh; overflow: auto; }
+  #phitex-news .phitex-news-title { font-weight: 700; margin-bottom: 4px; }
+  #phitex-news ul { padding-left: 18px; margin: 0 0 10px; }
+  #phitex-news li { margin-bottom: 4px; }
+  #phitex-news .phitex-tip-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+  label.phitex-dot-new { position: relative; }
+  label.phitex-dot-new::before { content: ""; position: absolute; top: 2px; right: 4px; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green-40, #53b57f); box-shadow: 0 0 0 2px var(--bg-dark-primary, #1b222c); }
   #phitex-tour { position: fixed; z-index: 1060; width: 320px; max-width: calc(100vw - 16px); overflow: visible;
     border: 1.5px solid var(--green-40, #53b57f); border-radius: 12px; box-shadow: 0 0 0 4px rgb(83 181 127 / 18%), 0 18px 48px rgb(0 0 0 / 45%);
     animation: phitex-tip-in .35s cubic-bezier(.2,1.3,.4,1); }
@@ -227,7 +246,7 @@ const DOCK_CSS = `
   .phitex-pulse { background: rgb(83 181 127 / 25%); color: #fff !important; }
   @keyframes phitex-ring { 70% { box-shadow: 0 0 0 14px rgb(83 181 127 / 0%); } 100% { box-shadow: 0 0 0 0 rgb(83 181 127 / 0%); } }
   @media (prefers-reduced-motion: reduce) {
-    #phitex-tip, #phitex-tip *, #phitex-tour, .phitex-ring, #phitex-tip .phitex-tip-clip::after, .phitex-pulse::after { animation: none !important; }
+    #phitex-tip, #phitex-tip *, #phitex-tour, #phitex-news, .phitex-ring, #phitex-tip .phitex-tip-clip::after, .phitex-pulse::after { animation: none !important; }
     #phitex-tip .phitex-demo code { width: 9ch; } #phitex-tip .phitex-demo .phitex-mini { opacity: 1; }
   }`;
 
@@ -240,7 +259,9 @@ const DOCK_CSS = `
  * toolbar (layout changed upstream, PDF closed), the panel floats: the
  * fallback.
  */
-function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
+type Dock = { toggle(): boolean; tour(): void; news(): void; stop(): void; resume(): void };
+
+function dockInOverleaf(panel: Panel): Dock {
   const PANE = ".pdf.full-size, .ide-redesign-pdf-container .pdf, .pdf";
   /** Without Overleaf's PDF pane this long after load, the preview floats (the fallback). */
   const FALLBACK_AFTER_MS = 8000;
@@ -251,15 +272,82 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
   style.textContent = DOCK_CSS;
   document.head.append(style);
   let mode: "pdf" | "phitex" = "pdf";
+  /** (read after an await: `set` may have changed it, or refused) */
+  const viewNow = () => mode;
   /** The tip shows on every load (on Overleaf's PDF) until "Don't show again". */
   let tipOff = true;
-  chrome.storage.local.get(["view", "tipOff"]).then(({ view, tipOff: off }) => {
+  let newsPending = false;
+  const loadedAt = performance.now();
+  chrome.storage.local.get(["view", "tipOff", "accepted"]).then(async ({ view, tipOff: off, accepted: a }) => {
     if (view === "phitex" || view === "pdf") mode = view;
+    if (mode === "phitex" && a !== TERMS) mode = "pdf";
     tipOff = !!off;
     tick();
     if (!tipOff) setTimeout(tip, 1500);
+    // (news after the tip, never both; shown by tick() once the switch exists)
+    const { newsSeen, newsOff } = await chrome.storage.local.get(["newsSeen", "newsOff"]);
+    newsPending = !newsOff && unseen(newsSeen as string | undefined, chrome.runtime.getManifest().version).length > 0;
   });
-  const set = (m: "pdf" | "phitex") => {
+  /** The version of the terms the user accepted (bump it to ask again). */
+  const TERMS = 1;
+  let accepted = false;
+  chrome.storage.local.get("accepted").then(({ accepted: a }) => (accepted = a === TERMS));
+
+  /** Before the first use: an unofficial, experimental extension, as is, at the user's own risk. Overleaf's modal markup. */
+  function consent(): Promise<boolean> {
+    if (accepted) return Promise.resolve(true);
+    // (one thing at a time: the terms, alone)
+    for (const id of ["phitex-consent", "phitex-news", "phitex-tip", "phitex-tour"]) document.getElementById(id)?.remove();
+    return new Promise((done) => {
+      const m = document.createElement("div");
+      m.id = "phitex-consent";
+      m.innerHTML = `<div class="modal-backdrop fade show"></div>
+        <div class="modal fade show d-block" role="dialog" aria-modal="true" aria-labelledby="phitex-consent-title" tabindex="-1">
+          <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+            <div class="modal-header"><h4 class="modal-title" id="phitex-consent-title">⚡ Instant: an unofficial extension</h4></div>
+            <div class="modal-body">
+              <p><b>PhiTeX Instant is not part of Overleaf</b>, and is not made, endorsed or supported by Overleaf. It is an
+              <b>unofficial, experimental</b> browser extension that typesets a plain-TeX subset in your browser.</p>
+              <p>It runs locally: your documents are not sent anywhere. Its preview and PDF can differ from, or be missing what,
+              Overleaf's compiler makes. For anything that matters, use Overleaf's <b>PDF</b>.</p>
+              <p class="small text-muted">Free software under the GNU AGPL, version 3 only, provided as is, without any warranty
+              (sections 15 and 16 of the license). The authors bear no responsibility for its use.</p>
+              <div class="form-check"><input class="form-check-input" type="checkbox" id="phitex-consent-check">
+                <label class="form-check-label" for="phitex-consent-check">I understand this is an unofficial, experimental extension,
+                provided as is, without any warranty, and I use it at my own risk.</label></div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-c="no">Cancel</button>
+              <button type="button" class="btn btn-primary" data-c="yes" disabled>Enable ⚡ Instant</button>
+            </div>
+          </div></div>
+        </div>`;
+      document.body.append(m);
+      const check = m.querySelector<HTMLInputElement>("#phitex-consent-check")!;
+      const yes = m.querySelector<HTMLButtonElement>('[data-c="yes"]')!;
+      check.onchange = () => (yes.disabled = !check.checked);
+      const finish = (ok: boolean) => {
+        m.remove();
+        if (ok) {
+          accepted = true;
+          void chrome.storage.local.set({ accepted: TERMS });
+        }
+        done(ok);
+      };
+      yes.onclick = () => finish(true);
+      m.querySelector<HTMLElement>('[data-c="no"]')!.onclick = () => finish(false);
+      m.addEventListener("keydown", (e) => e.key === "Escape" && finish(false));
+      check.focus();
+    });
+  }
+
+  const set = async (m: "pdf" | "phitex") => {
+    if (m === "phitex" && !(await consent())) {
+      // (not accepted: stay on Overleaf's PDF)
+      mode = "pdf";
+      tick();
+      return;
+    }
     mode = m;
     void chrome.storage.local.set({ view: m });
     if (m === "phitex") hideTip();
@@ -278,9 +366,9 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
       <input type="radio" name="phitex-view" id="phitex-v-pdf" class="toggle-switch-input" value="pdf">
       <label for="phitex-v-pdf" class="toggle-switch-label" title="Overleaf's compiled PDF"><span>PDF</span></label>
       <input type="radio" name="phitex-view" id="phitex-v-phitex" class="toggle-switch-input" value="phitex">
-      <label for="phitex-v-phitex" class="toggle-switch-label" title="⚡ Instant: added by the PhiTeX extension, not part of Overleaf (experimental) · Alt+Shift+P"><span>⚡ Instant</span></label>
+      <label for="phitex-v-phitex" class="toggle-switch-label" title="⚡ Instant: added by the unofficial PhiTeX extension, not part of Overleaf (experimental) · Alt+Shift+P"><span>⚡ Instant</span></label>
     </fieldset></form>`;
-    sw.addEventListener("change", (e) => set((e.target as HTMLInputElement).value as "pdf" | "phitex"));
+    sw.addEventListener("change", (e) => void set((e.target as HTMLInputElement).value as "pdf" | "phitex"));
     left.append(sw);
     return sw;
   }
@@ -457,10 +545,10 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     t.setAttribute("role", "dialog");
     t.setAttribute("aria-label", "Try the PhiTeX preview");
     t.innerHTML = `<div class="phitex-tip-clip">
-      <div class="popover-header"><span class="phitex-bolt" aria-hidden="true">⚡</span> New from the PhiTeX extension</div>
+      <div class="popover-header"><span class="phitex-bolt" aria-hidden="true">⚡</span> New: the unofficial PhiTeX extension</div>
       <div class="popover-body">No more Recompile: PhiTeX repaints this page <b>as you type</b>, incrementally, in milliseconds, right in your browser. Nothing leaves it.
         <div class="phitex-demo" aria-hidden="true"><code>Hello TeX</code><span class="phitex-arrow">⚡→</span><span class="phitex-mini">Hello TeX</span></div>
-        <div class="small text-muted" style="margin-top:6px">A browser extension, not an Overleaf feature. Experimental: plain TeX only. Overleaf's PDF is one click away.</div>
+        <div class="small text-muted" style="margin-top:6px">An unofficial browser extension, not an Overleaf feature. Experimental: plain TeX only. Overleaf's PDF is one click away.</div>
         <div class="phitex-tip-actions"><button type="button" class="btn btn-link btn-sm" id="phitex-tip-never">Don't show again</button>
         <button type="button" class="btn btn-secondary btn-sm" id="phitex-tip-no">Not now</button>
         <button type="button" class="btn btn-primary btn-sm" id="phitex-tip-yes">⚡ Try it</button></div></div></div>`;
@@ -475,9 +563,11 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     };
     place();
     addEventListener("resize", place);
-    t.querySelector<HTMLElement>("#phitex-tip-yes")!.onclick = () => {
-      set("phitex");
-      chrome.storage.local.get("toured").then(({ toured }) => !toured && setTimeout(() => tour(0), 700));
+    t.querySelector<HTMLElement>("#phitex-tip-yes")!.onclick = async () => {
+      await set("phitex");
+      if (viewNow() !== "phitex") return;
+      const { toured } = await chrome.storage.local.get("toured");
+      if (!toured) setTimeout(() => void tour(0), 700);
     };
     t.querySelector<HTMLElement>("#phitex-tip-no")!.onclick = hideTip;
     t.querySelector<HTMLElement>("#phitex-tip-never")!.onclick = () => {
@@ -493,18 +583,52 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     document.querySelector(".phitex-pulse")?.classList.remove("phitex-pulse");
   }
 
+  /** What's new: once after an update (or from settings), in the tip's style. */
+  async function whatsNew(force = false): Promise<void> {
+    const current = chrome.runtime.getManifest().version;
+    const { newsSeen } = await chrome.storage.local.get("newsSeen");
+    const items: News[] = force ? unseen(undefined, current).slice(0, 3) : unseen(newsSeen as string | undefined, current);
+    const sw = document.getElementById("phitex-switch");
+    if (!items.length || !sw || document.getElementById("phitex-news") || document.getElementById("phitex-tip")) return;
+    const label = sw.querySelector('label[for="phitex-v-phitex"]') as HTMLElement;
+    const t = document.createElement("div");
+    t.id = "phitex-news";
+    t.className = "popover bs-popover-bottom show";
+    t.setAttribute("role", "dialog");
+    t.setAttribute("aria-label", "What's new in the PhiTeX extension");
+    t.innerHTML = `<div class="phitex-tip-clip"><div class="popover-header"><span aria-hidden="true">✨</span> What's new in PhiTeX ${items[0].version}</div>
+      <div class="popover-body">${items
+        .map((n) => `<div class="phitex-news-entry"><div class="phitex-news-title">${n.title} <span class="text-muted small">${n.version} · ${n.date}</span></div><ul>${n.items.map((i) => `<li>${i}</li>`).join("")}</ul></div>`)
+        .join("")}
+        <div class="small text-muted">From the unofficial PhiTeX extension, not Overleaf.</div>
+        <div class="phitex-tip-actions"><button type="button" class="btn btn-primary btn-sm" id="phitex-news-ok">Got it</button></div></div></div>`;
+    document.body.append(t);
+    const r = label.getBoundingClientRect(), w = t.offsetWidth;
+    const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8));
+    Object.assign(t.style, { left: `${left}px`, top: `${r.bottom + 10}px` });
+    t.style.setProperty("--arrow", `${r.left + r.width / 2 - left}px`);
+    t.querySelector<HTMLElement>("#phitex-news-ok")!.onclick = () => {
+      t.remove();
+      label.classList.remove("phitex-dot-new");
+      void chrome.storage.local.set({ newsSeen: current });
+    };
+  }
+
   /** The walkthrough: Overleaf's popover, a step at a time, the thing it explains ringed. */
   const STEPS: { at: () => Element | null; title: string; body: string; inside?: boolean }[] = [
-    { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is added by the PhiTeX extension (not part of Overleaf), live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
+    { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is added by the unofficial PhiTeX extension (not part of Overleaf), live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
     { at: () => document.querySelector("phitex-preview"), inside: true, title: "Type, and watch", body: "Edit anything in the editor: this page repaints as you type, usually in a few milliseconds. The <b>⚡ chip</b> in the corner shows how fast. No Recompile." },
     { at: () => document.getElementById("phitex-logs"), title: "What PhiTeX couldn't read", body: "Diagnostics, with a count. Click one to jump to its line. PhiTeX handles plain TeX: LaTeX commands are listed here, not typeset (yet)." },
     { at: () => document.getElementById("phitex-dlgroup"), title: "Download what you see", body: "This downloads the <b>⚡ Instant</b> PDF (<code>…-instant.pdf</code>). The <b>▾</b> menu has Overleaf's compiled PDF too." },
     { at: () => document.getElementById("phitex-zoom"), title: "Zoom, and the details", body: "Zoom like Overleaf's viewer. At the bottom of this menu: settings and timings (main file, a debug check against a fresh build). Everything runs in your browser; nothing leaves it." },
   ];
 
-  function tour(k = 0): void {
+  async function tour(k = 0): Promise<void> {
     endTour();
-    if (mode !== "phitex") set("phitex");
+    if (mode !== "phitex") {
+      await set("phitex");
+      if (viewNow() !== "phitex") return;
+    }
     const step = STEPS[k];
     const target = step?.at();
     if (!step || !target) return endTour(true);
@@ -528,8 +652,8 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     t.style.setProperty("--arrow", step.inside ? "-100px" : `${r.left + r.width / 2 - left}px`);
     t.onclick = (e) => {
       const a = (e.target as HTMLElement).closest<HTMLElement>("[data-t]")?.dataset.t;
-      if (a === "next") tour(k + 1);
-      if (a === "back") tour(k - 1);
+      if (a === "next") void tour(k + 1);
+      if (a === "back") void tour(k - 1);
       if (a === "skip") endTour(true);
     };
     t.querySelector<HTMLElement>('[data-t="next"]')!.focus();
@@ -565,16 +689,51 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
       ctl.classList.toggle("compact", bar.clientWidth - used < FULL_CONTROLS_PX);
     }
     (sw.querySelector(`input[value="${mode}"]`) as HTMLInputElement).checked = true;
+    if (newsPending) {
+      sw.querySelector('label[for="phitex-v-phitex"]')?.classList.add("phitex-dot-new");
+      // (a moment after the switch appears, and not over the welcome tip)
+      if (performance.now() - loadedAt > 2500 && !document.getElementById("phitex-tip")) {
+        newsPending = false;
+        void whatsNew();
+      }
+    }
     panel.dock(pane, pane.querySelector(".toolbar-pdf"));
     pane.classList.toggle("phitex-on", mode === "phitex");
     panel.shown(mode === "phitex");
   }
-  setInterval(tick, 700);
+  let timer = setInterval(tick, 700);
+  /** The extension turned off: everything we added goes; Overleaf is as it was. */
+  function stop(): void {
+    clearInterval(timer);
+    endTour();
+    hideTip();
+    for (const id of ["phitex-switch", "phitex-controls", "phitex-left", "phitex-news", "phitex-consent"]) document.getElementById(id)?.remove();
+    document.querySelector(".phitex-on")?.classList.remove("phitex-on");
+    panel.shown(false);
+  }
+  chrome.storage.onChanged.addListener((c) => {
+    if (c.view && c.view.newValue !== mode) void set(c.view.newValue === "phitex" ? "phitex" : "pdf");
+    if (c.tipOff) {
+      tipOff = !!c.tipOff.newValue;
+      if (tipOff) hideTip();
+    }
+    if (c.accepted) {
+      accepted = c.accepted.newValue === TERMS;
+      if (!accepted && mode === "phitex") void set("pdf");
+    }
+  });
   return {
-    tour: () => tour(0),
+    stop,
+    resume: () => {
+      clearInterval(timer);
+      timer = setInterval(tick, 700);
+      tick();
+    },
+    news: () => void whatsNew(true),
+    tour: () => void tour(0),
     toggle: () => {
       if (!document.getElementById("phitex-switch")) return false;
-      set(mode === "pdf" ? "phitex" : "pdf");
+      void set(mode === "pdf" ? "phitex" : "pdf");
       return true;
     },
   };
@@ -582,7 +741,7 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
 
 (async () => {
   let session: PreviewSession;
-  let dock: { toggle(): boolean; tour(): void } | undefined;
+  let dock: Dock | undefined;
   const panel = new Panel({
     onPage: (p) => session.setPage(p),
     onPdf: async () => {
@@ -603,8 +762,37 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     onReload: async () => session.refresh(await fetchDocs(panel)),
     onShortcut: () => dock?.toggle() ?? false,
     onTour: () => dock?.tour(),
+    onNews: () => dock?.news(),
   }, prefs);
-  dock = dockInOverleaf(panel);
+  // (off in the popup: nothing at all, not even the project fetched; on again, live)
+  let { enabled } = await chrome.storage.local.get("enabled");
+  let started = false;
+  const start = async () => {
+    started = true;
+    dock = dockInOverleaf(panel);
+    await go();
+  };
+  chrome.storage.onChanged.addListener((c) => {
+    if (c.enabled) {
+      enabled = c.enabled.newValue;
+      if (enabled === false) {
+        dock?.stop();
+        session?.pause(true);
+      } else if (!started) void start();
+      else {
+        dock?.resume();
+        session?.pause(false);
+      }
+    }
+    const f = (c.panel?.newValue as { format?: "vector" | "png" } | undefined)?.format;
+    if (f) panel.formatTo(f);
+  });
+  chrome.runtime.onMessage.addListener((m) => {
+    if (m?.type === "phitex-tour") dock?.tour();
+    if (m?.type === "phitex-news") dock?.news();
+  });
+  /** The session: the core connected, the project loaded, closed docs followed. */
+  async function go(): Promise<void> {
   const transport = new ChromeTransport();
   try {
     await transport.connect();
@@ -615,7 +803,7 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     // (closed docs: fetched again and diffed in, so collaborators' edits to
     // them arrive as edits; the open one is live through the editor)
     setInterval(async () => {
-      if (document.hidden) return;
+      if (document.hidden || enabled === false) return;
       try {
         session.refresh(await fetchDocs(panel, (p) => p !== session.open));
       } catch {
@@ -625,4 +813,8 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
   } catch (e) {
     panel.error(String(e));
   }
+  }
+
+  if (enabled === false) return;
+  await start();
 })();

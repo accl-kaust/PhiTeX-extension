@@ -302,9 +302,17 @@ export class PreviewSession {
    * is free: a fast core builds every keystroke, a slow one the last N
    * together, never a state already stale.
    */
+  /** Paused (the extension turned off): edits keep merging in their batches, sent on resume. */
+  private paused = false;
+
+  pause(on: boolean): void {
+    this.paused = on;
+    if (!on) void this.flush();
+  }
+
   flush(): Promise<void> {
     this.scheduled = false;
-    if (!this.opened || this.busy) return this.chain;
+    if (!this.opened || this.busy || this.paused) return this.chain;
     this.busy = true;
     this.sink.busy?.(true);
     this.chain = this.chain.then(async () => {

@@ -42,6 +42,8 @@ export interface PanelEvents {
   onShortcut?(): boolean;
   /** "Take the tour" (settings). */
   onTour?(): void;
+  /** "What's new" (settings). */
+  onNews?(): void;
 }
 
 /** Where the panel keeps its preferences (chrome.storage.local in the extension). */
@@ -344,7 +346,7 @@ export class Panel {
   <header>
     <span class="icon" aria-hidden="true">preview</span>
     <span class="title">PhiTeX</span>
-    <span class="badge hide-collapsed" title="PhiTeX handles a subset of plain TeX. Overleaf's PDF is the real one.">Experimental</span>
+    <span class="badge hide-collapsed" title="An unofficial extension, not part of Overleaf. PhiTeX handles a subset of plain TeX; Overleaf's PDF is the real one.">Unofficial · experimental</span>
     <span class="grow"></span>
     <span class="chip" id="chip" title="Status"><span class="dot"></span><span id="chiptext">starting…</span></span>
     <span class="group hide-collapsed">
@@ -362,6 +364,7 @@ export class Panel {
     <span class="grow"></span>
     <label class="show-docked" title="Check against a fresh build every 5 s"><input type="checkbox" id="dbg2"> Debug check</label>
     <button class="ib show-docked" id="tour" title="Take the tour" aria-label="Take the tour" style="width:auto;padding:0 6px;font-size:12px;color:var(--info)">Take the tour</button>
+    <button class="ib show-docked" id="news" title="What's new" aria-label="What's new" style="width:auto;padding:0 6px;font-size:12px;color:var(--info)">What's new</button>
     <button class="ib" id="reload" title="Fetch the project's files again" aria-label="Reload files"><span class="icon">sync</span></button>
     <button class="btn" id="pdf" title="PhiTeX's PDF, made locally"><span class="icon">download</span>PDF</button>
     <div class="details" id="details"></div>
@@ -370,11 +373,13 @@ export class Panel {
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
-    <button class="byline" id="byline" title="About this preview">PhiTeX extension · experimental</button>
+    <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
-      <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>PhiTeX</b> browser extension, an experimental
-      incremental TeX engine that runs entirely in your browser. Nothing is sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
-      <div class="about-foot">Plain TeX only for now. To turn it off: <code>chrome://extensions</code>.</div>
+      <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
+      endorsed or supported by Overleaf: an experimental incremental TeX engine that runs entirely in your browser. Nothing is
+      sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
+      <div class="about-foot">Plain TeX only for now. Free software (AGPL-3.0-only), provided as is, without any warranty.
+      To turn it off: <code>chrome://extensions</code>.</div>
     </div>
     <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div><div class="viewer" id="viewer"></div></div>
   </div>
@@ -397,6 +402,10 @@ export class Panel {
       this.$("#about").classList.toggle("open");
     };
     this.$("#stage").addEventListener("pointerdown", () => this.$("#about").classList.remove("open"));
+    this.$("#news").onclick = () => {
+      this.sheet(false);
+      ev.onNews?.();
+    };
     this.$("#tour").onclick = () => {
       this.sheet(false);
       ev.onTour?.();
@@ -448,6 +457,8 @@ export class Panel {
       if (this.docked) return this.prefs.zoom === "fit" ? this.redraw() : undefined;
       if (this.prefs.collapsed) return;
       const r = this.win.getBoundingClientRect();
+      // (hidden, not yet placed: nothing to remember)
+      if (r.width < 100 || r.height < 100) return;
       if (Math.abs(r.width - this.prefs.w) + Math.abs(r.height - this.prefs.h) > 2) {
         this.prefs.w = Math.round(r.width);
         this.prefs.h = Math.round(r.height);
@@ -458,6 +469,8 @@ export class Panel {
     this.place();
     store?.load().then((p) => {
       this.prefs = { ...DEFAULTS, ...p };
+      // (a size saved while hidden, by an older version)
+      if (this.prefs.w < 300 || this.prefs.h < 180) Object.assign(this.prefs, { w: DEFAULTS.w, h: DEFAULTS.h });
       this.place();
       if (this.prefs.format !== "vector") ev.onFormat(this.prefs.format);
     });
@@ -690,6 +703,14 @@ export class Panel {
     this.save();
     this.redraw();
     this.emit();
+  }
+
+  /** The page format, set from outside (the popup). */
+  formatTo(f: PanelPrefs["format"]): void {
+    if (this.prefs.format === f) return;
+    this.prefs.format = f;
+    this.$<HTMLSelectElement>("#fmt").value = f;
+    this.ev.onFormat(f);
   }
 
   toggleDebug(): void {

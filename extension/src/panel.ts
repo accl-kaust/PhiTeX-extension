@@ -77,6 +77,43 @@ function cssFont(name: string, px: number): string {
   return `${italic ? "italic " : ""}${bold ? "bold " : ""}${px}px ${family}`;
 }
 
+/**
+ * pdf.js's approximateFraction (pdfjs-dist 5.1.91, web/pdf_viewer.mjs): x as
+ * a fraction a/b with b ≤ 8. pdf.js sizes a page box with
+ * `round(down, scale × width, b px)`, b from the device pixel ratio, so its
+ * canvas lands on whole device pixels; the same here makes our page the
+ * size of Overleaf's, to the pixel.
+ */
+export function approximateFraction(x: number): [number, number] {
+  if (Math.floor(x) === x) return [x, 1];
+  const xinv = 1 / x;
+  const limit = 8;
+  if (xinv > limit) return [1, limit];
+  if (Math.floor(xinv) === xinv) return [1, xinv];
+  const x_ = x > 1 ? xinv : x;
+  let a = 0, b = 1, c = 1, d = 1;
+  for (;;) {
+    const p = a + c, q = b + d;
+    if (q > limit) break;
+    if (x_ <= p / q) {
+      c = p;
+      d = q;
+    } else {
+      a = p;
+      b = q;
+    }
+  }
+  if (x_ - a / b < c / d - x_) return x_ === x ? [a, b] : [b, a];
+  return x_ === x ? [c, d] : [d, c];
+}
+
+/** A page's CSS size at `cssWidth`, rounded down as pdf.js does at this device pixel ratio. */
+export function pageBox(d: { w: number; h: number }, cssWidth: number, dpr = globalThis.devicePixelRatio || 1): [number, number] {
+  const step = approximateFraction(dpr)[1];
+  const w = cssWidth, h = (d.h * cssWidth) / d.w;
+  return [w - (w % step), h - (h % step)];
+}
+
 const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 /**
@@ -104,8 +141,8 @@ export function svg(d: Draws, cssWidth: number): string {
     body += `<text y="${y}" style="font:${esc(cssFont(d.f[Number(f)], Number(size)))}">${spans}</text>\n`;
   }
   for (const [x, y, w, h] of d.r) body += `<rect x="${x}" y="${y}" width="${Math.max(w, 0.4)}" height="${Math.max(h, 0.4)}"/>`;
-  const h = (d.h * cssWidth) / d.w;
-  return `<svg class="page" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.w} ${d.h}" width="${cssWidth}" height="${h}" xml:space="preserve"><rect class="paper" width="${d.w}" height="${d.h}"/>${body}</svg>`;
+  const [w, h] = pageBox(d, cssWidth);
+  return `<svg class="page" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.w} ${d.h}" width="${w}" height="${h}" preserveAspectRatio="none" xml:space="preserve"><rect class="paper" width="${d.w}" height="${d.h}"/>${body}</svg>`;
 }
 
 /** Material icons (Apache-2.0), inline: no dependency on the page's icon font. */

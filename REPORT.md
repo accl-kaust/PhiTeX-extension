@@ -196,8 +196,7 @@ None of them blocks the extension today.
 
 ## UI
 
-- **Docked** in Overleaf's PDF pane behind an **Overleaf compiler | PhiTeX**
-  switch.
+- **Docked** in Overleaf's PDF pane behind an **PDF | ⚡ Instant** switch.
 - **Overleaf's own markup** for the controls. It is copied from its source
   (`overleaf/overleaf` `services/web/frontend`): pdf-hybrid toolbar,
   toggle-switch, popover. Its theming follows `data-theme`, `--pdf-bg`, and

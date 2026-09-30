@@ -40,6 +40,8 @@ export interface PanelEvents {
   onGoto(file: string, line: number): void;
   /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
   onShortcut?(): boolean;
+  /** "Take the tour" (settings). */
+  onTour?(): void;
 }
 
 /** Where the panel keeps its preferences (chrome.storage.local in the extension). */
@@ -312,6 +314,7 @@ export class Panel {
     <label title="Vector: PhiTeX's positions and line breaks, the browser's glyphs. PNG: PhiTeX's own raster (a box per glyph).">View <select id="fmt"><option value="vector">Vector</option><option value="png">PNG</option></select></label>
     <span class="grow"></span>
     <label class="show-docked" title="Check against a fresh build every 5 s"><input type="checkbox" id="dbg2"> Debug check</label>
+    <button class="ib show-docked" id="tour" title="Take the tour" aria-label="Take the tour" style="width:auto;padding:0 6px;font-size:12px;color:var(--info)">Take the tour</button>
     <button class="ib" id="reload" title="Fetch the project's files again" aria-label="Reload files"><span class="icon">sync</span></button>
     <button class="btn" id="pdf" title="PhiTeX's PDF, made locally"><span class="icon">download</span>PDF</button>
     <div class="details" id="details"></div>
@@ -337,6 +340,10 @@ export class Panel {
     const dbg = this.$("#dbg");
     dbg.onclick = () => this.toggleDebug();
     this.$("#dbg2").onchange = () => this.toggleDebug();
+    this.$("#tour").onclick = () => {
+      this.sheet(false);
+      ev.onTour?.();
+    };
     this.$<HTMLSelectElement>("#main").onchange = (e) => ev.onMain((e.target as HTMLSelectElement).value);
     this.$<HTMLSelectElement>("#zoom").onchange = (e) => this.zoomTo((e.target as HTMLSelectElement).value);
     this.$<HTMLSelectElement>("#fmt").onchange = (e) => {

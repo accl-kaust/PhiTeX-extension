@@ -39,8 +39,7 @@ PhiTeX read-only, `$HOME` empty, no network unless `--net`).
 
 ## The panel
 
-**Docked** in Overleaf's PDF pane: an **Overleaf compiler | PhiTeX** switch
-sits in the PDF toolbar next to Recompile (Alt+Shift+P toggles it). In PhiTeX mode the
+**Docked** in Overleaf's PDF pane: a **PDF | ⚡ Instant** switch sits in the PDF toolbar next to Recompile (Alt+Shift+P toggles it). In PhiTeX mode the
 preview takes the place of Overleaf's viewer, which is hidden, not removed.
 Its controls are Overleaf's own, markup for markup, laid out as Overleaf's
 viewer does for the pane's width:
@@ -51,8 +50,8 @@ The zoom menu also holds PhiTeX's settings and timings. Where Overleaf has
 its logs and download, PhiTeX shows its own: a diagnostics button with a
 count badge, and PhiTeX's PDF. A ⚡ chip at the bottom right of the pane
 shows each repaint's keystroke→page time. It follows Overleaf's theme (`data-theme`, `--pdf-bg`), and
-Overleaf's "dark mode PDF" invert applies to it too. The first time, a tip
-bubble points at the switch.
+Overleaf's "dark mode PDF" invert applies to it too. A tip bubble points at the switch on each load, while
+Overleaf's PDF is showing, until you click "Don't show again".
 
 **Floating window**: the fallback when Overleaf's layout isn't found, for
 example when the PDF pane is closed or an upstream change moved it. It

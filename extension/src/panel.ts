@@ -255,12 +255,6 @@ footer .msg.err { color: var(--danger); }
   box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked .banner { margin: -12px -20px 10px; }
 .win.docked .empty { color: var(--fg2-dark); }
-/* the speed flourish: a scanline across the page on each repaint */
-.scan { position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; opacity: 0;
-  background: linear-gradient(90deg, transparent, var(--ok-dark), transparent); }
-.scan.go { animation: scan .45s ease-out; }
-@keyframes scan { 0% { opacity: .9; transform: translateY(0); } 100% { opacity: 0; transform: translateY(160px); } }
-@media (prefers-reduced-motion: reduce) { .scan.go { animation: none; } .win.docked.sheet-open > .bar { animation: none; } }
 .win.collapsed { resize: none; min-height: 0; min-width: 0; border-radius: 9999px; }
 .win.collapsed > :not(header) { display: none; }
 .win.collapsed header { border-radius: 9999px; padding-right: 4px; }
@@ -322,7 +316,6 @@ export class Panel {
   <div class="sum" id="sum" role="button" aria-expanded="false" tabindex="0" title="Diagnostics (click to list)"></div>
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
-    <div class="scan" id="scan"></div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
     <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div></div>
   </div>
@@ -647,13 +640,9 @@ export class Panel {
     this.emit();
   }
 
-  /** A repaint reached the screen, `ms` after its keystroke: the flourish. */
+  /** A repaint reached the screen, `ms` after its keystroke: the ⚡ chip says how fast. */
   painted(ms: number): void {
     this.speed = { ms, at: performance.now() };
-    const scan = this.$("#scan");
-    scan.classList.remove("go");
-    void scan.offsetWidth; // (restart the animation)
-    scan.classList.add("go");
     const chip = this.$("#speedchip");
     chip.textContent = `⚡ ${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`;
     chip.classList.toggle("slow", ms > 100);

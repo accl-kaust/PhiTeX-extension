@@ -50,7 +50,10 @@ The zoom menu also holds PhiTeX's settings and timings. Where Overleaf has
 its logs and download, PhiTeX shows its own: a diagnostics button with a
 count badge, and PhiTeX's PDF. A ⚡ chip at the bottom right of the pane
 shows each repaint's keystroke→page time. It follows Overleaf's theme (`data-theme`, `--pdf-bg`), and
-Overleaf's "dark mode PDF" invert applies to it too. A tip bubble points at the switch on each load, while
+Overleaf's "dark mode PDF" invert applies to it too. It never passes for an Overleaf feature: the switch's tooltip, a
+"PhiTeX extension · experimental" byline in the pane (with an About), the
+tip and the tour all say it is the PhiTeX extension. A tip bubble points at
+the switch on each load, while
 Overleaf's PDF is showing, until you click "Don't show again".
 
 **Floating window**: the fallback when Overleaf's layout isn't found, for

@@ -278,7 +278,7 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
       <input type="radio" name="phitex-view" id="phitex-v-pdf" class="toggle-switch-input" value="pdf">
       <label for="phitex-v-pdf" class="toggle-switch-label" title="Overleaf's compiled PDF"><span>PDF</span></label>
       <input type="radio" name="phitex-view" id="phitex-v-phitex" class="toggle-switch-input" value="phitex">
-      <label for="phitex-v-phitex" class="toggle-switch-label" title="Instant preview by PhiTeX (experimental) · Alt+Shift+P"><span>⚡ Instant</span></label>
+      <label for="phitex-v-phitex" class="toggle-switch-label" title="⚡ Instant: added by the PhiTeX extension, not part of Overleaf (experimental) · Alt+Shift+P"><span>⚡ Instant</span></label>
     </fieldset></form>`;
     sw.addEventListener("change", (e) => set((e.target as HTMLInputElement).value as "pdf" | "phitex"));
     left.append(sw);
@@ -457,10 +457,10 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
     t.setAttribute("role", "dialog");
     t.setAttribute("aria-label", "Try the PhiTeX preview");
     t.innerHTML = `<div class="phitex-tip-clip">
-      <div class="popover-header"><span class="phitex-bolt" aria-hidden="true">⚡</span> New: a live preview</div>
+      <div class="popover-header"><span class="phitex-bolt" aria-hidden="true">⚡</span> New from the PhiTeX extension</div>
       <div class="popover-body">No more Recompile: PhiTeX repaints this page <b>as you type</b>, incrementally, in milliseconds, right in your browser. Nothing leaves it.
         <div class="phitex-demo" aria-hidden="true"><code>Hello TeX</code><span class="phitex-arrow">⚡→</span><span class="phitex-mini">Hello TeX</span></div>
-        <div class="small text-muted" style="margin-top:6px">Experimental: plain TeX only. Overleaf's PDF is one click away.</div>
+        <div class="small text-muted" style="margin-top:6px">A browser extension, not an Overleaf feature. Experimental: plain TeX only. Overleaf's PDF is one click away.</div>
         <div class="phitex-tip-actions"><button type="button" class="btn btn-link btn-sm" id="phitex-tip-never">Don't show again</button>
         <button type="button" class="btn btn-secondary btn-sm" id="phitex-tip-no">Not now</button>
         <button type="button" class="btn btn-primary btn-sm" id="phitex-tip-yes">⚡ Try it</button></div></div></div>`;
@@ -495,7 +495,7 @@ function dockInOverleaf(panel: Panel): { toggle(): boolean; tour(): void } {
 
   /** The walkthrough: Overleaf's popover, a step at a time, the thing it explains ringed. */
   const STEPS: { at: () => Element | null; title: string; body: string; inside?: boolean }[] = [
-    { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is PhiTeX, live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
+    { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is added by the PhiTeX extension (not part of Overleaf), live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
     { at: () => document.querySelector("phitex-preview"), inside: true, title: "Type, and watch", body: "Edit anything in the editor: this page repaints as you type, usually in a few milliseconds. The <b>⚡ chip</b> in the corner shows how fast. No Recompile." },
     { at: () => document.getElementById("phitex-logs"), title: "What PhiTeX couldn't read", body: "Diagnostics, with a count. Click one to jump to its line. PhiTeX handles plain TeX: LaTeX commands are listed here, not typeset (yet)." },
     { at: () => document.getElementById("phitex-dlgroup"), title: "Download what you see", body: "This downloads the <b>⚡ Instant</b> PDF (<code>…-instant.pdf</code>). The <b>▾</b> menu has Overleaf's compiled PDF too." },

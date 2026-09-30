@@ -279,6 +279,18 @@ footer .msg.err { color: var(--danger); }
   height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.3); opacity: 0; }
 .win.docked .speedchip { display: inline-flex; }
+/* who made this, always said (it looks native on purpose; it must never pass for Overleaf's) */
+.byline { display: none; position: absolute; left: 14px; bottom: 14px; z-index: 3; all: unset; }
+.win.docked .byline { display: inline-flex; position: absolute; left: 14px; bottom: 14px; z-index: 3; align-items: center; height: 22px; padding: 0 9px;
+  border-radius: 9999px; font: 600 11px "Noto Sans", system-ui, sans-serif; color: var(--fg2-dark); background: rgb(27 34 44 / 55%);
+  backdrop-filter: blur(4px); cursor: pointer; }
+.win.docked .byline:hover { color: var(--fg-dark); background: rgb(27 34 44 / 80%); }
+.win.docked.light .byline { color: var(--fg2); background: rgb(255 255 255 / 75%); }
+.about { display: none; position: absolute; left: 14px; bottom: 44px; z-index: 4; width: min(320px, calc(100% - 28px)); padding: 12px;
+  border-radius: var(--r2); background: var(--dark); color: var(--fg-dark); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.about.open { display: block; }
+.about .about-foot { margin-top: 8px; color: var(--fg2-dark); }
+.about code { font-size: 11px; }
 .speedchip.slow { background: var(--bg-warning-01, #8f5514); }
 .speedchip.pop { animation: chip 1.8s cubic-bezier(.2,1.6,.4,1) forwards; }
 @keyframes chip { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 12% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: 0; } }
@@ -358,6 +370,12 @@ export class Panel {
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
+    <button class="byline" id="byline" title="About this preview">PhiTeX extension · experimental</button>
+    <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
+      <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>PhiTeX</b> browser extension, an experimental
+      incremental TeX engine that runs entirely in your browser. Nothing is sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
+      <div class="about-foot">Plain TeX only for now. To turn it off: <code>chrome://extensions</code>.</div>
+    </div>
     <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div><div class="viewer" id="viewer"></div></div>
   </div>
   <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
@@ -374,6 +392,11 @@ export class Panel {
     const dbg = this.$("#dbg");
     dbg.onclick = () => this.toggleDebug();
     this.$("#dbg2").onchange = () => this.toggleDebug();
+    this.$("#byline").onclick = (e) => {
+      e.stopPropagation();
+      this.$("#about").classList.toggle("open");
+    };
+    this.$("#stage").addEventListener("pointerdown", () => this.$("#about").classList.remove("open"));
     this.$("#tour").onclick = () => {
       this.sheet(false);
       ev.onTour?.();

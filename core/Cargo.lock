@@ -58,6 +58,7 @@ name = "phitex-layout"
 version = "0.0.0"
 dependencies = [
  "phitex-ssa",
+ "phitex-tex",
  "rustc-hash",
  "tracing",
  "tracing-subscriber",
@@ -76,6 +77,7 @@ name = "phitex-ssa"
 version = "0.0.0"
 dependencies = [
  "phitex-syntax",
+ "phitex-tex",
  "rustc-hash",
  "tracing",
  "tracing-subscriber",
@@ -83,6 +85,10 @@ dependencies = [
 
 [[package]]
 name = "phitex-syntax"
+version = "0.0.0"
+
+[[package]]
+name = "phitex-tex"
 version = "0.0.0"
 
 [[package]]

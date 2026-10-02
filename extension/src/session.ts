@@ -9,6 +9,7 @@
 
 import { Batch, type Edit } from "./edits.ts";
 import { diagnose, type Diagnostic } from "./diagnostics.ts";
+import { isPackageFile, noPackages, type PackageSource, type PackageState } from "./packages.ts";
 
 /** An editor. Edits are sequential (each against the text just before it), in UTF-16. */
 export interface EditorHost {
@@ -31,7 +32,9 @@ export type CoreReq =
   | { op: "pdf" }
   | { op: "status" }
   | { op: "pages" }
-  | { op: "check"; file?: string; expect?: string };
+  | { op: "check"; file?: string; expect?: string }
+  /** (answered by the offscreen document, shelf.ts: not the core) */
+  | { op: "package"; name: string };
 
 /** A page as PhiTeX draws it, in PDF points from the top left (core's draws_json). */
 export interface Draws {
@@ -54,6 +57,9 @@ export interface CoreRes {
   png?: Uint8Array;
   draws?: Draws;
   pdf?: Uint8Array;
+  /** (`package`: the file's text, null: none; and where from) */
+  text?: string | null;
+  from?: string;
   error?: string;
 }
 
@@ -81,6 +87,8 @@ export interface PreviewSink {
   status(s: Status): void;
   /** A one-line summary, and (optionally) the details behind it. */
   latency(summary: string, details?: string): void;
+  /** Packages being downloaded (not the project's files: say so), and those not found. */
+  packages?(p: PackageState): void;
   /** A build is in flight. */
   busy?(on: boolean): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
@@ -96,6 +104,8 @@ export interface Options {
   format: "vector" | "png";
   dpi: number;
   checkEveryMs: number;
+  /** Where files the project doesn't have come from (packages.ts; default: nowhere). */
+  packages?: PackageSource;
   /** Schedules a flush (default: next animation frame, or 100 ms if frames stop). */
   schedule?: (f: () => void) => void;
   now?: () => number;
@@ -217,11 +227,12 @@ export class PreviewSession {
     for (const [f, b] of this.batches) this.files[f] = b.text;
     this.batches.clear();
     const t = this.now();
-    const r = await this.core.request({ op: "open", main: this.main, files: this.files, fuel: this.o.fuel });
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel });
     if (!r.ok) return this.sink.error(r.json?.error ?? r.error ?? "open failed");
     this.opened = true;
     this.pages = r.json.pages;
     this.status(r.json.pending, r.json.undefined_names);
+    this.fetchPackages(r.json.missing);
     this.sink.latency(`opened in ${r.json.build_ms.toFixed(1)} ms (round trip ${(this.now() - t).toFixed(1)} ms)`);
     await this.showPage();
   }
@@ -240,10 +251,61 @@ export class PreviewSession {
     if (this.now() - this.lastWarned > 250 || undefinedNames) {
       const texts: Record<string, string> = {};
       for (const f of Object.keys(this.files)) texts[f] = this.text(f)!;
-      this.diags = diagnose(texts, this.main, { pages: this.pages, pending, undefinedNames: this.undefinedNames });
+      this.diags = diagnose(texts, this.main, {
+        pages: this.pages,
+        pending,
+        undefinedNames: this.undefinedNames,
+        unavailable: this.pkg.unavailable,
+        packageSource: this.source === noPackages ? undefined : this.source.label,
+      });
       this.lastWarned = this.now();
     }
     this.sink.status({ pages: this.pages, pending, main: this.main, file: this.open, diagnostics: this.diags });
+  }
+
+  /** Packages the core was given (kept apart from the project's files: never diagnosed, never a main). */
+  private pkgFiles: Record<string, string> = {};
+  /** Every package name asked for once: not asked again. */
+  private asked = new Set<string>();
+  private pkg: PackageState = { loading: [], unavailable: [], source: "none" };
+  private get source(): PackageSource {
+    return this.o.packages ?? noPackages;
+  }
+
+  /**
+   * The core read `missing` and found nothing: each package among them
+   * fetched (once), then set as a file (a rebuild each: the core never
+   * looks for a missing file again). What they read in turn shows up in
+   * the next status, and is fetched then.
+   */
+  private fetchPackages(missing?: string[]): void {
+    const want = (missing ?? []).filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
+    if (!want.length) return;
+    for (const n of want) this.asked.add(n);
+    const src = this.source;
+    this.pkg.source = src.label;
+    const tell = () => this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable] });
+    if (src === noPackages) {
+      this.pkg.unavailable.push(...want);
+      tell();
+      return this.status(this.pending, this.undefinedNames);
+    }
+    this.pkg.loading.push(...want);
+    tell();
+    void Promise.all(want.map(async (n) => [n, await src.resolve(n).catch(() => null)] as const)).then((got) => {
+      this.pkg.loading = this.pkg.loading.filter((n) => !want.includes(n));
+      for (const [n, t] of got) {
+        if (t === null) {
+          this.pkg.unavailable.push(n);
+          continue;
+        }
+        this.pkgFiles[n] = t;
+        if (this.opened) this.chain = this.chain.then(() => this.core.request({ op: "set_file", file: n, text: t }).then(() => undefined));
+      }
+      tell();
+      this.status(this.pending, this.undefinedNames);
+      if (got.some(([, t]) => t !== null)) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+    });
   }
 
   /** The page in view (the one an edit paints first). */
@@ -264,6 +326,14 @@ export class PreviewSession {
     this.pages = this.hashes.length;
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)
     if (this.hashes.length) this.sink.layout(this.hashes);
+  }
+
+  /** Everything again, for a view that just joined (a detached PDF tab). */
+  async resync(): Promise<void> {
+    if (!this.opened) return;
+    this.sink.mains?.(Object.keys(this.files).filter((f) => f.endsWith(".tex")), this.main);
+    this.status(this.pending);
+    await (this.sink.layout ? this.layout() : this.showPage());
   }
 
   /** Page `k`, for a view that wants it. */
@@ -381,6 +451,7 @@ export class PreviewSession {
       if (r.ok && r.json) {
         this.pages = r.json.pages;
         this.status(r.json.pending, r.json.undefined_names);
+        this.fetchPackages(r.json.missing);
       }
     }, 300);
   }

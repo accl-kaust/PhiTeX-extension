@@ -55,7 +55,7 @@ class Exit extends Error {}
 
 /** Just what the core imports (see the build's import section). */
 function wasi(mem: () => WebAssembly.Memory) {
-  const ENOSYS = 52;
+  const ENOSYS = 52, EBADF = 8;
   const dv = () => new DataView(mem().buffer);
   const origin = performance.timeOrigin;
   return {
@@ -86,6 +86,19 @@ function wasi(mem: () => WebAssembly.Memory) {
       if (fd === 1 || fd === 2) console[fd === 2 ? "warn" : "log"]("[phitex]", s);
       d.setUint32(written, total, true);
       return fd === 1 || fd === 2 ? 0 : ENOSYS;
+    },
+    // (no files and no preopened directories: std::fs, which PhiTeX calls
+    // for a font the core does not carry, finds nothing)
+    fd_prestat_get: () => EBADF,
+    fd_prestat_dir_name: () => EBADF,
+    path_open: () => EBADF,
+    fd_read: () => EBADF,
+    fd_close: () => EBADF,
+    fd_fdstat_get: () => EBADF,
+    fd_filestat_get: () => EBADF,
+    random_get(p: number, n: number): number {
+      for (let at = 0; at < n; at += 65536) crypto.getRandomValues(new Uint8Array(mem().buffer, p + at, Math.min(65536, n - at)));
+      return 0;
     },
     proc_exit(code: number): never {
       throw new Exit(`wasm exited (${code})`);
@@ -245,9 +258,10 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
   } catch (e) {
     // A trap (a PhiTeX panic, with panic = "abort") leaves the instance
     // unusable: start a new one; every client must open again.
+    // (and a core that fails to load at all says so: the reply always goes)
     res = { id: r.id, ok: false, error: `core trapped: ${e}` };
     sessions.clear();
-    await load();
+    await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }
   const transfer = [res.png?.buffer, res.pdf?.buffer].filter((b): b is ArrayBuffer => !!b);
   (self as unknown as Worker).postMessage(res, transfer);

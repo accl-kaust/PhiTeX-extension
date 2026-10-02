@@ -23,6 +23,9 @@ rm -rf extension/dist && mkdir -p extension/dist
 cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
 # (the full license, shipped in the extension, where its links point)
 cp LICENSE extension/LICENSE.txt
+# The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
+# them before asking Shelf.
+rm -rf extension/texmf && cp -r texmf extension/texmf
 scripts/sandbox npx tsc -p .
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
@@ -34,6 +37,8 @@ scripts/sandbox node -e '
     m.web_accessible_resources[0].matches.push("http://localhost:8123/*");
   }
   fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev"
+# (--dev: Shelf from a local server, ../shelf.PhiTeX.org/serve.py)
+$dev && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
 # Every module the content script imports must be web-accessible.
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.json"));

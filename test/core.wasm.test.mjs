@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { core } from "./wasm-harness.mjs";
 import { Batch } from "../extension/src/edits.ts";
 
-const main = "\\font\\rm=Times-Roman at 10pt \\rm\nHéllo wörld 😀, a paragraph.\n\n\\input part\n\n\\bye\n";
+const main = "\\font\\rm=cmr10 \\rm\nHéllo wörld 😀, a paragraph.\n\n\\input part\n\n\\bye\n";
 const part = "Pärt one.\n\n";
 
 test("open, edit (UTF-16 → bytes), check, png, pdf", async () => {

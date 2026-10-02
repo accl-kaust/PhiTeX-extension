@@ -1,7 +1,8 @@
 # Report: a live PhiTeX preview in Overleaf
 
-Built against PhiTeX `241bd29`, exported read-only with `git archive` to
-`~/code/tmp/phitex-241bd29`. PhiTeX's working tree did not compile at the
+Built against PhiTeX `0ae189b` (files load as asked for; earlier `a21e961`, `c35ae52`, TFM
+fonts and TeX's typesetting, and `241bd29`), exported read-only with
+`git archive` to `~/code/tmp/phitex-a21e961`. PhiTeX's working tree did not compile at the
 time (a refactor in progress), so the export pins HEAD. Nothing was written
 into the PhiTeX repo.
 

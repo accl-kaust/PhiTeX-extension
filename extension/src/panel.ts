@@ -9,6 +9,7 @@
 // diagnostics jump to their line.
 
 import type { Draws, PageImage, Status } from "./session.ts";
+import type { PackageState } from "./packages.ts";
 import { Viewer } from "./viewer.ts";
 
 /** What the panel shows, for controls that live outside it (a host's own toolbar). */
@@ -288,6 +289,10 @@ footer .msg.err { color: var(--danger); }
 @keyframes sheet { from { opacity: 0; transform: translateY(-4px); } }
 .win.docked > .sum { display: none; }
 .win.docked .diags { max-height: 60%; }
+.pkgs { display: none; position: absolute; z-index: 3; left: 12px; right: 12px; top: 8px; padding: 6px 10px; font-size: 12px; border-radius: 6px;
+  background: var(--light); color: var(--fg2); border: 1px solid var(--divider); box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+.pkgs.on { display: flex; gap: 6px; align-items: center; }
+.pkgs .icon { color: var(--info); }
 .speedchip { display: none; position: absolute; right: 16px; bottom: 14px; z-index: 3; pointer-events: none; white-space: nowrap;
   height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.3); opacity: 0; }
@@ -389,6 +394,7 @@ export class Panel {
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
+    <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
       <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
@@ -636,6 +642,21 @@ export class Panel {
     if (diags[0]) sum.querySelector(".first")!.textContent = diags[0].message;
     this.stale(s);
     queueMicrotask(() => this.emit());
+  }
+
+  /**
+   * Packages downloading: said plainly, so a slow first build reads as the
+   * download's (TeX Live's files, not the project's, not Overleaf's).
+   */
+  packages(p: PackageState): void {
+    const el = this.$("#pkgs");
+    el.classList.toggle("on", p.loading.length > 0);
+    if (!p.loading.length) return;
+    const names = p.loading.slice(0, 3).join(", ") + (p.loading.length > 3 ? ` and ${p.loading.length - 3} more` : "");
+    el.innerHTML = `${icon("download", 16)}<span></span>`;
+    el.querySelector("span:last-child")!.textContent =
+      `PhiTeX is downloading ${p.loading.length === 1 ? "a LaTeX package" : `${p.loading.length} LaTeX packages`} from ${p.source}: ${names}. ` +
+      `Not your project's files, and not from Overleaf; the preview catches up once they're in.`;
   }
 
   /** Keep the last good page when a build ships nothing (or not this page): dimmed, with why. */

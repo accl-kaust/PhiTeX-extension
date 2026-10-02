@@ -21,6 +21,10 @@ export interface BuildFacts {
   pages: number;
   pending?: number;
   undefinedNames?: string[];
+  /** Packages the build read that neither the project nor the package source has. */
+  unavailable?: string[];
+  /** Where packages come from ("TeX Live 2025"); undefined: nowhere yet. */
+  packageSource?: string;
 }
 
 function lineAt(text: string, i: number): number {
@@ -124,6 +128,16 @@ export function diagnose(files: Record<string, string>, main: string | null, bui
     if (build.pending)
       out.push({ severity: "warning", code: "pending", message: `${build.pending} part${build.pending === 1 ? "" : "s"} not read: out of fuel (a loop?) or unsupported` });
     if (build.undefinedNames?.length) out.push({ severity: "warning", code: "undefined", message: `undefined: ${build.undefinedNames.join(" ")}` });
+    if (build.unavailable?.length) {
+      const names = build.unavailable.slice(0, 6).join(" ") + (build.unavailable.length > 6 ? " …" : "");
+      out.push({
+        severity: "warning",
+        code: "package-unavailable",
+        message: build.packageSource
+          ? `not in the project, not found in ${build.packageSource}: ${names}`
+          : `packages are not downloaded yet (PhiTeX runs no LaTeX): ${names}`,
+      });
+    }
     if (build.pages === 0) out.push({ severity: "warning", code: "no-pages", message: "no page shipped yet" });
   }
   const rank = { error: 0, warning: 1, info: 2 };

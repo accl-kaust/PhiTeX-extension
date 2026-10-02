@@ -45,6 +45,8 @@
         "dist/session.js",
         "dist/diagnostics.js",
         "dist/viewer.js",
+        "dist/mirror.js",
+        "dist/packages.js",
         "dist/news.js",
         "LICENSE.txt"
       ],

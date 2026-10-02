@@ -4,6 +4,7 @@
 // back base64: runtime ports carry JSON.
 
 import type { Req, Res } from "./worker.ts";
+import { resolve } from "./shelf.ts";
 
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
 const replies = new Map<number, (r: Res) => void>();
@@ -23,6 +24,14 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "phitex") return;
   const client = `tab${port.sender?.tab?.id}:${port.sender?.frameId ?? 0}:${Math.random()}`;
   port.onMessage.addListener((m) => {
+    // (packages: answered here, not by the worker)
+    if (m.op === "package") {
+      resolve(m.name).then(
+        (r) => port.postMessage({ id: m.id, ok: true, text: r?.text ?? null, from: r?.from }),
+        (e) => port.postMessage({ id: m.id, ok: false, error: String(e) }),
+      );
+      return;
+    }
     const id = nextId++;
     replies.set(id, (r) => {
       const out: any = { ...r, id: m.id };

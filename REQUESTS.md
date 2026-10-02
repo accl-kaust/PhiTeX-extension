@@ -288,3 +288,23 @@ extension's next update adopts it (the port, the OT1/OML/OMS/OMX → Unicode
 mapping, Latin Modern webfonts for the glyphs). Meanwhile, the extension
 fits each drawn word to the width PhiTeX laid it out with (`textLength`),
 so the browser's bold does not overrun.
+
+## 19. An edit to an empty file is lost
+
+In `a21e961` (and the pins before it), `Doc::edit_file`/`edit_view` into a
+file that is empty, or was emptied, leave the Doc at 0 values: the check
+says "106 values fresh vs 0 incremental", and no page ships again. Deleting
+all but one byte and retyping works. In Overleaf, select all + delete and
+the preview is stuck at "this build shipped no page" for good. The
+extension rebuilds the Doc on the first insert into an empty file
+(`Session::refill`, tested by `delete_all_then_retype`) until an edit to an
+empty file reaches the Doc.
+
+## 20. Packages: a missing file, found later
+
+The core now records each name the Doc read and found nowhere (status
+JSON's `missing`), and the extension fetches the packages among them
+(`extension/src/packages.ts`; no source yet: PhiTeX runs no LaTeX) and
+`set_file`s them, a rebuild each (a file found missing is never looked for
+again). Wanted: an API that invalidates a missing file, so a package that
+arrives costs its readers, not the whole document.

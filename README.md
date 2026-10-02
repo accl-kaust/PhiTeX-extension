@@ -159,15 +159,21 @@ Overleaf page ──────────────────────
   editor is an `EditorHost`, the core sits behind a `CoreTransport`, and the
   preview is a `PreviewSink`. A VS Code port would supply those three.
 
-## Privacy: all local
+## Privacy: your documents stay local
 
 - The PhiTeX core runs in your browser (WebAssembly, in the extension's
-  offscreen document). No server of ours exists, and no code is loaded
-  remotely.
-- The extension's only network requests go to overleaf.com, as you, for
-  your own project's files, the same way the editor gets them.
-- Nothing is sent anywhere. The extension never writes to Overleaf and
-  never changes your documents.
+  offscreen document). No code is loaded remotely.
+- Requests go to overleaf.com, as you, for your own project's files, the
+  same way the editor gets them.
+- And, for a TeX package the extension doesn't bundle, to Shelf
+  (`shelf-phitex.pages.dev`, static files on Cloudflare Pages): a plain
+  GET for that package's file (`tl2026/tikz.sty`), only for names TeX Live
+  has (its list, `names.txt`, is fetched first), each once per browser
+  (kept in IndexedDB). Cloudflare sees the package name and your IP, as any
+  website does; no document text, file name of yours, or identifier is
+  sent. Shelf keeps no logs of its own.
+- Your documents are never sent anywhere. The extension never writes to
+  Overleaf and never changes your documents.
 - No analytics, no storage of your content (it lives in memory while the
   tab is open).
 - Permissions:
@@ -189,8 +195,12 @@ warranty.
 
 - Plain TeX subset only (see PhiTeX's `build.rs`). LaTeX documents are
   shown with a warning and are mostly dropped text.
-- Unicode: offsets are exact, but PhiTeX's fonts are the PDF base-14
-  metrics, so non-ASCII characters may not typeset.
+- Documents start from plain TeX's format, as `tex` runs them (plain.tex
+  is built once per worker, ~100 ms). Metrics are Computer Modern's (the
+  TFMs the core carries); glyphs are drawn in the browser's Times. Math
+  symbols (cmsy, cmex) are not drawn as the right glyphs yet.
+- Unicode: offsets are exact, but the fonts are 7-bit Computer Modern, so
+  non-ASCII characters do not typeset.
 - A file added to the project after PhiTeX found it missing costs a full
   rebuild (REQUESTS.md 3).
 - No SyncTeX yet (editor ↔ page highlighting, click to source): it needs
@@ -214,5 +224,7 @@ warranty.
   The host match reads the project being edited.
 - Data use: no data collected, sold or transferred. Remote code: none (the
   wasm ships in the package; CSP `script-src 'self' 'wasm-unsafe-eval'`).
+  TeX packages fetched from Shelf are data the typesetter reads (like a
+  font), never executed as JavaScript.
 - Name: not affiliated with Overleaf. The listing and icon must not use
   Overleaf's logo.

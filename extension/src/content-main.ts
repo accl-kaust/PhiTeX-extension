@@ -7,6 +7,8 @@ import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type Ed
 import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
+import { channel, follow, tee, type Ask } from "./mirror.ts";
+import { cached } from "./packages.ts";
 
 /** The panel's preferences, in the extension's own storage (not the page's). */
 const prefs: Prefs = {
@@ -14,7 +16,11 @@ const prefs: Prefs = {
   save: (p) => void chrome.storage.local.set({ panel: p }),
 };
 
-const project = () => location.pathname.replace(/\/$/, "");
+const project = () => location.pathname.replace(/\/$/, "").replace(/\/detached$/, "");
+/** Overleaf's "Open PDF in separate tab": this tab mirrors the editor's (mirror.ts). */
+const DETACHED = /^\/project\/[0-9a-f]{24}\/detached\/?$/.test(location.pathname);
+/** A detached PDF tab follows this editor tab (then no floating window here: the PDF is there). */
+let mirrored = false;
 /** Closed docs are fetched again this often (collaborators' edits), and diffed in. */
 const FOLLOW_MS = 10_000;
 
@@ -149,6 +155,7 @@ const DOCK_CSS = `
   .phitex-on .pdf-viewer { visibility: hidden !important; pointer-events: none !important; }
   /* Overleaf's logs (its compiler's) too, while Instant shows: back as they were on the PDF tab */
   .phitex-on .new-logs-pane, .phitex-on .logs-pane { visibility: hidden !important; pointer-events: none !important; }
+  .phitex-on .synctex-controls { z-index: 13 !important; }
   /* in PhiTeX mode, Overleaf's viewer controls go, all but its invert-colors button (which works on ours too) */
   .phitex-on #toolbar-pdf-controls *:not(:has(.theme-toggle-btn)):not(.theme-toggle-btn):not(.theme-toggle-btn *) { display: none !important; }
   .phitex-on .toolbar-pdf-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
@@ -311,7 +318,7 @@ function dockInOverleaf(panel: Panel): Dock {
             <div class="modal-body">
               <p><b>PhiTeX Instant is not part of Overleaf</b>, and is not made, endorsed or supported by Overleaf. It is an
               <b>unofficial, experimental</b> browser extension that typesets a plain-TeX subset in your browser.</p>
-              <p>It runs locally: your documents are not sent anywhere. Its preview and PDF can differ from, or be missing what,
+              <p>It runs locally: your documents are not sent anywhere (TeX packages it doesn't bundle are downloaded by name from TeX Live's files). Its preview and PDF can differ from, or be missing what,
               Overleaf's compiler makes. For anything that matters, use Overleaf's <b>PDF</b>.</p>
               <p class="small text-muted">Free software under the GNU AGPL, version 3 only
               (<a href="${chrome.runtime.getURL("LICENSE.txt")}" target="_blank" rel="noopener">full license</a>), provided as is,
@@ -684,10 +691,17 @@ function dockInOverleaf(panel: Panel): Dock {
   function tick(): void {
     const pane = document.querySelector<HTMLElement>(PANE);
     const left = pane?.querySelector(".toolbar-pdf-left");
-    const right = pane?.querySelector(".toolbar-pdf-right");
+    let right = pane?.querySelector(".toolbar-pdf-right");
+    // (a detached tab Overleaf thinks orphaned has no right side: ours, then)
+    if (pane && left && !right) {
+      right = document.createElement("div");
+      right.className = "toolbar-pdf-right";
+      left.parentElement!.append(right);
+    }
     if (!pane || !left || !right) {
       // (Overleaf renders its layout late: wait for it before falling back to the window)
       if (performance.now() - started < FALLBACK_AFTER_MS) return;
+      if (mirrored || DETACHED) return panel.shown(false);
       panel.dock(null);
       panel.shown(true);
       document.getElementById("phitex-tip")?.remove();
@@ -756,17 +770,19 @@ function dockInOverleaf(panel: Panel): Dock {
 }
 
 /** Only Overleaf's editor (/project/<24 hex id>), not its other pages under /project/. */
-const EDITOR = /^\/project\/[0-9a-f]{24}\/?$/;
+const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
 
 (async () => {
   if (!EDITOR.test(location.pathname) && !location.hostname.startsWith("localhost")) return;
   let session: PreviewSession;
   let dock: Dock | undefined;
+  const ch = channel(project());
+  const ask = (a: Ask) => ch.postMessage(a);
   const panel = new Panel({
-    onPage: (p) => session?.setPage(p),
-    onNeed: (k) => session?.fetch(k),
+    onPage: (p) => (DETACHED ? ask({ t: "page", k: p }) : session?.setPage(p)),
+    onNeed: (k) => (DETACHED ? ask({ t: "need", k }) : session?.fetch(k)),
     onPdf: async () => {
-      const pdf = await session.pdf();
+      const pdf = await session?.pdf();
       if (!pdf) return;
       const url = URL.createObjectURL(new Blob([pdf as BlobPart], { type: "application/pdf" }));
       const a = document.createElement("a");
@@ -775,12 +791,12 @@ const EDITOR = /^\/project\/[0-9a-f]{24}\/?$/;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },
-    onDebug: (on) => (session.debug = on),
-    onMain: (m) => session.setMain(m),
+    onDebug: (on) => session && (session.debug = on),
+    onMain: (m) => session?.setMain(m),
     onFormat: (f) => session?.setFormat(f),
     // (the hook moves the editor's cursor there: the one thing it writes)
-    onGoto: (file, line) => window.postMessage({ src: "phitex-content", type: "goto", file, line }, location.origin),
-    onReload: async () => session.refresh(await fetchDocs(panel)),
+    onGoto: (file, line) => DETACHED ? ask({ t: "goto", file, line }) : window.postMessage({ src: "phitex-content", type: "goto", file, line }, location.origin),
+    onReload: async () => session?.refresh(await fetchDocs(panel)),
     onShortcut: () => dock?.toggle() ?? false,
     onTour: () => dock?.tour(),
     onNews: () => dock?.news(),
@@ -817,13 +833,33 @@ const EDITOR = /^\/project\/[0-9a-f]{24}\/?$/;
   });
   /** The session: the core connected, the project loaded, closed docs followed. */
   async function go(): Promise<void> {
+  if (DETACHED) return follow(ch, panel);
+  // (the detached tab's asks; what the session tells the panel goes there too)
+  ch.addEventListener("message", (e: MessageEvent<Ask>) => {
+    const a = e.data;
+    if (a.t === "hello") {
+      mirrored = true;
+      void session?.resync();
+    }
+    if (a.t === "bye") mirrored = false;
+    if (a.t === "need") void session?.fetch(a.k);
+    if (a.t === "page") void session?.setPage(a.k);
+    if (a.t === "goto") window.postMessage({ src: "phitex-content", type: "goto", file: a.file, line: a.line }, location.origin);
+  });
   const transport = new ChromeTransport();
   try {
     await transport.connect();
     const { panel: saved } = await chrome.storage.local.get("panel");
-    session = new PreviewSession(new OverleafHost(panel), transport, panel, { format: (saved as PanelPrefs | undefined)?.format ?? "vector" });
+    session = new PreviewSession(new OverleafHost(panel), transport, tee(panel, ch, () => mirrored), {
+      format: (saved as PanelPrefs | undefined)?.format ?? "vector",
+      packages: cached({
+        label: "TeX Live 2026",
+        resolve: (name) => transport.request({ op: "package", name }).then((r) => (r.ok ? (r.text ?? null) : null)),
+      }),
+    });
     (globalThis as any).__phitexSession = session; // (tests, devtools)
     await session.start();
+    ch.postMessage({ t: "up" });
     // (closed docs: fetched again and diffed in, so collaborators' edits to
     // them arrive as edits; the open one is live through the editor)
     setInterval(async () => {

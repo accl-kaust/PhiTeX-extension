@@ -105,3 +105,30 @@ test("a slow core: keystrokes typed during a build go as one edit", async () => 
   assert.equal(dec.decode(core.files["main.tex"]), text);
   assert.ok(s.builds <= 6, `${s.builds} builds for ${s.keystrokes} keystrokes`);
 });
+
+test("packages the core misses are fetched once, set as files, and announced while loading", async () => {
+  const core = fakeCore();
+  const open = core.request.bind(core);
+  // (the core reads amsmath.sty and a .aux it doesn't have)
+  core.request = async (r: CoreReq) => {
+    const res = await open(r);
+    if (r.op === "open" || r.op === "status") res.json = { ...res.json, missing: "amsmath.sty" in core.files ? ["main.aux"] : ["amsmath.sty", "main.aux", "nope.sty"] };
+    return res;
+  };
+  const asked: string[] = [];
+  const states: { loading: string[]; unavailable: string[] }[] = [];
+  const source = { label: "TeX Live (test)", resolve: async (n: string) => (asked.push(n), n === "amsmath.sty" ? "% ams\n" : null) };
+  const ed = host({ "main.tex": "\\documentclass{article}\\usepackage{amsmath}\n" });
+  const s = new PreviewSession(ed.h, core, { ...sink, packages: (p) => states.push(p) }, { checkEveryMs: 0, schedule: (f) => f(), now: () => 0, packages: source });
+  await s.start();
+  await new Promise((ok) => setTimeout(ok, 20));
+  await s.flush();
+  assert.deepEqual(asked.sort(), ["amsmath.sty", "nope.sty"]);
+  assert.deepEqual(states[0].loading.sort(), ["amsmath.sty", "nope.sty"]);
+  assert.deepEqual(states.at(-1), { loading: [], unavailable: ["nope.sty"], source: "TeX Live (test)" });
+  assert.equal(dec.decode(core.files["amsmath.sty"]), "% ams\n");
+  assert.equal(s.text("amsmath.sty"), undefined); // (not a project file)
+  await s.reopen(); // (kept across a reopen, and not asked again)
+  assert.equal(dec.decode(core.files["amsmath.sty"]), "% ams\n");
+  assert.equal(asked.length, 2);
+});

@@ -12,36 +12,93 @@
 //! little-endian): `u32` = 4 bytes, `str` = `u32` length + UTF-8 bytes.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::ops::Range;
-use std::rc::Rc;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use phitex_layout::{pdf, png};
 use phitex_ssa::ir::{Def, Program};
-use phitex_ssa::material::BoxVal;
+use phitex_ssa::material::{BoxNode, Fonts};
 use phitex_ssa::pack::Draw;
-use phitex_ssa::{Doc, EditStats, Files};
+use phitex_ssa::{Doc, EditStats, Files, Format};
 
 /// The project's files as they are now: what the `Doc` reads a file from
 /// the first time it is asked for, and what a fresh build is made from.
+/// And the names the `Doc` asked for that none has (`\\usepackage{x}`'s
+/// `x.sty`, ...): the host may find them elsewhere (TeX Live) and
+/// `set_file` them.
 #[derive(Clone, Default)]
-struct Mirror(Rc<RefCell<BTreeMap<String, String>>>);
+struct Mirror(
+    Rc<RefCell<BTreeMap<String, String>>>,
+    Rc<RefCell<BTreeSet<String>>>,
+);
 
 impl Files for Mirror {
     fn read(&self, name: &str) -> Option<String> {
-        self.0.borrow().get(name).cloned()
+        let t = self.0.borrow().get(name).cloned().or_else(|| bundled(name));
+        if t.is_none() {
+            self.1.borrow_mut().insert(name.to_string());
+        }
+        t
+    }
+
+    /// A font's TFM file: the project's text files never are one, so it
+    /// is from [`FONTS`] (there is no disk to look on in the browser).
+    fn read_bytes(&self, name: &str) -> Option<Vec<u8>> {
+        FONTS.iter().find(|(n, _)| *n == name).map(|(_, b)| b.to_vec())
     }
 }
+
+/// Knuth's `plain.tex` and the `hyphen.tex` it inputs (TeX Live's,
+/// unmodified), for a project that has none of its own.
+fn bundled(name: &str) -> Option<String> {
+    match name {
+        "plain.tex" => Some(include_str!("../tex/plain.tex").into()),
+        "hyphen.tex" => Some(include_str!("../tex/hyphen.tex").into()),
+        _ => None,
+    }
+}
+
+thread_local! {
+    /// Plain TeX's format: `\input plain`, as `tex` has it preloaded.
+    static PLAIN: Format = Doc::project(Mirror::default(), "plain.tex").format();
+}
+
+/// A document as `tex` runs it: from plain TeX's format.
+fn plain_doc(files: Mirror, main: &str) -> Doc {
+    PLAIN.with(|f| Doc::project_from(files, main, f))
+}
+
+/// The Computer Modern fonts PhiTeX carries (its `phitex-tex/fixtures/fonts`).
+const FONTS: &[(&str, &[u8])] = &[
+    ("cmbx10.tfm", include_bytes!("../fonts/cmbx10.tfm")),
+    ("cmex10.tfm", include_bytes!("../fonts/cmex10.tfm")),
+    ("cmmi10.tfm", include_bytes!("../fonts/cmmi10.tfm")),
+    ("cmmi5.tfm", include_bytes!("../fonts/cmmi5.tfm")),
+    ("cmmi7.tfm", include_bytes!("../fonts/cmmi7.tfm")),
+    ("cmr10.tfm", include_bytes!("../fonts/cmr10.tfm")),
+    ("cmr5.tfm", include_bytes!("../fonts/cmr5.tfm")),
+    ("cmr7.tfm", include_bytes!("../fonts/cmr7.tfm")),
+    ("cmsl10.tfm", include_bytes!("../fonts/cmsl10.tfm")),
+    ("cmsy10.tfm", include_bytes!("../fonts/cmsy10.tfm")),
+    ("cmsy5.tfm", include_bytes!("../fonts/cmsy5.tfm")),
+    ("cmsy7.tfm", include_bytes!("../fonts/cmsy7.tfm")),
+    ("cmti10.tfm", include_bytes!("../fonts/cmti10.tfm")),
+    ("cmtt10.tfm", include_bytes!("../fonts/cmtt10.tfm")),
+];
 
 pub struct Session {
     doc: Doc,
     files: Mirror,
     main: String,
-    fuel: u32,
-    /// Each shipped page's PDF content stream, by its box's hash.
+    /// Each shipped page's PDF content stream, by its box's id.
     streams: BTreeMap<u64, Rc<Vec<u8>>>,
+    /// Page boxes' ids ([`Session::id`]), by address.
+    ids: HashMap<usize, (Weak<BoxNode>, u64)>,
+    next_id: u64,
 }
 
 #[derive(Debug)]
@@ -52,33 +109,63 @@ pub struct Status {
     /// Control sequences used undefined (`\\documentclass`, ...): PhiTeX
     /// ignores them, so their output is missing. Distinct, sorted.
     pub undefined: Vec<String>,
+    /// Files read and not found (a package not in the project). Sorted.
+    pub missing: Vec<String>,
 }
 
 impl Status {
     fn json(&self) -> String {
         let names: Vec<String> = self.undefined.iter().take(12).map(|n| esc(n)).collect();
         format!(
-            "\"pages\":{},\"pending\":{},\"undefined\":{},\"undefined_names\":[{}]",
+            "\"pages\":{},\"pending\":{},\"undefined\":{},\"undefined_names\":[{}],\"missing\":[{}]",
             self.pages,
             self.pending,
             self.undefined.len(),
-            names.join(",")
+            names.join(","),
+            self.missing.iter().map(|n| esc(n)).collect::<Vec<_>>().join(",")
         )
     }
 }
 
 impl Session {
     #[must_use]
-    pub fn open(files: BTreeMap<String, String>, main: &str, fuel: u32) -> Session {
-        let files = Mirror(Rc::new(RefCell::new(files)));
-        let doc = Doc::project_with_fuel(files.clone(), main, fuel);
+    /// (`_fuel`: PhiTeX's default, 10^5 steps a chunk, is what a document
+    /// started from a format gets; the ABI keeps the argument.)
+    pub fn open(files: BTreeMap<String, String>, main: &str, _fuel: u32) -> Session {
+        let files = Mirror(Rc::new(RefCell::new(files)), Rc::default());
+        let doc = plain_doc(files.clone(), main);
         Session {
             doc,
             files,
             main: main.to_string(),
-            fuel,
             streams: BTreeMap::new(),
+            ids: HashMap::new(),
+            next_id: 1,
         }
+    }
+
+    /// A page box's id: the same while it is the same box (a page the Doc
+    /// kept), a new one for a new box. (Boxes have no hash; the `Weak`
+    /// keeps the address from being reused while its entry lives.)
+    fn id(&mut self, b: &Rc<BoxNode>) -> u64 {
+        let key = Rc::as_ptr(b) as usize;
+        if let Some((w, id)) = self.ids.get(&key)
+            && w.upgrade().is_some_and(|x| Rc::ptr_eq(&x, b))
+        {
+            return *id;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        if self.ids.len() > 256 {
+            self.ids.retain(|_, (w, _)| w.strong_count() > 0);
+        }
+        self.ids.insert(key, (Rc::downgrade(b), id));
+        id
+    }
+
+    /// The shipped pages' ids.
+    pub fn page_ids(&mut self) -> Vec<u64> {
+        self.doc.ships().iter().map(|b| self.id(b)).collect()
     }
 
     /// `range` must be within `name` and on character boundaries: PhiTeX
@@ -117,6 +204,7 @@ impl Session {
                 self.mirror(name, 0..old.len(), text);
             }
             None => {
+                self.files.1.borrow_mut().remove(name);
                 self.files
                     .0
                     .borrow_mut()
@@ -124,7 +212,7 @@ impl Session {
                 // A file the Doc looked for and found missing is never looked
                 // for again (no PhiTeX API invalidates it: see REPORT.md), so a
                 // new file costs a rebuild. Rare: files are added, not typed.
-                self.doc = Doc::project_with_fuel(self.files.clone(), &self.main, self.fuel);
+                self.doc = plain_doc(self.files.clone(), &self.main);
             }
         }
     }
@@ -136,6 +224,9 @@ impl Session {
         text: &str,
     ) -> Result<EditStats, String> {
         self.valid(name, &range)?;
+        if self.refill(name, &range, text) {
+            return Ok(self.doc.edit_file(name, 0..0, ""));
+        }
         let s = self.doc.edit_file(name, range.clone(), text);
         self.mirror(name, range, text);
         Ok(s)
@@ -149,9 +240,27 @@ impl Session {
         page: usize,
     ) -> Result<phitex_ssa::View, String> {
         self.valid(name, &range)?;
+        if self.refill(name, &range, text) {
+            return Ok(self.doc.edit_view(name, 0..0, "", page));
+        }
         let v = self.doc.edit_view(name, range.clone(), text, page);
         self.mirror(name, range, text);
         Ok(v)
+    }
+
+    /// Text typed into an empty file: PhiTeX never sees it (the Doc keeps
+    /// no chunk of an empty file to edit, so it stays 0 values: every
+    /// keystroke after deleting everything is lost). Rebuilt instead, as
+    /// for a new file; the caller then asks the Doc for a no-op edit's
+    /// stats and view. True if so.
+    fn refill(&mut self, name: &str, range: &Range<usize>, text: &str) -> bool {
+        let empty = self.files.0.borrow().get(name).is_some_and(String::is_empty);
+        if !empty || text.is_empty() {
+            return false;
+        }
+        self.mirror(name, range.clone(), text);
+        self.doc = plain_doc(self.files.clone(), &self.main);
+        true
     }
 
     #[must_use]
@@ -161,27 +270,32 @@ impl Session {
             pages: self.doc.ships().len(),
             pending: pending(&p),
             undefined: undefined(&p),
+            missing: self.files.1.borrow().iter().cloned().collect(),
         }
     }
 
     #[must_use]
     pub fn png(&self, page: usize, dpi: u32) -> Option<Vec<u8>> {
-        self.doc.page_box(page).map(|b| png::page(&b, dpi))
+        self.doc.page_box(page).map(|b| png::page(&b, &self.doc.fonts(), dpi))
     }
 
     /// The PDF, each page's stream drawn only if its box is new.
     pub fn pdf(&mut self) -> Vec<u8> {
         let ships = self.doc.ships();
+        let ids: Vec<u64> = ships.iter().map(|b| self.id(b)).collect();
+        let fonts = self.doc.fonts();
         let streams: Vec<Rc<Vec<u8>>> = ships
             .iter()
-            .map(|b| {
+            .zip(&ids)
+            .map(|(b, id)| {
                 self.streams
-                    .entry(b.hash)
-                    .or_insert_with(|| Rc::new(pdf::content(b)))
+                    .entry(*id)
+                    .or_insert_with(|| Rc::new(pdf::content(b, &fonts)))
                     .clone()
             })
             .collect();
-        let keep: std::collections::BTreeSet<u64> = ships.iter().map(|b| b.hash).collect();
+        drop(fonts);
+        let keep: std::collections::BTreeSet<u64> = ids.into_iter().collect();
         self.streams.retain(|h, _| keep.contains(h));
         pdf::write(&streams)
     }
@@ -190,8 +304,8 @@ impl Session {
     /// the same files. `None` if it holds, else where they part.
     #[must_use]
     pub fn check(&self) -> Option<String> {
-        let files = Mirror(Rc::new(RefCell::new(self.files.0.borrow().clone())));
-        let fresh = Doc::project_with_fuel(files, &self.main, self.fuel).program();
+        let files = Mirror(Rc::new(RefCell::new(self.files.0.borrow().clone())), Rc::default());
+        let fresh = plain_doc(files, &self.main).program();
         let inc = self.doc.program();
         if fresh == inc {
             return None;
@@ -224,40 +338,59 @@ impl Session {
 }
 
 /// A shipped page as its draw list, JSON, in PDF points (bp) from the top
-/// left: `{"w","h","f": [font names], "t": [[x, y, size, font, text]], "r":
-/// [[x, y, w, h]]}`. What the PDF draws, for the host to paint as vector
-/// (a few KB, where PhiTeX's PNG is ~0.9 MB of grey boxes a glyph).
+/// left: `{"w","h","f": [font names], "t": [[x, y, size, font, text,
+/// width]], "r": [[x, y, w, h]]}`. What the PDF draws, for the host to
+/// paint as vector (a few KB, where PhiTeX's PNG is ~0.9 MB of grey boxes
+/// a glyph). PhiTeX draws a character at a time; runs of them (same font
+/// and baseline, each where the last ended, give or take a kern) are one
+/// text, `width` wide as TeX set it, in the base font the PDF uses.
 #[must_use]
-pub fn draws_json(b: &BoxVal) -> String {
+pub fn draws_json(b: &BoxNode, fonts: &Fonts) -> String {
     #[allow(clippy::cast_precision_loss)]
     let bp = |x: i64| (x as f64 / 65536.0 * 72.0 / 72.27 * 100.0).round() / 100.0;
-    let mut fonts: Vec<Box<str>> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     let (mut t, mut r) = (String::new(), String::new());
-    for d in pdf::draws(b) {
+    // (the run being gathered: start x, y, font, text, where it ends)
+    let mut run: Option<(i64, i64, u16, String, i64)> = None;
+    let flush = |run: &mut Option<(i64, i64, u16, String, i64)>, t: &mut String, names: &mut Vec<&str>| {
+        let Some((x, y, font, text, end)) = run.take() else { return };
+        if text.is_empty() {
+            return;
+        }
+        let f = fonts.get(font.into());
+        let base = base_font(&f.name);
+        let k = names.iter().position(|n| *n == base).unwrap_or_else(|| {
+            names.push(base);
+            names.len() - 1
+        });
+        let _ = write!(
+            t,
+            "{}[{},{},{},{k},{},{}]",
+            if t.is_empty() { "" } else { "," },
+            bp(x),
+            bp(y),
+            bp(i64::from(f.size)),
+            esc(&text),
+            bp(end - x)
+        );
+    };
+    for d in pdf::draws(b, fonts) {
         match d {
-            Draw::Text { x, y, font, text } => {
-                let k = fonts
-                    .iter()
-                    .position(|f| *f == font.name)
-                    .unwrap_or_else(|| {
-                        fonts.push(font.name.clone());
-                        fonts.len() - 1
-                    });
-                // (the width PhiTeX laid the word out with, for the host to fit its glyphs to)
-                let width: i64 = text
-                    .chars()
-                    .map(|c| phitex_ssa::metrics::width(c, font.size))
-                    .sum();
-                let _ = write!(
-                    t,
-                    "{}[{},{},{},{k},{},{}]",
-                    if t.is_empty() { "" } else { "," },
-                    bp(x),
-                    bp(y),
-                    bp(font.size),
-                    esc(&text),
-                    bp(width)
-                );
+            Draw::Char { x, y, font, ch } => {
+                let (x, y) = (i64::from(x), i64::from(y));
+                let f = fonts.get(font);
+                let w = i64::from(f.char_info(ch).width);
+                let fid: u16 = font.into();
+                let joins = run.as_ref().is_some_and(|(_, ry, rf, _, end)| {
+                    *ry == y && *rf == fid && (x - end).abs() <= i64::from(f.size) / 8
+                });
+                if !joins {
+                    flush(&mut run, &mut t, &mut names);
+                    run = Some((x, y, fid, String::new(), x));
+                }
+                let run = run.as_mut().unwrap();
+                run.3.push_str(&glyph(ch));
+                run.4 = x + w;
             }
             Draw::Rule {
                 x,
@@ -269,21 +402,55 @@ pub fn draws_json(b: &BoxVal) -> String {
                     r,
                     "{}[{},{},{},{}]",
                     if r.is_empty() { "" } else { "," },
-                    bp(x),
-                    bp(y),
-                    bp(width),
-                    bp(height)
+                    bp(i64::from(x)),
+                    bp(i64::from(y)),
+                    bp(i64::from(width)),
+                    bp(i64::from(height))
                 );
             }
         }
     }
-    let f: Vec<String> = fonts.iter().map(|f| esc(f)).collect();
+    flush(&mut run, &mut t, &mut names);
+    let f: Vec<String> = names.iter().map(|f| esc(f)).collect();
     format!(
         "{{\"w\":{},\"h\":{},\"f\":[{}],\"t\":[{t}],\"r\":[{r}]}}",
         pdf::PAGE_WIDTH,
         pdf::PAGE_HEIGHT,
         f.join(",")
     )
+}
+
+/// The PDF base font PhiTeX's PDF draws TeX font `name` in (as
+/// `phitex_layout::pdf` picks it).
+fn base_font(name: &str) -> &'static str {
+    if name.starts_with("cmbx") || name.starts_with("cmb") {
+        "Times-Bold"
+    } else if name.starts_with("cmti") || name.starts_with("cmsl") || name.starts_with("cmmi") {
+        "Times-Italic"
+    } else if name.starts_with("cmtt") {
+        "Courier"
+    } else {
+        "Times-Roman"
+    }
+}
+
+/// An OT1 character as text (its ligatures, dashes and quotes spelled
+/// out, as `phitex_layout::pdf` does).
+fn glyph(ch: u8) -> String {
+    match ch {
+        11 => "ff".into(),
+        12 => "fi".into(),
+        13 => "fl".into(),
+        14 => "ffi".into(),
+        15 => "ffl".into(),
+        b'"' => "\u{201d}".into(),
+        b'\\' => "\u{201c}".into(),
+        b'{' => "\u{2013}".into(),
+        b'|' => "\u{2014}".into(),
+        b'<' | b'>' | b'_' | b'}' | b'~' => String::new(),
+        33..=126 => char::from(ch).to_string(),
+        _ => String::new(),
+    }
 }
 
 /// How many values are pending: text not read (unsupported, or out of fuel).
@@ -484,18 +651,21 @@ pub unsafe extern "C" fn ph_edit(h: u32, ptr: *const u8, len: usize, page: u32, 
             format!("{{\"stats\":{},\"total_ms\":{total}", stats_json(&st))
         } else {
             let v = s.edit_view(name, range, text, page as usize)?;
+            let painted_id = v.painted.as_ref().map(|b| s.id(b));
+            let fonts = s.doc.fonts();
             let paint_png = v.painted.as_ref().map(|b| {
                 if dpi == 0 {
-                    draws_json(b).into_bytes()
+                    draws_json(b, &fonts).into_bytes()
                 } else {
-                    png::page(b, dpi)
+                    png::page(b, &fonts, dpi)
                 }
             });
+            drop(fonts);
             LAST_PNG.with(|p| *p.borrow_mut() = paint_png);
             format!(
                 "{{\"stats\":{},\"painted_hash\":{},\"paint_ms\":{},\"total_ms\":{},\"call_ms\":{},\"wrong\":{}",
                 stats_json(&v.stats),
-                v.painted.as_ref().map_or("null".to_string(), |b| format!("\"{:016x}\"", b.hash)),
+                painted_id.map_or("null".to_string(), |id| format!("\"{id:016x}\"")),
                 ms(v.paint),
                 ms(v.total),
                 ms(t.elapsed()),
@@ -566,16 +736,16 @@ pub unsafe extern "C" fn ph_set_file(h: u32, ptr: *const u8, len: usize) -> u32 
 /// empty if there is no such page).
 #[unsafe(no_mangle)]
 pub extern "C" fn ph_png(h: u32, page: u32, dpi: u32) {
-    let b = with(h, |s| s.doc.page_box(page as usize)).flatten();
-    out(b
-        .map(|b| {
-            if dpi == 0 {
-                draws_json(&b).into_bytes()
-            } else {
-                png::page(&b, dpi)
-            }
+    let o = with(h, |s| {
+        let b = s.doc.page_box(page as usize)?;
+        let fonts = s.doc.fonts();
+        Some(if dpi == 0 {
+            draws_json(&b, &fonts).into_bytes()
+        } else {
+            png::page(&b, &fonts, dpi)
         })
-        .unwrap_or_default());
+    });
+    out(o.flatten().unwrap_or_default());
 }
 
 /// The shipped pages, each as its box's hash (out: JSON `{"pages":
@@ -584,7 +754,7 @@ pub extern "C" fn ph_png(h: u32, page: u32, dpi: u32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ph_pages(h: u32) {
     let j = with(h, |s| {
-        let hs: Vec<String> = s.doc.ships().iter().map(|b| format!("\"{:016x}\"", b.hash)).collect();
+        let hs: Vec<String> = s.page_ids().iter().map(|id| format!("\"{id:016x}\"")).collect();
         format!("{{\"pages\":[{}]}}", hs.join(","))
     });
     out_json(j.unwrap_or_else(|| "{\"error\":\"no such handle\"}".into()));
@@ -649,11 +819,45 @@ mod tests {
         assert_eq!(s.check(), None);
         assert!(s.pdf().starts_with(b"%PDF"));
         assert!(s.png(0, 36).unwrap().starts_with(b"\x89PNG"));
-        let d = draws_json(&s.doc.page_box(0).unwrap());
+        let d = draws_json(&s.doc.page_box(0).unwrap(), &s.doc.fonts());
         assert!(
             d.contains("\"Times-Roman\"") && d.contains("\"t\":[["),
             "{d}"
         );
+    }
+
+    #[test]
+    fn missing_files_are_reported_until_set() {
+        let mut m = BTreeMap::new();
+        m.insert("main.tex".into(), "\\input pkg\nHi.\n\\bye\n".into());
+        let mut s = Session::open(m, "main.tex", 100_000);
+        assert!(s.status().missing.iter().any(|n| n.starts_with("pkg")), "{:?}", s.status().missing);
+        s.set_file("pkg.tex", "Pkg.\n");
+        assert!(!s.status().missing.contains(&"pkg.tex".to_string()));
+        assert_eq!(s.check(), None);
+    }
+
+    #[test]
+    fn delete_all_then_retype() {
+        let t = "Hi there.\n\\bye\n";
+        let mut m = BTreeMap::new();
+        m.insert("main.tex".into(), t.to_string());
+        let mut s = Session::open(m, "main.tex", 100_000);
+        assert_eq!(s.status().pages, 1);
+        s.edit_view("main.tex", 0..t.len(), "", 0).unwrap();
+        for (i, c) in t.char_indices() {
+            s.edit_view("main.tex", i..i, &c.to_string(), 0).unwrap();
+        }
+        assert_eq!(s.text("main.tex").unwrap(), t);
+        assert_eq!(s.check(), None);
+        assert_eq!(s.status().pages, 1);
+        // (and a project opened with an empty main)
+        let mut m = BTreeMap::new();
+        m.insert("main.tex".into(), String::new());
+        let mut s = Session::open(m, "main.tex", 100_000);
+        s.edit_file("main.tex", 0..0, t).unwrap();
+        assert_eq!(s.check(), None);
+        assert_eq!(s.status().pages, 1);
     }
 
     #[test]

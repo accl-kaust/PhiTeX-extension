@@ -5,3 +5,4 @@ node_modules/
 extension/manifest.json
 extension/LICENSE.txt
 store/*.zip
+extension/texmf/

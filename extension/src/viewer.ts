@@ -79,6 +79,8 @@ export class Viewer {
       }
       s.hash = hashes[k];
     }
+    // (asked once a layout: an ask lost, say before the session was up, goes again)
+    this.asked.clear();
     this.wantVisible();
   }
 

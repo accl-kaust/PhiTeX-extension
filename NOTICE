@@ -16,8 +16,13 @@ Overleaf, and "Overleaf" is used only to say which site it works with.
 
 Third-party material:
 
-- PhiTeX (phitex-ssa, phitex-layout, phitex-syntax), linked into core.wasm:
-  MIT OR Apache-2.0.
+- PhiTeX (phitex-ssa, phitex-layout, phitex-syntax, phitex-tex), linked
+  into core.wasm: MIT OR Apache-2.0.
+- core/tex/plain.tex and core/tex/hyphen.tex (TeX Live's, unmodified), built
+  into core.wasm: plain TeX by Donald E. Knuth, and Knuth's hyphenation
+  patterns; distributed unchanged, as their terms ask.
+- core/fonts/*.tfm: the Computer Modern font metrics (Knuth; the copies
+  PhiTeX carries), unmodified, built into core.wasm.
 - extension/src/panel.ts: approximateFraction, ported from pdf.js
   (pdfjs-dist 5.1.91, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
   Apache-2.0.
@@ -26,3 +31,10 @@ Third-party material:
 - The toolbar and popover markup the extension adds to Overleaf's page
   follows Overleaf's own (overleaf/overleaf, services/web/frontend),
   AGPL-3.0.
+
+texmf/ (shipped as extension/texmf/): LaTeX packages from TeX Live 2026
+(the LaTeX kernel and classes, l3kernel, graphics, tools, amsmath, hyperref,
+...; texmf/MANIFEST.tsv lists each package and revision), unmodified, each
+under its own license as stated in its files, mostly the LaTeX Project
+Public License 1.3c. Packages not bundled are downloaded as needed from
+Shelf (shelf-phitex.pages.dev), which serves TeX Live's files unmodified.

@@ -9,8 +9,8 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-phitex-ssa = { path = "../../../tmp/phitex-241bd29/crates/phitex-ssa" }
-phitex-layout = { path = "../../../tmp/phitex-241bd29/crates/phitex-layout" }
+phitex-ssa = { path = "../../../tmp/phitex-0ae189b/crates/phitex-ssa" }
+phitex-layout = { path = "../../../tmp/phitex-0ae189b/crates/phitex-layout" }
 
 [profile.release]
 opt-level = 3

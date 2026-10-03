@@ -5,7 +5,7 @@
 //   node mock/server.mjs [port]
 // MOCK_PROJECT: a folder (default mock/project; `latex` is mock/latex/) or an
 // Overleaf source ZIP ("Download as source"), binaries (figures) included.
-// Recompile runs the local pdflatex (latexmk) on a copy in /tmp/tex/mock,
+// Recompile runs the local pdflatex (twice) on a copy in /tmp/tex/mock,
 // as Overleaf's compile: its PDF, log and download, to compare with PhiTeX's.
 import http from "node:http";
 import fs from "node:fs";
@@ -77,7 +77,7 @@ function zip(entries) {
   return Buffer.concat([...parts, cd, e]);
 }
 
-/** Overleaf's compile, locally: the project as it is now, latexmk -pdf, in /tmp/tex/mock. */
+/** Overleaf's compile, locally: the project as it is now, pdflatex, in /tmp/tex/mock. */
 const OUT = "/tmp/tex/mock";
 function compile() {
   return new Promise((res) => {
@@ -88,9 +88,12 @@ function compile() {
     for (const [p, b] of files) put(p, b);
     const main = [...docs.values()].find((d) => /\\documentclass/.test(d.text))?.path ?? "main.tex";
     const t = Date.now();
-    execFile("latexmk", ["-pdf", "-f", "-g", "-interaction=nonstopmode", "-jobname=output", main], { cwd: OUT, timeout: 120_000 }, () =>
-      res({ ok: fs.existsSync(path.join(OUT, "output.pdf")), ms: Date.now() - t }),
-    );
+    // (pdflatex itself, twice for references: latexmk's own rc may send its output elsewhere)
+    const run = (k) =>
+      execFile("pdflatex", ["-interaction=nonstopmode", "-jobname=output", main], { cwd: OUT, timeout: 120_000 }, () =>
+        k > 1 ? run(k - 1) : res({ ok: fs.existsSync(path.join(OUT, "output.pdf")), ms: Date.now() - t }),
+      );
+    run(2);
   });
 }
 

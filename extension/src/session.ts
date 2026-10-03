@@ -467,7 +467,12 @@ export class PreviewSession {
     if (!this.sink.layout) return;
     const r = await this.core.request({ op: "pages" });
     if (!r.ok || !r.json?.pages) return;
-    this.hashes = r.json.pages;
+    const got: string[] = r.json.pages;
+    // (a build that stopped at a file still on its way ships fewer pages than
+    // the one before: the pages it didn't reach stay as they were drawn, not
+    // dropped and drawn again a moment later, the flicker of every package round)
+    const fetching = this.pkg.loading.length > 0 || !!this.texError?.missing;
+    this.hashes = fetching && got.length < this.hashes.length ? [...got, ...this.hashes.slice(got.length)] : got;
     this.setPages(this.hashes.length);
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)
     if (this.hashes.length) this.sink.layout(this.hashes);

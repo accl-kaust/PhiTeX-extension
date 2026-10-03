@@ -129,7 +129,7 @@ test("packages the core misses are fetched once, set as files, and announced whi
   // (first the scan's names, fetched before the core opens; nope.sty is the build's)
   assert.deepEqual(states[0].loading.sort(), ["amsmath.sty", "article.cls", "pdftex.map"]);
   assert.ok(states.some((p) => p.loading.includes("nope.sty")));
-  assert.deepEqual(states.at(-1), { loading: [], unavailable: ["nope.sty"], source: "TeX Live (test)", done: ["amsmath.sty"], building: false });
+  assert.deepEqual(states.at(-1), { loading: [], unavailable: ["nope.sty"], source: "TeX Live (test)", done: ["amsmath.sty"], building: false, failed: [] });
   assert.equal(dec.decode(core.files["amsmath.sty"]), "% ams\n");
   assert.equal(s.text("amsmath.sty"), undefined); // (not a project file)
   await s.reopen(); // (kept across a reopen, and not asked again)

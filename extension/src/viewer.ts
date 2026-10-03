@@ -15,6 +15,8 @@ export interface ViewerHost {
   svg(img: PageImage, cssWidth: number): string | null;
   /** CSS pixels per PDF point at the current zoom (1 is 100%). */
   scale(): number;
+  /** A double-click at (x, y) on page `k`, in PDF points from its top left. */
+  dbl?(k: number, x: number, y: number): void;
   /** A page box's CSS size at `cssWidth` (pdf.js's rounding). */
   box(d: { w: number; h: number }, cssWidth: number): [number, number];
 }
@@ -48,6 +50,39 @@ export class Viewer {
     this.host = host;
     // (a screen above and below: drawn before they scroll in)
     this.io = new IntersectionObserver((es) => this.seen(es), { root: scroller, rootMargin: "100% 0px", threshold: [0, 0.25, 0.5, 0.75, 1] });
+    // (a double-click: the source of what is under it, as Overleaf's PDF viewer does)
+    root.addEventListener("dblclick", (e) => {
+      const el = (e.target as Element).closest<HTMLElement>(".slot");
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const k = Number(el.dataset.k);
+      host.dbl?.(k, ((e.clientX - r.left) / r.width) * this.size.w, ((e.clientY - r.top) / r.height) * this.size.h);
+    });
+  }
+
+  /** Highlight `boxes` ([x, y top, w, h], PDF points) on page `k`, scrolled into view, for a moment. */
+  mark(k: number, boxes: [number, number, number, number][]): void {
+    const s = this.slots[k];
+    if (!s || !boxes.length) return;
+    for (const m of this.root.querySelectorAll(".mark")) m.remove();
+    // (the page it jumps to, drawn now: not when the observer next sees it)
+    if (s.drawn !== s.hash && !this.asked.has(`${k}:${s.hash}`)) {
+      this.asked.add(`${k}:${s.hash}`);
+      this.host.need(k);
+    }
+    const { w, h } = this.size;
+    for (const [x, y, bw, bh] of boxes) {
+      const m = document.createElement("div");
+      m.className = "mark";
+      Object.assign(m.style, { left: `${(x / w) * 100}%`, top: `${(y / h) * 100}%`, width: `${(bw / w) * 100}%`, height: `${(bh / h) * 100}%` });
+      s.el.append(m);
+    }
+    // (the first box in the middle of the view, unless it is in view already)
+    const top = s.el.offsetTop + (boxes[0][1] / h) * s.el.offsetHeight;
+    const v = this.scroller;
+    if (top < v.scrollTop + 20 || top > v.scrollTop + v.clientHeight - 40) v.scrollTo({ top: top - v.clientHeight / 2, behavior: "auto" });
+    setTimeout(() => s.el.querySelectorAll(".mark").forEach((m) => m.classList.add("fade")), 1200);
+    setTimeout(() => s.el.querySelectorAll(".mark.fade").forEach((m) => m.remove()), 2400);
   }
 
   get pages(): number {
@@ -126,6 +161,14 @@ export class Viewer {
   }
 
   private paint(s: Slot): void {
+    if (!s.img) return;
+    // (a highlight outlives the page drawn under it: put back after)
+    const marks = [...s.el.querySelectorAll(".mark")];
+    this.draw(s);
+    for (const m of marks) if (!m.isConnected) s.el.append(m);
+  }
+
+  private draw(s: Slot): void {
     if (!s.img) return;
     const w = this.size.w * (96 / 72) * this.host.scale();
     this.sizeSlot(s);

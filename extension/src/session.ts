@@ -7,7 +7,8 @@
 // port to the offscreen worker; a Node worker; a sidecar), and the preview
 // is drawn by a PreviewSink (the shadow-DOM panel; a webview).
 
-import { Batch, type Edit } from "./edits.ts";
+import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
+import { boxes, from, glyphs, lineAt, nearest, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
 
@@ -33,6 +34,7 @@ export type CoreReq =
   | { op: "status" }
   | { op: "log" }
   | { op: "pages" }
+  | { op: "origins"; page: number }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
   | { op: "package"; name: string };
@@ -131,6 +133,10 @@ export interface PreviewSink {
   busy?(on: boolean): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
   painted?(ms: number): void;
+  /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
+  goto?(file: string, from: number, to: number): void;
+  /** Highlight boxes on page `k` ([x, y top, w, h], PDF points), scrolled into view. */
+  mark?(k: number, boxes: [number, number, number, number][]): void;
   error(e: string): void;
   check?(r: { ok: boolean; ms: number; mismatch?: string }): void;
   mains?(names: string[], main: string | null): void;
@@ -259,6 +265,8 @@ export class PreviewSession {
         // (the ops that may build: the view shows a build that takes a while)
         const builds = r.op === "edit" || r.op === "status" || r.op === "open";
         if (builds && this.building++ === 0) this.sink.busy?.(true);
+        // (a build or a file changed: the glyphs' sources are asked again)
+        if (r.op === "edit" || r.op === "open" || r.op === "set_file") this.glyphCache.clear();
         const res = await core.request(r).finally(() => {
           this.inflight--;
           if (builds && --this.building === 0) this.sink.busy?.(false);
@@ -600,6 +608,59 @@ export class PreviewSession {
     if (this.sink.layout) return this.layout();
     const r = await this.core.request({ op: "png", page: this.page, dpi: this.dpi() });
     this.sink.page(image(r), this.page, this.pages);
+  }
+
+  /** Page `k`'s glyphs with their sources, as the core has them now (kept by the page's hash). */
+  private glyphCache = new Map<string, Glyph[]>();
+  private async glyphsOf(k: number): Promise<Glyph[]> {
+    const key = String(k);
+    const have = this.glyphCache.get(key);
+    if (have) return have;
+    const r = await this.core.request({ op: "origins", page: k });
+    if (!r.ok || !r.json?.g) return [];
+    // (the job's names: "main" for main.tex, "ch/intro.tex", "article.cls")
+    const path = (n: string) => {
+      n = n.replace(/^\.\//, "");
+      return n in this.files ? n : n + ".tex" in this.files ? n + ".tex" : null;
+    };
+    const gs = glyphs(r.json, path);
+    if (this.glyphCache.size > 64) this.glyphCache.clear();
+    this.glyphCache.set(key, gs);
+    return gs;
+  }
+
+  /** A double-click at (x, y) on page `k` (PDF points from its top left): the editor to its source. */
+  async toSource(k: number, x: number, y: number): Promise<void> {
+    if (!this.opened) return;
+    this.flush();
+    await this.chain;
+    const g = nearest(await this.glyphsOf(k), x, y);
+    this.tr("sync→source", { k, x, y, g });
+    if (!g?.file) return;
+    const t = this.files[g.file];
+    this.sink.goto?.(g.file, charOffset(t, g.start), charOffset(t, g.end));
+  }
+
+  /** The place `pos` (UTF-16) in `file`: its line's glyphs highlighted on the page (the page in view first). */
+  async toPage(file: string, pos: number): Promise<void> {
+    if (!this.opened || !(file in this.files)) return;
+    this.flush();
+    await this.chain;
+    const t = this.files[file];
+    const lo = t.lastIndexOf("\n", pos - 1) + 1, hiC = t.indexOf("\n", pos);
+    const [a, b] = [byteOffset(t, lo), byteOffset(t, hiC < 0 ? t.length : hiC)];
+    const n = Math.max(this.hashes.length, this.pages, 1);
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    for (const k of order) {
+      const all = await this.glyphsOf(k);
+      const hit = lineAt(from(all, file, a, b), byteOffset(t, pos));
+      if (hit.length) {
+        this.tr("sync→page", { file, pos, k, glyphs: hit.length });
+        this.sink.mark?.(k, boxes(hit, all));
+        return;
+      }
+    }
+    this.tr("sync→page", { file, pos, k: -1 });
   }
 
   async pdf(): Promise<Uint8Array | undefined> {

@@ -125,6 +125,30 @@
     }, 100);
   }
 
+  /** Select [from, to) of the open file (UTF-16 offsets) and scroll to it. */
+  function gotoRange(from: number, to: number): void {
+    const n = view.state.doc.length;
+    view.dispatch({ selection: { anchor: Math.min(from, n), head: Math.min(to, n) }, scrollIntoView: true });
+    view.focus();
+  }
+
+  // A double-click in the editor, or on Overleaf's file outline (whose click
+  // has just put the cursor at its heading): that place on the ⚡ page.
+  document.addEventListener(
+    "dblclick",
+    (e) => {
+      const t = e.target as Element;
+      const inEditor = !!t.closest?.(".cm-editor");
+      const inOutline = !!t.closest?.('.outline-container, .outline-pane, [class*="outline-item"]');
+      if (!inEditor && !inOutline) return;
+      setTimeout(() => {
+        if (!view || file === null) return;
+        post({ type: "sync", file, pos: view.state.selection?.main?.head ?? 0 });
+      }, inOutline ? 250 : 0);
+    },
+    true,
+  );
+
   window.addEventListener("message", (e) => {
     if (e.source !== window || e.data?.src !== "phitex-content") return;
     const m = e.data;
@@ -132,6 +156,9 @@
     else if (m.type === "goto" && view && typeof m.line === "number") {
       if (m.file === file) gotoLine(m.line);
       else openThen(m.file, () => gotoLine(m.line));
+    } else if (m.type === "gotoRange" && view && typeof m.from === "number") {
+      if (m.file === file) gotoRange(m.from, m.to);
+      else openThen(m.file, () => gotoRange(m.from, m.to));
     }
   });
 })();

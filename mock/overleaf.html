@@ -48,6 +48,7 @@
   <b>Mock Overleaf</b>
   <p style="color:#666;font-size:12px">The DOM surface the extension reads: the file tree, <code>.cm-content.cmView.view</code>, and the project endpoints.</p>
   <ul class="list-unstyled file-tree-folder-list file-tree-list" role="tree" id="tree"></ul>
+  <div class="outline-container"><b style="font-size:12px">File outline</b><ul class="outline-item-list" id="outline" style="list-style:none;padding:0 0 0 4px;font-size:12px"></ul></div>
 </nav>
 <main>
   <div class="bar">
@@ -101,12 +102,15 @@ class EditorView {
     if (this.el.value !== this.state.doc.toString()) this.el.value = this.state.doc.toString();
   }
   setState(s) { this.state = s; this.el.value = s.doc.toString(); }
+  /** (the textarea's selection, as CM's state has it) */
+  syncSelection() { this.state = { ...this.state, selection: { main: { anchor: this.el.selectionStart, head: this.el.selectionEnd } } }; }
   focus() { this.el.focus(); }
   dispatch(spec) {
     if (spec.selection) {
-      this.state = { ...this.state, selection: { main: { head: spec.selection.anchor } } };
+      const { anchor, head = anchor } = spec.selection;
+      this.state = { ...this.state, selection: { main: { anchor, head } } };
       this.el.focus();
-      this.el.setSelectionRange(spec.selection.anchor, spec.selection.anchor);
+      this.el.setSelectionRange(Math.min(anchor, head), Math.max(anchor, head));
       if (!spec.changes) return;
     }
     const cs = new ChangeSet([].concat(spec.changes ?? []).sort((a, b) => a.from - b.from).map((c) => ({ from: c.from, to: c.to ?? c.from, insert: c.insert ?? "" })));
@@ -147,7 +151,29 @@ async function openDoc(d) {
   view.setState({ doc: new Text(fresh) });
   prev = fresh;
   renderTree();
+  renderOutline();
 }
+
+// The file outline, as Overleaf's: the open file's headings; a click puts
+// the cursor at the heading (Overleaf's does the same).
+function renderOutline() {
+  const ul = document.getElementById("outline");
+  ul.innerHTML = "";
+  const t = view.state.doc.toString();
+  for (const m of t.matchAll(/\\(part|chapter|section|subsection|subsubsection)\*?\{([^}]*)\}/g)) {
+    const li = document.createElement("li");
+    li.className = "outline-item";
+    li.style.paddingLeft = `${["part", "chapter", "section", "subsection", "subsubsection"].indexOf(m[1]) * 8}px`;
+    const b = document.createElement("button");
+    b.className = "outline-item-link";
+    b.style.cssText = "border:0;background:none;cursor:pointer;text-align:left;padding:1px 0";
+    b.textContent = m[2];
+    b.onclick = () => view.dispatch({ selection: { anchor: m.index }, scrollIntoView: true });
+    li.append(b);
+    ul.append(li);
+  }
+}
+for (const ev of ["select", "keyup", "mouseup", "dblclick"]) ta.addEventListener(ev, () => view.syncSelection());
 
 // Typing: the textarea's change as one transaction (as CM would make).
 let prev = "";

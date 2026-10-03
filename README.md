@@ -25,6 +25,9 @@ looking at is repainted first.
 - **Selectable, searchable text**: pages are drawn as vector graphics with
   the fonts' real outlines. You can select and copy text and find it with
   Ctrl+F, and it stays sharp at any zoom.
+- **Source ↔ page**: double-click the page to jump to that word in the
+  editor (opening its file). Double-click in the editor, or on a heading in
+  Overleaf's file outline, to highlight that line on the page.
 - **Diagnostics**: a badge counts errors and warnings. Click an entry to
   jump to its line. When an edit breaks the document (an unclosed `{`, say),
   the last good page stays on screen, dimmed, with the reason.
@@ -110,8 +113,8 @@ Overleaf's is right.
 - **Bibliographies and cross-references** use the `.aux`/`.bbl` from the
   last run, as a single `pdflatex` run would. Unresolved `\ref`s show as
   `??` until Overleaf has compiled.
-- **No SyncTeX yet** (click a page to jump to the source, and the reverse).
-  It is planned.
+- **Source ↔ page** works for text. Figures and lines that come only from
+  a macro (a section number, say) map to the macro's call.
 - It depends on Overleaf's page structure, which is not a public API. If
   Overleaf changes it, the preview falls back to a floating window until
   the extension is updated.
@@ -183,9 +186,13 @@ Overleaf page                                            extension
   form, a graph of steps and the state each step reads. An edit re-runs
   only the steps whose inputs changed, then links the output from every
   step's effects.
-- **Start-up**: a discovery pass finds every missing file in one run so
-  that they download together. A plain build paints the first page. The
-  incremental program is then built in the background.
+- **Start-up**: the packages the preamble names are fetched in parallel
+  first; a file the build still lacks is fetched from inside the build, so
+  it never stops at a file TeX Live has. The incremental program is then
+  built in the background.
+- **Source ↔ page**: the engine records, for each glyph it ships, the
+  source bytes it came from; the core pairs them with the glyphs' places on
+  the page.
 - **Files**: the project's docs come from Overleaf's endpoints, and its
   binary files (figures) from the project ZIP. Closed docs are re-fetched
   every 10 s and diffed in, so collaborators' edits arrive too.

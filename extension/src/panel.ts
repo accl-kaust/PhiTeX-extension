@@ -48,6 +48,10 @@ export interface PanelEvents {
   onClean(): void;
   onFormat(f: "vector" | "png"): void;
   onGoto(file: string, line: number): void;
+  /** A double-click on page `k` at (x, y), PDF points from its top left: to the source. */
+  onSyncSource?(k: number, x: number, y: number): void;
+  /** The editor to `file`'s [from, to) (UTF-16 offsets). */
+  onGotoRange?(file: string, from: number, to: number): void;
   /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
   onShortcut?(): boolean;
   /** "Take the tour" (settings). */
@@ -362,6 +366,8 @@ footer .msg.err { color: var(--danger); }
 .win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
 .slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); }
+.slot .mark { position: absolute; background: rgba(255, 213, 0, .45); outline: 1px solid rgba(214, 160, 0, .7); border-radius: 2px; pointer-events: none; transition: opacity 1.2s; }
+.slot .mark.fade { opacity: 0; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
 .win.docked .slot { box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked.pdf-dark .slot { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }
@@ -517,6 +523,7 @@ export class Panel {
       svg: (img, w) => ("draws" in img ? svg(img.draws, w) : null),
       scale: () => this.scale(),
       box: (d, w) => pageBox(d, w),
+      dbl: (k, x, y) => ev.onSyncSource?.(k, x, y),
     });
     // (keep it on screen when the window shrinks)
     window.addEventListener("resize", () => this.place());
@@ -1044,6 +1051,16 @@ export class Panel {
     this.viewer.layout(hashes);
     if (this.at >= hashes.length) this.at = Math.max(0, hashes.length - 1);
     this.nav();
+  }
+
+  /** The editor to a page's source (a double-click on it). */
+  goto(file: string, from: number, to: number): void {
+    this.ev.onGotoRange?.(file, from, to);
+  }
+
+  /** Highlight `boxes` on page `k` (the source the editor is at). */
+  mark(k: number, boxes: [number, number, number, number][]): void {
+    this.viewer.mark(k, boxes);
   }
 
   page(img: PageImage | null, k: number, n: number, hash?: string | null): void {

@@ -134,3 +134,19 @@ export class Batch {
     return out;
   }
 }
+
+/** The UTF-16 offset of byte offset `byte` in `s` (its inverse of `byteOffset`). */
+export function charOffset(s: string, byte: number): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (n >= byte) return i;
+    const c = s.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return s.length;
+}

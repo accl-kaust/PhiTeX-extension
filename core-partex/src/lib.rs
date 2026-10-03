@@ -609,6 +609,9 @@ impl Session {
             // (windows: steps cut inside long runs, a tikzpicture's say, at
             // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
             tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
+            // (each glyph's source bytes: double-click on the page → the
+            // editor, the cursor → the page; rebuilds keep them mapped)
+            tex.set_origins(true);
             let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
             // (DVI mode: the pages are read from the DVI the link writes;
             // nonstop, as Overleaf runs pdflatex: an error is reported and
@@ -833,6 +836,32 @@ impl Session {
         }
         let p = self.pages.get(page)?;
         Some(draws::json(&p.draws, &self.fonts, &p.specials, draws::ONE_INCH))
+    }
+
+    /// Page `page`'s glyphs with their source (JSON): `{"files":[names the
+    /// job read],"g":[[x, y, file, start, end, synthesized]]}`, x and y in
+    /// PDF points from the page's top left (as the draw list), in
+    /// content-stream order; file `-1`: no source.
+    pub fn origins(&mut self, page: usize) -> Option<String> {
+        self.build();
+        if self.pdf.is_empty() {
+            return None;
+        }
+        let data: Arc<[u8]> = self.pdf.clone().into();
+        let doc = partex_engine::pdfread::Doc::open(&data).ok()?;
+        let pg = doc.page(page + 1)?;
+        let shown = partex_engine::pdftext::page_codes(&doc, &pg);
+        let [x0, _, _, y1] = pg.media;
+        let tex = self.tex.as_mut()?;
+        let o = tex.origins(page);
+        let files: Vec<String> = tex.origin_files().iter().map(|f| esc(f)).collect();
+        let mut g = String::new();
+        for (i, s) in shown.iter().enumerate() {
+            let o = o.get(i).copied().unwrap_or(partex_core::GlyphOrigin::NONE);
+            let file = if o.file == u32::MAX { -1 } else { i64::from(o.file) };
+            let _ = write!(g, "{}[{:.2},{:.2},{file},{},{},{}]", if g.is_empty() { "" } else { "," }, s.x - x0, y1 - s.y, o.start, o.end, u8::from(o.synthesized));
+        }
+        Some(format!("{{\"files\":[{}],\"g\":[{g}]}}", files.join(",")))
     }
 
     #[must_use]
@@ -1182,6 +1211,12 @@ mod abi {
             t
         })
         .unwrap_or_default());
+    }
+
+    /// Page `page`'s glyph origins (out, JSON: `Session::origins`).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_origins(h: u32, page: u32) {
+        out_json(with(h, |s| s.origins(page as usize)).flatten().unwrap_or_else(|| "{\"files\":[],\"g\":[]}".into()));
     }
 
     /// The PDF the last build wrote (out; empty in DVI mode).

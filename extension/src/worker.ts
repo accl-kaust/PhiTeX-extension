@@ -20,6 +20,7 @@ export type Req =
   | { id: number; client: string; op: "status" }
   | { id: number; client: string; op: "log" }
   | { id: number; client: string; op: "pages" }
+  | { id: number; client: string; op: "origins"; page: number }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" };
 
@@ -58,6 +59,7 @@ interface Core {
   ph_log?(h: number): void;
   ph_idle?(): number;
   ph_pages(h: number): void;
+  ph_origins?(h: number, page: number): void;
   ph_text(h: number, p: number, n: number): void;
   _initialize?(): void;
 }
@@ -361,6 +363,11 @@ function handle(r: Req): Res {
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };
       core.ph_log(h);
       return { id: r.id, ok: true, json: { log: new TextDecoder().decode(outBytes()) } };
+    case "origins":
+      // (each glyph of page `page`, in stream order, with its source bytes)
+      if (!core.ph_origins) return { id: r.id, ok: false, error: "this core keeps no origins" };
+      core.ph_origins(h, r.page);
+      return { id: r.id, ok: true, json: outJson() };
     case "pages":
       core.ph_pages(h);
       return { id: r.id, ok: true, json: outJson() };

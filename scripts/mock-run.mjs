@@ -19,7 +19,10 @@
 //       { "wait": 2000 },
 //       { "shot": "after-package" },
 //       { "clean": true },           // ⟳ Clean recompile
-//       { "recompile": true }        // Overleaf's Recompile (the local pdflatex)
+//       { "recompile": true },       // Overleaf's Recompile (the local pdflatex)
+//       { "dblpage": [0, 0.3, 0.4] }, // double-click page 0 at 30% across, 40% down: the editor's selection after
+//       { "dbltext": "Every writer" }, // double-click the editor at that text: the page's highlight boxes after
+//       { "dbloutline": "Section 3" } // double-click that heading in the file outline
 //     ] }
 // --fresh: the package cache (IndexedDB) emptied first, as a new install.
 // --keep: Chromium and the mock left running after.
@@ -111,6 +114,24 @@ for (const s of sc.steps ?? []) {
   else if (s.shot) await shot(s.shot);
   else if (s.clean) await evalIn(`(() => { document.getElementById("phitex-zoom")?.click(); document.querySelector("[data-act=clean]")?.click(); })()`);
   else if (s.recompile) await evalIn(`document.getElementById("recompile").click()`);
+  else if (s.dblpage) {
+    const [k, fx, fy] = s.dblpage;
+    await evalIn(`(() => { const el = document.querySelector('phitex-preview')?.shadowRoot?.querySelector('.slot[data-k="${k}"]') ?? document.querySelector('.slot[data-k="${k}"]'); if (!el) return; el.scrollIntoView(); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, clientX: r.left + r.width * ${fx}, clientY: r.top + r.height * ${fy} })); })()`, true);
+    await sleep(800);
+    s.result = await evalIn(`(() => { const v = mockEditor.view, m = v.state.selection?.main; return m && { file: document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label"), text: mockEditor.text().slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)), around: mockEditor.text().slice(Math.max(0, m.anchor - 30), m.anchor + 30) }; })()`);
+    console.log("dblpage →", JSON.stringify(s.result));
+  } else if (s.dbloutline !== undefined) {
+    // (as a user: two clicks, then the double-click)
+    await evalIn(`(() => { const b = [...document.querySelectorAll(".outline-item-link")].find((b) => b.textContent === ${JSON.stringify(s.dbloutline)}); b.click(); b.click(); b.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
+    await sleep(900);
+    s.result = await evalIn(`(() => [...document.querySelector("phitex-preview").shadowRoot.querySelectorAll(".mark")].map((m) => [m.parentElement.dataset.k, m.style.top]))()`, true);
+    console.log("dbloutline →", JSON.stringify(s.result));
+  } else if (s.dbltext !== undefined) {
+    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.dbltext)}); const ta = document.querySelector(".cm-content"); ta.focus(); ta.setSelectionRange(i, i + 3); ta.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
+    await sleep(700);
+    s.result = await evalIn(`(() => { const ms = [...(document.querySelector('phitex-preview')?.shadowRoot ?? document).querySelectorAll(".mark")]; return ms.map((m) => [m.parentElement.dataset.k, m.style.left, m.style.top, m.style.width]); })()`, true);
+    console.log("dbltext →", JSON.stringify(s.result));
+  }
   steps.push({ t, k: "STEP", d: s });
 }
 await idle();

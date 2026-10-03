@@ -12,7 +12,9 @@ crate-type = ["cdylib", "rlib"]
 # (PDF streams: a pure-Rust zlib for Host::deflate, which works in wasm; not
 # zlib's bytes, so not byte-exact with pdfTeX, which a preview doesn't need)
 miniz_oxide = "0.8"
-partex-core = { path = "../../../tmp/partex-phitex-b980068/crates/partex-core" }
+partex-core = { path = "../../../tmp/partex-phitex-0212410/crates/partex-core" }
+# (pdftext: the glyphs a PDF page shows, in the order origins count them)
+partex-engine = { path = "../../../tmp/partex-phitex-0212410/crates/partex-engine" }
 
 [profile.release]
 opt-level = 3

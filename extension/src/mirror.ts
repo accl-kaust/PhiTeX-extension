@@ -6,7 +6,7 @@
 import type { PreviewSink } from "./session.ts";
 
 /** Detached → editor. */
-export type Ask = { t: "hello" } | { t: "need"; k: number } | { t: "page"; k: number } | { t: "goto"; file: string; line: number } | { t: "bye" };
+export type Ask = { t: "hello" } | { t: "need"; k: number } | { t: "page"; k: number } | { t: "goto"; file: string; line: number } | { t: "sync"; k: number; x: number; y: number } | { t: "bye" };
 /** Editor → detached: a sink call. */
 export type Told = { t: "sink"; m: keyof PreviewSink; a: unknown[] } | { t: "up" };
 

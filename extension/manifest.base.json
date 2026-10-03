@@ -43,6 +43,7 @@
         "dist/zip.js",
         "dist/panel.js",
         "dist/session.js",
+        "dist/sync.js",
         "dist/diagnostics.js",
         "dist/viewer.js",
         "dist/mirror.js",

@@ -832,6 +832,9 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     onFormat: (f) => session?.setFormat(f),
     // (the hook moves the editor's cursor there: the one thing it writes)
     onGoto: (file, line) => DETACHED ? ask({ t: "goto", file, line }) : window.postMessage({ src: "phitex-content", type: "goto", file, line }, location.origin),
+    onSyncSource: (k, x, y) => (DETACHED ? ask({ t: "sync", k, x, y }) : void session?.toSource(k, x, y)),
+    // (the editor tab's panel does it; a detached tab's, told the same, does not)
+    onGotoRange: (file, from, to) => DETACHED || window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to }, location.origin),
     onReload: async () => session?.refresh(await fetchDocs(panel)),
     onClean: async () => session?.clean(await fetchDocs(panel)),
     onShortcut: () => dock?.toggle() ?? false,
@@ -881,7 +884,12 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     if (a.t === "bye") mirrored = false;
     if (a.t === "need") void session?.fetch(a.k);
     if (a.t === "page") void session?.setPage(a.k);
+    if (a.t === "sync") void session?.toSource(a.k, a.x, a.y);
     if (a.t === "goto") window.postMessage({ src: "phitex-content", type: "goto", file: a.file, line: a.line }, location.origin);
+  });
+  // (a double-click in the editor or on the file outline: that place on the page)
+  window.addEventListener("message", (e) => {
+    if (e.source === window && e.data?.src === "phitex-hook" && e.data.type === "sync") void session?.toPage(e.data.file, e.data.pos);
   });
   const transport = new ChromeTransport();
   try {

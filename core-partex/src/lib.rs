@@ -134,6 +134,15 @@ impl Host for MemHost {
                     return false;
                 }
                 let now = cands.iter().find_map(|n| self.files.get(n));
+                // (a load the job made and found nothing, still absent: the job
+                // still lacks it, whether or not this rebuild runs its step
+                // again; missing is the job's, not this build's lookups)
+                if now.is_none() && got.is_none() {
+                    let want = if base.contains(&b'.') { base.to_vec() } else { with_suffix(base, *kind) };
+                    if !self.missing.iter().any(|(n, _)| *n == want) {
+                        self.missing.push((want, *kind));
+                    }
+                }
                 match (now, got) {
                     (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                     (None, None) => true,

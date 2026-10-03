@@ -24,7 +24,7 @@ export type Req =
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" }
   /** (the draw worker: the PDF the core just linked, to draw pages from) */
-  | { id: number; client: string; op: "pdf"; pdf: Uint8Array };
+  | { id: number; client: string; op: "drawpdf"; pdf: Uint8Array };
 
 export interface Res {
   id: number;
@@ -486,7 +486,7 @@ function handleDraw(r: Req): Res {
     return { id: r.id, ok: true };
   }
   if (!slot) slots.set(r.client, (slot = nextSlot++));
-  if (r.op === "pdf") {
+  if (r.op === "drawpdf") {
     const n = call(new Frame().bytes(r.pdf), (p, len) => core.ph_draw_set!(slot!, p + 4, len - 4));
     version.set(r.client, (version.get(r.client) ?? 0) + 1);
     drawAhead(r.client, n);

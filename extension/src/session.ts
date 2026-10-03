@@ -381,6 +381,9 @@ export class PreviewSession {
     this.fetchPackages(r.json.missing);
     this.sink.latency(`opened in ${r.json.build_ms.toFixed(1)} ms (round trip ${(this.now() - t).toFixed(1)} ms)`);
     await (this.sink.layout ? this.layout() : this.showPage());
+    // (the first build is in: nothing is building for the packages now)
+    this.pkg.building = false;
+    this.tellPackages();
     this.statusSoon();
   }
 

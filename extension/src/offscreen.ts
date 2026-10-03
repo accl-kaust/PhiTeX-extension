@@ -28,6 +28,14 @@ chrome.runtime.onConnect.addListener((port) => {
   const binaries = new Map<string, Uint8Array>();
   const give = (file: string, bytes: Uint8Array) => worker.postMessage({ id: nextId++, client, op: "set_bytes", file, bytes } as Req);
   port.onMessage.addListener((m) => {
+    // (the project's binary files, figures: kept, given now and after each open)
+    if (m.op === "binary") {
+      const bytes = Uint8Array.from(atob(m.b64), (c) => c.charCodeAt(0));
+      binaries.set(m.file, bytes);
+      give(m.file, bytes);
+      port.postMessage({ id: m.id, ok: true });
+      return;
+    }
     // (packages: answered here, not by the worker)
     if (m.op === "package") {
       resolve(m.name).then(

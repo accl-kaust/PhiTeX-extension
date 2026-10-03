@@ -9,7 +9,7 @@ async function inflate(b: Uint8Array): Promise<Uint8Array> {
 }
 
 /** The text files of a ZIP, by path; others are listed in `skipped`. */
-export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string, string>; skipped: string[] }> {
+export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string, string>; skipped: string[]; binaries: Record<string, Uint8Array> }> {
   const b = new Uint8Array(buf);
   const d = new DataView(buf);
   let eocd = -1;
@@ -23,6 +23,8 @@ export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string,
   let p = d.getUint32(eocd + 16, true);
   const files: Record<string, string> = {};
   const skipped: string[] = [];
+  /** The other files (figures, fonts): their bytes. */
+  const binaries: Record<string, Uint8Array> = {};
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   for (let k = 0; k < n; k++) {
     if (d.getUint32(p, true) !== 0x02014b50) throw new Error("bad central directory");
@@ -35,17 +37,21 @@ export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string,
     const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nlen));
     p += 46 + nlen + xlen + clen;
     if (name.endsWith("/")) continue;
-    if (!TEXT.test(name) || (method !== 0 && method !== 8)) {
+    if (method !== 0 && method !== 8) {
       skipped.push(name);
       continue;
     }
     const at = local + 30 + d.getUint16(local + 26, true) + d.getUint16(local + 28, true);
     const raw = b.subarray(at, at + csize);
+    if (!TEXT.test(name)) {
+      binaries[name] = method === 8 ? await inflate(raw) : raw.slice();
+      continue;
+    }
     try {
       files[name] = utf8.decode(method === 8 ? await inflate(raw) : raw);
     } catch {
       skipped.push(name);
     }
   }
-  return { files, skipped };
+  return { files, skipped, binaries };
 }

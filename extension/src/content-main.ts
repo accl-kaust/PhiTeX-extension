@@ -43,6 +43,9 @@ function docIds(): Map<string, string> {
  * ever fetched). A doc whose id the tree has not rendered (a folder never
  * opened) comes from the project ZIP, the one fallback.
  */
+/** Where the project's binary files go (the core, by the offscreen document); set once connected. */
+let giveBinary: ((path: string, bytes: Uint8Array) => Promise<unknown>) | undefined;
+
 async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promise<Record<string, string>> {
   const t = performance.now();
   const r = await fetch(`${project()}/entities`, { credentials: "include" });
@@ -66,16 +69,23 @@ async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promis
       else missing.push(p);
     }),
   );
-  if (missing.length) {
+  // (the project's binary files, figures: from its ZIP, the one place that
+  // has them all; given to the core before the first build)
+  const binaries = only ? 0 : entities.filter((e) => e.type === "file").length;
+  let given = 0;
+  if (missing.length || binaries) {
     const z = await fetch(`${project()}/download/zip`, { credentials: "include" });
     if (z.ok) {
-      const { files: zipped } = await readZip(await z.arrayBuffer());
+      const { files: zipped, binaries: bin } = await readZip(await z.arrayBuffer());
       for (const p of missing) if (p in zipped) files[p] = zipped[p];
+      if (binaries && giveBinary) {
+        await Promise.all(Object.entries(bin).map(([p, b]) => giveBinary!(p, b)));
+        given = Object.keys(bin).length;
+      }
     }
   }
   if (!only) {
-    const binaries = entities.length - docs.length;
-    panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms` + (missing.length ? `; ${missing.length} via ZIP` : "") + (binaries ? `; ${binaries} binary files not fetched` : ""));
+    panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms` + (missing.length ? `; ${missing.length} via ZIP` : "") + (binaries ? `; ${given} of ${binaries} binary files` : ""));
   }
   return files;
 }
@@ -860,6 +870,7 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   const transport = new ChromeTransport();
   try {
     await transport.connect();
+    giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);
     const { panel: saved } = await chrome.storage.local.get("panel");
     session = new PreviewSession(new OverleafHost(panel), transport, tee(panel, ch, () => mirrored), {
       format: (saved as PanelPrefs | undefined)?.format ?? "vector",
@@ -894,3 +905,10 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   if (enabled === false) return;
   await start();
 })();
+
+/** Bytes as base64 (the port to the offscreen document carries JSON). */
+function b64of(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+}

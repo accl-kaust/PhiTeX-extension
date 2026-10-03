@@ -22,7 +22,7 @@ function seg(id: string, value: string, onPick: (v: string) => void): void {
 }
 
 async function render(): Promise<void> {
-  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "speedOff", "accepted"]);
+  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "speedOff", "accepted", "engine", "engines"]);
   const accepted = s.accepted === TERMS;
   $<HTMLElement>("version").textContent = chrome.runtime.getManifest().version;
   const enabled = $<HTMLInputElement>("enabled");
@@ -32,6 +32,21 @@ async function render(): Promise<void> {
     void chrome.storage.local.set({ view: v });
     $("viewnote").textContent = v === "phitex" && !accepted ? "⚡ Instant asks you to accept its terms first, in Overleaf." : "";
   });
+  seg("engine", (s.engine as string | undefined) ?? "auto", (v) => void chrome.storage.local.set({ engine: v }));
+  // (projects given their own engine, from the card's buttons: they keep it; cleared here)
+  const own = Object.keys((s.engines as Record<string, string> | undefined) ?? {}).length;
+  const note = $("enginenote");
+  note.textContent = own ? `${own} project${own === 1 ? " has" : "s have"} its own engine. ` : "";
+  if (own) {
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = "Use this setting for all";
+    b.onclick = async () => {
+      await chrome.storage.local.remove("engines");
+      void render();
+    };
+    note.append(b);
+  }
   const panelPrefs = (s.panel ?? {}) as { format?: string };
   seg("format", panelPrefs.format === "png" ? "png" : "vector", (v) => chrome.storage.local.set({ panel: { ...panelPrefs, format: v } }));
   const tips = $<HTMLInputElement>("tips");

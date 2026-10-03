@@ -11,7 +11,7 @@ import { SHELF } from "./shelf.ts";
 // Overleaf page.
 
 export type Req =
-  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array> }
+  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { id: number; client: string; op: "set_file"; file: string; text: string }
   | { id: number; client: string; op: "set_bytes"; file: string; bytes: Uint8Array }
@@ -22,7 +22,9 @@ export type Req =
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "origins"; page: number }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
-  | { id: number; client: string; op: "close" };
+  | { id: number; client: string; op: "close" }
+  /** (the draw worker: the PDF the core just linked, to draw pages from) */
+  | { id: number; client: string; op: "pdf"; pdf: Uint8Array };
 
 export interface Res {
   id: number;
@@ -60,6 +62,10 @@ interface Core {
   ph_idle?(): number;
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
+  ph_draw_set?(slot: number, p: number, n: number): number;
+  ph_draw_page?(slot: number, k: number): number;
+  ph_draw_hash?(slot: number, k: number): void;
+  ph_draw_drop?(slot: number): void;
   ph_text(h: number, p: number, n: number): void;
   _initialize?(): void;
 }
@@ -247,15 +253,22 @@ const loadAssets = () =>
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));
 
+/**
+ * The draw worker (a second instance of the core, named "draw"): it only
+ * draws pages from the PDF the build worker links, so pages draw while a
+ * build, or readying the next one, runs there.
+ */
+const DRAW = (self as unknown as { name?: string }).name === "draw";
+
 async function load(): Promise<void> {
   module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
   let memory: WebAssembly.Memory | undefined;
-  await loadShelf().catch(() => undefined);
+  if (!DRAW) await loadShelf().catch(() => undefined);
   const inst = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi(() => memory!), phitex: shelfImports(() => memory!) });
   core = inst.exports as unknown as Core;
   memory = core.memory;
   core._initialize?.();
-  if (core.ph_assets) {
+  if (core.ph_assets && !DRAW) {
     const a = await loadAssets();
     const p = core.ph_alloc(a.length);
     new Uint8Array(core.memory.buffer, p >>> 0, a.length).set(a);
@@ -312,6 +325,8 @@ function handle(r: Req): Res {
   const h = sessions.get(r.client) ?? 0;
   switch (r.op) {
     case "open": {
+      // (one core, pdfLaTeX's: another engine's core is chosen here when there is one)
+      if (r.engine && r.engine !== "pdflatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
       if (h) core.ph_close(h);
       const f = new Frame().u32(r.fuel).str(r.main).u32(Object.keys(r.files).length);
       for (const [n, t] of Object.entries(r.files)) f.str(n).str(t);
@@ -412,12 +427,97 @@ async function compress(png: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await (await c.convertToBlob({ type: "image/png" })).arrayBuffer());
 }
 
+/** The page hashes each client's drawer was last given a PDF for. */
+const shipped = new Map<string, string>();
+
+/** After a build: the PDF to the draw worker (through the offscreen document) if its pages changed. */
+function shipPdf(r: Req): void {
+  if (!core.ph_draw_set || !(r.op === "open" || r.op === "status" || (r.op === "edit" && r.page >= 0))) return;
+  const h = sessions.get(r.client);
+  if (!h) return;
+  core.ph_pages(h);
+  const key = new TextDecoder().decode(outBytes());
+  if (shipped.get(r.client) === key) return;
+  shipped.set(r.client, key);
+  core.ph_pdf(h);
+  const pdf = outBytes();
+  if (pdf.length) (self as unknown as Worker).postMessage({ drawPdf: true, client: r.client, pdf }, [pdf.buffer]);
+}
+
+// ---- the draw worker ----
+
+const slots = new Map<string, number>();
+/** Per client: the page last asked for (drawn around first) and the PDF's version. */
+const around = new Map<string, number>();
+const version = new Map<string, number>();
+let nextSlot = 1;
+
+function drawPage(slot: number, k: number): { draws?: unknown; hash: string; fresh: boolean } {
+  const got = core.ph_draw_page!(slot, k);
+  const json = got ? new TextDecoder().decode(outBytes()) : "";
+  core.ph_draw_hash!(slot, k);
+  return { draws: json ? JSON.parse(json) : undefined, hash: new TextDecoder().decode(outBytes()), fresh: got === 1 };
+}
+
+/** Every page drawn ahead, nearest the one read first, a page a task (so asks come between). */
+function drawAhead(client: string, n: number): void {
+  const v = version.get(client);
+  let at = 0;
+  const next = (): void => {
+    if (version.get(client) !== v || !slots.has(client)) return;
+    const p = around.get(client) ?? 0;
+    const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => Math.abs(a - p) - Math.abs(b - p));
+    if (at >= order.length) return;
+    try {
+      drawPage(slots.get(client)!, order[at++]);
+    } catch {
+      return;
+    }
+    setTimeout(next, 0);
+  };
+  setTimeout(next, 0);
+}
+
+function handleDraw(r: Req): Res {
+  let slot = slots.get(r.client);
+  if (r.op === "close") {
+    if (slot) core.ph_draw_drop!(slot);
+    slots.delete(r.client);
+    return { id: r.id, ok: true };
+  }
+  if (!slot) slots.set(r.client, (slot = nextSlot++));
+  if (r.op === "pdf") {
+    const n = call(new Frame().bytes(r.pdf), (p, len) => core.ph_draw_set!(slot!, p + 4, len - 4));
+    version.set(r.client, (version.get(r.client) ?? 0) + 1);
+    drawAhead(r.client, n);
+    return { id: r.id, ok: true, json: { pages: n } };
+  }
+  if (r.op === "png") {
+    around.set(r.client, r.page);
+    const t = performance.now();
+    const d = drawPage(slot, r.page);
+    return { id: r.id, ok: !!d.draws, draws: d.draws as Res["draws"], json: { hash: d.hash, draw_ms: performance.now() - t, kept: !d.fresh } };
+  }
+  return { id: r.id, ok: false, error: `the draw worker does not do ${r.op}` };
+}
+
 self.onmessage = async (ev: MessageEvent<Req>) => {
   const r = ev.data;
   let res: Res;
+  if (DRAW) {
+    await ready;
+    try {
+      res = handleDraw(r);
+    } catch (e) {
+      res = { id: r.id, ok: false, error: `draw worker: ${e}` };
+    }
+    (self as unknown as Worker).postMessage(res);
+    return;
+  }
   try {
     await ready;
     res = handle(r);
+    shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)
     if (res.png && (("dpi" in r && r.dpi === 0) || (core.ph_assets && res.png[0] !== 0x89))) {
       res.draws = res.png.length ? JSON.parse(new TextDecoder().decode(res.png)) : undefined;
@@ -443,7 +543,10 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
   // meanwhile waits that long, once per cold build)
   setTimeout(() => {
     try {
+      // (readying the next rebuild: the tab says so, not "Typesetting", while it runs)
+      (self as unknown as Worker).postMessage({ preparing: true });
       core?.ph_idle?.();
+      (self as unknown as Worker).postMessage({ preparing: false });
     } catch {
       /* a trap here shows on the next request */
     }

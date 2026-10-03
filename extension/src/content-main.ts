@@ -8,6 +8,7 @@ import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
+import { resolve, type Engine, type EngineChoice } from "./engines.ts";
 import { cached, DELIVERED } from "./packages.ts";
 import { drawPage } from "./tabrender.ts";
 
@@ -834,6 +835,11 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     onGoto: (file, line) => DETACHED ? ask({ t: "goto", file, line }) : window.postMessage({ src: "phitex-content", type: "goto", file, line }, location.origin),
     onSyncSource: (k, x, y) => (DETACHED ? ask({ t: "sync", k, x, y }) : void session?.toSource(k, x, y)),
     // (the editor tab's panel does it; a detached tab's, told the same, does not)
+    // (the card's choice: this project's engine from now on, kept by project)
+    onEngine: async (e) => {
+      const { engines } = await chrome.storage.local.get("engines");
+      await chrome.storage.local.set({ engines: { ...(engines ?? {}), [project()]: e } });
+    },
     onGotoRange: (file, from, to) => DETACHED || window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to }, location.origin),
     onReload: async () => session?.refresh(await fetchDocs(panel)),
     onClean: async () => session?.clean(await fetchDocs(panel)),
@@ -896,7 +902,21 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     await transport.connect();
     giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);
     const { panel: saved } = await chrome.storage.local.get("panel");
+    let engineSetting: EngineChoice = "auto", projectEngine: Engine | undefined;
+    const readEngine = async () => {
+      const { engine, engines } = await chrome.storage.local.get(["engine", "engines"]);
+      engineSetting = (engine as EngineChoice | undefined) ?? "auto";
+      projectEngine = (engines as Record<string, Engine> | undefined)?.[project()];
+    };
+    await readEngine();
+    // (the engine, set for every project or for this one: typeset again with it)
+    chrome.storage.onChanged.addListener(async (c) => {
+      if (!c.engine && !c.engines) return;
+      await readEngine();
+      session.clean(await fetchDocs(panel));
+    });
     session = new PreviewSession(new OverleafHost(panel), transport, tee(panel, ch, () => mirrored), {
+      engine: (main) => resolve(engineSetting, projectEngine, main),
       format: (saved as PanelPrefs | undefined)?.format ?? "vector",
       packages: cached({
         label: "TeX Live 2026",

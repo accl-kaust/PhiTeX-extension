@@ -8,6 +8,7 @@
 // is drawn by a PreviewSink (the shadow-DOM panel; a webview).
 
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
+import { ENGINES, type Engine } from "./engines.ts";
 import { boxes, from, glyphs, lineAt, nearest, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
@@ -26,7 +27,7 @@ export interface EditorHost {
 
 /** The core's requests (worker.ts's `Req`, less the routing fields). */
 export type CoreReq =
-  | { op: "open"; main: string; files: Record<string, string>; fuel: number }
+  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine }
   | { op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { op: "set_file"; file: string; text: string }
   | { op: "png"; page: number; dpi: number }
@@ -137,6 +138,11 @@ export interface PreviewSink {
   goto?(file: string, from: number, to: number): void;
   /** Highlight boxes on page `k` ([x, y top, w, h], PDF points), scrolled into view. */
   mark?(k: number, boxes: [number, number, number, number][]): void;
+  /**
+   * The engine the project runs with: `ready` false, ⚡ Instant can't run it
+   * (yet); `needed` the engine a build error asked for, if any.
+   */
+  engine?(e: { engine: Engine; ready: boolean; needed?: Engine | null }): void;
   error(e: string): void;
   check?(r: { ok: boolean; ms: number; mismatch?: string }): void;
   mains?(names: string[], main: string | null): void;
@@ -150,6 +156,8 @@ export interface Options {
   checkEveryMs: number;
   /** Where files the project doesn't have come from (packages.ts; default: nowhere). */
   packages?: PackageSource;
+  /** The engine to run the project with, given its main file's text (default: pdfLaTeX). */
+  engine?: (main: string | undefined) => Engine;
   /** Schedules a flush (default: the next task). */
   schedule?: (f: () => void) => void;
   now?: () => number;
@@ -374,8 +382,16 @@ export class PreviewSession {
     // build: a cold build costs the format's load, ~0.7 s in wasm, and stops
     // at the first file it lacks)
     // (pdftex.map: every PDF-mode build reads it first)
+    const engine = this.o.engine?.(this.files[this.main]) ?? "pdflatex";
+    this.sink.engine?.({ engine, ready: ENGINES[engine].ready });
+    // (an engine ⚡ Instant doesn't run yet: nothing is built; the view says so and offers another)
+    if (!ENGINES[engine].ready) {
+      this.opened = false;
+      this.tr("engine", { engine, ready: false });
+      return;
+    }
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
-    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel });
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel, engine });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
     const latex = r.json.engine === "partex";

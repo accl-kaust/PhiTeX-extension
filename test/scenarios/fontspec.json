@@ -1,0 +1,1 @@
+{ "project": "test/scenarios/fontspec", "name": "fontspec", "steps": [ { "wait": 1500 }, { "shot": "card" } ] }

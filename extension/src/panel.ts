@@ -10,6 +10,7 @@
 
 import type { Draws, PageImage, Status } from "./session.ts";
 import type { PackageState } from "./packages.ts";
+import { ENGINES, errorNeeds, type Engine } from "./engines.ts";
 import { Viewer } from "./viewer.ts";
 
 /** How long a build may ship no page before the last good one is dimmed (typing through `{`). */
@@ -50,6 +51,8 @@ export interface PanelEvents {
   onGoto(file: string, line: number): void;
   /** A double-click on page `k` at (x, y), PDF points from its top left: to the source. */
   onSyncSource?(k: number, x: number, y: number): void;
+  /** Run this project with engine `e` from now on (the card's buttons). */
+  onEngine?(e: Engine): void;
   /** The editor to `file`'s [from, to) (UTF-16 offsets). */
   onGotoRange?(file: string, from: number, to: number): void;
   /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
@@ -366,6 +369,8 @@ footer .msg.err { color: var(--danger); }
 .win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
 .slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); }
+.load .btns { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.load .btns .btn { cursor: pointer; padding: 4px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
 .slot .mark { position: absolute; background: rgba(255, 213, 0, .45); outline: 1px solid rgba(214, 160, 0, .7); border-radius: 2px; pointer-events: none; transition: opacity 1.2s; }
 .slot .mark.fade { opacity: 0; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
@@ -684,18 +689,57 @@ export class Panel {
    * "Typesetting…" (a stopped job's PDF is unfinished: no page to draw).
    */
   private stopped(): boolean {
+    if (this.engineNow && !this.engineNow.ready) return this.engineCard(this.engineNow.engine, null);
     if (this.last || this.pkgBusy) return false;
     const e = this.lastStatus?.diagnostics?.find((d) => d.severity === "error");
     if (!e) return false;
+    // (fontspec, unicode-math, polyglossia: a XeLaTeX/LuaLaTeX project, which pdfTeX can't run)
+    const needed = errorNeeds(e.message);
+    if (needed) return this.engineCard(needed, e.message);
     const empty = this.$("#empty");
     empty.innerHTML = `<div class="load"><h3></h3><div class="count"></div><div class="note"></div></div>`;
-    // (fontspec, unicode-math, polyglossia: a XeLaTeX/LuaLaTeX project, which pdfTeX can't run)
-    const engine = /requires either XeTeX or|XeTeX or LuaTeX|(fontspec|unicode-math|polyglossia)\b.*(XeTeX|LuaTeX)/i.test(e.message);
-    empty.querySelector("h3")!.textContent = engine ? "This project needs XeLaTeX or LuaLaTeX" : "The build stopped before a page could be shown";
+    empty.querySelector("h3")!.textContent = "The build stopped before a page could be shown";
     empty.querySelector(".count")!.textContent = e.message + (e.file && e.line ? ` (${e.file}:${e.line})` : "");
-    empty.querySelector(".note")!.textContent = engine
-      ? "⚡ Instant runs pdfLaTeX only, and this document loads a package (fontspec, for system fonts) that needs another engine. Use Overleaf's PDF for it."
-      : "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    empty.querySelector(".note")!.textContent = "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    empty.style.display = "";
+    return true;
+  }
+
+  /** The engine the session runs, as it last said. */
+  private engineNow?: { engine: Engine; ready: boolean };
+
+  engine(e: { engine: Engine; ready: boolean }): void {
+    this.engineNow = e;
+    if (!e.ready) this.stopped();
+    else if (this.$("#empty").querySelector(".engine")) this.$("#empty").style.display = "none";
+  }
+
+  /**
+   * The project needs `want` (its preamble, or `error`, a build that
+   * stopped, says so): which engine to run it with, as buttons.
+   */
+  private engineCard(want: Engine, error: string | null): boolean {
+    const empty = this.$("#empty");
+    const ready = ENGINES[want].ready;
+    empty.innerHTML = `<div class="load engine"><h3></h3><div class="count"></div><div class="note"></div><div class="btns"></div></div>`;
+    empty.querySelector("h3")!.textContent = error
+      ? `This project needs ${want === "lualatex" ? "LuaLaTeX" : "XeLaTeX or LuaLaTeX"}`
+      : `This project runs with ${ENGINES[want].label}`;
+    empty.querySelector(".count")!.textContent = error ?? "Its preamble loads a package that pdfLaTeX can't run (fontspec, unicode-math, polyglossia, …), or the engine was chosen for it.";
+    empty.querySelector(".note")!.textContent = ready
+      ? `Run it with ${ENGINES[want].label}?`
+      : `⚡ Instant doesn't run ${ENGINES[want].label} yet: only pdfLaTeX. Use Overleaf's PDF for it, or try pdfLaTeX if the project can do without those packages.`;
+    const btns = empty.querySelector(".btns")!;
+    // (a build that stopped: the engines it asks for; running one already: back to pdfLaTeX)
+    const offer: Engine[] = this.engineNow?.engine === want ? ["pdflatex"] : want === "xelatex" ? ["xelatex", "lualatex"] : [want];
+    for (const e of offer) {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = e === "pdflatex" ? "Try pdfLaTeX anyway" : `Use ${ENGINES[e].label}${ENGINES[e].ready ? "" : " (coming)"}`;
+      b.title = e === "pdflatex" ? "For this project: pdfLaTeX, whatever its preamble loads" : `For this project from now on (Settings → Engine for every project)`;
+      b.onclick = () => this.ev.onEngine?.(e);
+      btns.append(b);
+    }
     empty.style.display = "";
     return true;
   }

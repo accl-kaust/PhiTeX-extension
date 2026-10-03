@@ -973,6 +973,65 @@ mod abi {
         static NEXT: RefCell<u32> = const { RefCell::new(1) };
         static OUT: RefCell<Vec<u8>> = RefCell::default();
         static LAST: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+        /// Page drawers (`ph_draw_*`), by the host's slot: a PDF and its
+        /// pages' draw lists, apart from any session, so that a second
+        /// instance (the extension's draw worker) draws while this one builds.
+        static DRAWERS: RefCell<HashMap<u32, Drawer>> = RefCell::default();
+    }
+
+    #[derive(Default)]
+    struct Drawer {
+        pdf: Vec<u8>,
+        hashes: Vec<u64>,
+        /// Draw lists by page hash: a page unchanged in a new PDF is not drawn again.
+        draws: HashMap<u64, String>,
+        fonts: pdfdraw::Fonts,
+    }
+
+    /// Give drawer `slot` a new PDF (the input). Returns its page count; the
+    /// draw lists of pages it still has (by hash) are kept.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn ph_draw_set(slot: u32, ptr: *const u8, len: usize) -> u32 {
+        let pdf = unsafe { input(ptr, len) }.to_vec();
+        DRAWERS.with_borrow_mut(|m| {
+            let d = m.entry(slot).or_default();
+            d.hashes = pdfdraw::hashes(&pdf);
+            let keep: std::collections::HashSet<u64> = d.hashes.iter().copied().collect();
+            d.draws.retain(|h, _| keep.contains(h));
+            d.pdf = pdf;
+            u32::try_from(d.hashes.len()).unwrap_or(0)
+        })
+    }
+
+    /// Page `k` of drawer `slot`: out, its draw list (JSON); returns 1 if it
+    /// was drawn now, 2 if it was kept from before, 0 if there is no page `k`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_draw_page(slot: u32, k: u32) -> u32 {
+        let (r, o) = DRAWERS.with_borrow_mut(|m| {
+            let Some(d) = m.get_mut(&slot) else { return (0, Vec::new()) };
+            let Some(&h) = d.hashes.get(k as usize) else { return (0, Vec::new()) };
+            if let Some(j) = d.draws.get(&h) {
+                return (2, j.clone().into_bytes());
+            }
+            let Some(j) = pdfdraw::page(&d.pdf, k as usize, &mut d.fonts) else { return (0, Vec::new()) };
+            d.draws.insert(h, j.clone());
+            (1, j.into_bytes())
+        });
+        out(o);
+        r
+    }
+
+    /// Page `k`'s hash in drawer `slot`, as `ph_pages` gives it (out, text).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_draw_hash(slot: u32, k: u32) {
+        let h = DRAWERS.with_borrow(|m| m.get(&slot).and_then(|d| d.hashes.get(k as usize).copied()));
+        out(h.map(|h| format!("{h:016x}").into_bytes()).unwrap_or_default());
+    }
+
+    /// Drop drawer `slot` (its tab went away).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_draw_drop(slot: u32) {
+        DRAWERS.with_borrow_mut(|m| m.remove(&slot));
     }
 
     struct Reader<'a>(&'a [u8]);

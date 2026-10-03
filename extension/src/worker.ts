@@ -74,6 +74,8 @@ class Exit extends Error {}
  */
 let shelfIndex: Map<string, string[]> | undefined;
 let bundledNames: Set<string> | undefined;
+/** Shelf packs the extension ships (packs/: the ones most documents load), read from it, not Shelf. */
+let bundledPacks = new Set<string>();
 let fetched: Uint8Array | undefined;
 const SHELF_P = SHELF + "p/";
 
@@ -88,6 +90,8 @@ async function loadShelf(): Promise<void> {
   }
   const names = await (await fetch(new URL("../texmf/names.txt", import.meta.url))).text();
   bundledNames = new Set(names.split("\n").filter(Boolean));
+  const packs = await fetch(new URL("../packs/list.txt", import.meta.url)).then((r) => (r.ok ? r.text() : ""), () => "");
+  bundledPacks = new Set(packs.split("\n").filter(Boolean));
   shelfIndex = m;
 }
 
@@ -132,8 +136,9 @@ function shelfImports(mem: () => WebAssembly.Memory) {
         }
       } else {
         for (const id of shelfIndex?.get(name) ?? []) {
-          (self as unknown as Worker).postMessage({ fetching: id, name });
-          const b = getSync(SHELF_P + encodeURIComponent(id) + ".pack");
+          const here = bundledPacks.has(id);
+          if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
+          const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : SHELF_P + encodeURIComponent(id) + ".pack");
           if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
         }
       }

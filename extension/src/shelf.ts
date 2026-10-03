@@ -94,11 +94,17 @@ function unpack(b: Uint8Array): [string, Uint8Array][] {
 const packs = new Map<string, Promise<Map<string, Uint8Array>>>();
 /** Index rows: a name's pack, and the packs its loading reads (Shelf's trace). */
 type Row = { pack: string; deps: string[] };
+/** Shelf packs the extension ships (packs/list.txt): read from it, not Shelf. */
+const shipped = once(async () => {
+  const r = await fetch(chrome.runtime.getURL("packs/list.txt")).catch(() => null);
+  return new Set(r?.ok ? (await r.text()).split("\n").filter(Boolean) : []);
+});
+
 function pack(id: string): Promise<Map<string, Uint8Array>> {
   let p = packs.get(id);
   if (!p) {
     p = (async () => {
-      const url = SHELF + "p/" + encodeURIComponent(id) + ".pack";
+      const url = (await shipped()).has(id) ? chrome.runtime.getURL(`packs/${id}.pack`) : SHELF + "p/" + encodeURIComponent(id) + ".pack";
       const get = async (cache: RequestCache) => {
         const r = await fetch(url, { cache });
         return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();

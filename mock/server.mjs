@@ -88,7 +88,7 @@ function compile() {
     for (const [p, b] of files) put(p, b);
     const main = [...docs.values()].find((d) => /\\documentclass/.test(d.text))?.path ?? "main.tex";
     const t = Date.now();
-    execFile("latexmk", ["-pdf", "-interaction=nonstopmode", "-jobname=output", main], { cwd: OUT, timeout: 120_000 }, () =>
+    execFile("latexmk", ["-pdf", "-f", "-g", "-interaction=nonstopmode", "-jobname=output", main], { cwd: OUT, timeout: 120_000 }, () =>
       res({ ok: fs.existsSync(path.join(OUT, "output.pdf")), ms: Date.now() - t }),
     );
   });

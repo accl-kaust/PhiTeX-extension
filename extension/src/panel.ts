@@ -689,9 +689,13 @@ export class Panel {
     if (!e) return false;
     const empty = this.$("#empty");
     empty.innerHTML = `<div class="load"><h3></h3><div class="count"></div><div class="note"></div></div>`;
-    empty.querySelector("h3")!.textContent = "The build stopped before a page could be shown";
+    // (fontspec, unicode-math, polyglossia: a XeLaTeX/LuaLaTeX project, which pdfTeX can't run)
+    const engine = /requires either XeTeX or|XeTeX or LuaTeX|(fontspec|unicode-math|polyglossia)\b.*(XeTeX|LuaTeX)/i.test(e.message);
+    empty.querySelector("h3")!.textContent = engine ? "This project needs XeLaTeX or LuaLaTeX" : "The build stopped before a page could be shown";
     empty.querySelector(".count")!.textContent = e.message + (e.file && e.line ? ` (${e.file}:${e.line})` : "");
-    empty.querySelector(".note")!.textContent = "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    empty.querySelector(".note")!.textContent = engine
+      ? "⚡ Instant runs pdfLaTeX only, and this document loads a package (fontspec, for system fonts) that needs another engine. Use Overleaf's PDF for it."
+      : "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
     empty.style.display = "";
     return true;
   }

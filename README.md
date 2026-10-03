@@ -102,6 +102,9 @@ Permissions:
 It is experimental. When the ⚡ Instant page and Overleaf's PDF disagree,
 Overleaf's is right.
 
+- **pdfLaTeX only**: projects set to XeLaTeX or LuaLaTeX (those that load
+  `fontspec`, `unicode-math` or `polyglossia`) can't be previewed; the card
+  says so.
 - **Images**: PDF and JPEG figures work. PNG figures don't yet; the
   diagnostics say so.
 - **Some packages and fonts aren't fully supported yet.** One example is

@@ -1,6 +1,6 @@
 // A page's draw list v2 (core-partex's pdfdraw: the PDF pdfTeX wrote, read
 // back) drawn as SVG: the glyphs from the PDF's own embedded fonts (their
-// outlines, `<defs>` once a page, a `<use>` each, as pdf.js draws them), the
+// outlines, in the view's one glyph store, a `<use>` each, as pdf.js draws them), the
 // text over them invisible (for selecting and finding), and a `<path>` per
 // painted path (TikZ). A font with no outlines (not embedded) is drawn as
 // text in Latin Modern (bundled OpenType, the GUST Font License). Redrawn by parts: each element is keyed by its own
@@ -63,17 +63,9 @@ export function elements(d: Draws2): string[] {
   const out: string[] = [];
   for (const [d_, fill, stroke, w] of d.p)
     out.push(`<path d="${d_}" fill="${fill ?? "none"}" stroke="${stroke ?? "none"}" stroke-width="${w}"/>`);
-  // (glyph ids: the font's name and the code, the same on every page)
+  // (glyph ids: the font's name and the code, the same on every page; the
+  // outlines themselves live in the view's one glyph store, see `glyphs`)
   const gid = (fr: number, c: number) => `g${d.F?.[fr] ?? fr}_${c}`;
-  if (d.g && Object.keys(d.g).length)
-    out.push(
-      `<defs>${Object.entries(d.g)
-        .map(([k, p]) => {
-          const [fr, c] = k.split(":");
-          return `<path id="${gid(+fr, +c)}" d="${p}"/>`;
-        })
-        .join("")}</defs>`,
-    );
   for (const r of d.t) {
     if (r[0] === -1) {
       const [, size, y, xs, , fr, codes] = r as [-1, number, number, string, "", number, number[]];
@@ -89,6 +81,35 @@ export function elements(d: Draws2): string[] {
 }
 
 type Keyed = Element & { __k?: string };
+
+/**
+ * The view's glyph store: one hidden svg's <defs> in the page's root (the
+ * shadow root, where `<use href>` finds ids), each outline added once, the
+ * first time a page brings it; never parsed again.
+ */
+function glyphs(el: HTMLElement, d: Draws2): void {
+  if (!d.g) return;
+  const root = el.getRootNode() as Document | ShadowRoot;
+  let defs: Element | null = root.getElementById?.("phx-glyphs") ?? null;
+  if (!defs) {
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("style", "position:absolute;width:0;height:0;overflow:hidden");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = `<defs id="phx-glyphs"></defs>`;
+    (root instanceof Document ? root.body : root).appendChild(svg);
+    defs = svg.firstElementChild!;
+  }
+  const have = ((defs as Element & { __ids?: Set<string> }).__ids ??= new Set());
+  let fresh = "";
+  for (const [k, p] of Object.entries(d.g)) {
+    const [fr, c] = k.split(":");
+    const id = `g${d.F?.[+fr] ?? fr}_${c}`;
+    if (have.has(id)) continue;
+    have.add(id);
+    fresh += `<path id="${id}" d="${p}"/>`;
+  }
+  if (fresh) defs!.insertAdjacentHTML("beforeend", fresh);
+}
 
 /**
  * Draw `d` into `el` at `w`×`h` CSS pixels: the svg kept if there is one,
@@ -108,6 +129,7 @@ export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
   const paper = svg.querySelector("rect.paper")!;
   paper.setAttribute("width", String(d.w));
   paper.setAttribute("height", String(d.h));
+  glyphs(el, d);
   const g = svg.querySelector("g.c")!;
   const keys = elements(d);
   const old = new Map<string, Keyed[]>();
@@ -127,5 +149,14 @@ export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
     made.push(...(Array.from(tmp.children) as Keyed[]));
     made.forEach((m, i) => (m.__k = fresh[i]));
   }
-  g.replaceChildren(...slots.map((s) => (typeof s === "number" ? made[s] : s)));
+  // (only what changed is touched: the gone dropped, the new inserted where
+  // they go, the kept left where they are)
+  const want = slots.map((s) => (typeof s === "number" ? made[s] : s));
+  const keep = new Set(want);
+  for (const c of Array.from(g.children)) if (!keep.has(c as Keyed)) c.remove();
+  let at = g.firstChild;
+  for (const n of want) {
+    if (at === n) at = at.nextSibling;
+    else g.insertBefore(n, at);
+  }
 }

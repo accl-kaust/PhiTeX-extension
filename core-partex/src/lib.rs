@@ -292,7 +292,11 @@ pub struct Session {
     pub pdf: Vec<u8>,
     shipped: usize,
     /// Its pages' draw lists and hashes (pdfdraw), made when first asked for.
-    pdf_pages: Option<Vec<(String, u64)>>,
+    pdf_hashes: Option<Vec<u64>>,
+    /// Pages drawn since the last build, by number.
+    pdf_draws: HashMap<usize, String>,
+    /// Font programs parsed, kept across builds.
+    pdf_fonts: pdfdraw::Fonts,
     pages: Vec<dvi::DviPage>,
     fonts: BTreeMap<i32, draws::Font>,
     term: Vec<u8>,
@@ -445,7 +449,9 @@ impl Session {
             dvi: Vec::new(),
             pdf: Vec::new(),
             shipped: 0,
-            pdf_pages: None,
+            pdf_hashes: None,
+            pdf_draws: HashMap::new(),
+            pdf_fonts: pdfdraw::Fonts::new(),
             pages: Vec::new(),
             fonts: BTreeMap::new(),
             term: Vec::new(),
@@ -664,12 +670,13 @@ impl Session {
         let (h, host) = run(host, texlive_params(false), self.command().as_bytes());
         self.history = h;
         self.term = host.term.clone();
-        self.pdf_pages = None;
+        self.pdf_hashes = None;
+        self.pdf_draws.clear();
         self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
         self.missing.sort();
         self.missing.dedup();
         self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
-        self.shipped = self.pdf_pages().len();
+        self.shipped = self.pdf_hashes().len();
         self.how = "plain: the first paint".into();
     }
 
@@ -698,7 +705,8 @@ impl Session {
                 let pdf = l.opened.iter().rev().find(|(_, n, _)| n.ends_with(b".pdf")).and_then(|(id, ..)| l.files.get(&id.0));
                 self.pdf = pdf.cloned().unwrap_or_default();
                 self.shipped = l.pages.len();
-                self.pdf_pages = None;
+                self.pdf_hashes = None;
+        self.pdf_draws.clear();
                 let mut term = h.term.clone();
                 term.extend_from_slice(&l.term);
                 self.term = term;
@@ -790,7 +798,7 @@ impl Session {
     pub fn page_hashes(&mut self) -> Vec<u64> {
         self.build();
         if !self.pdf.is_empty() {
-            return self.pdf_pages().iter().map(|(_, h)| *h).collect();
+            return self.pdf_hashes().to_vec();
         }
         self.pages
             .iter()
@@ -804,18 +812,24 @@ impl Session {
             .collect()
     }
 
-    /// The PDF's pages as draw lists, with their contents' hashes.
-    fn pdf_pages(&mut self) -> &[(String, u64)] {
-        if self.pdf_pages.is_none() {
-            self.pdf_pages = Some(pdfdraw::pages(&self.pdf));
+    /// The PDF's pages' hashes (cheap: no drawing).
+    fn pdf_hashes(&mut self) -> &[u64] {
+        if self.pdf_hashes.is_none() {
+            self.pdf_hashes = Some(pdfdraw::hashes(&self.pdf));
         }
-        self.pdf_pages.as_deref().unwrap_or(&[])
+        self.pdf_hashes.as_deref().unwrap_or(&[])
     }
 
     pub fn draws(&mut self, page: usize) -> Option<String> {
         self.build();
         if !self.pdf.is_empty() {
-            return self.pdf_pages().get(page).map(|(d, _)| d.clone());
+            // (only the page asked for is drawn, its fonts parsed once per session)
+            if let Some(d) = self.pdf_draws.get(&page) {
+                return Some(d.clone());
+            }
+            let d = pdfdraw::page(&self.pdf, page, &mut self.pdf_fonts)?;
+            self.pdf_draws.insert(page, d.clone());
+            return Some(d);
         }
         let p = self.pages.get(page)?;
         Some(draws::json(&p.draws, &self.fonts, &p.specials, draws::ONE_INCH))

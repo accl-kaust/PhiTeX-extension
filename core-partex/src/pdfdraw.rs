@@ -499,13 +499,65 @@ fn r2(x: f64) -> f64 {
 }
 
 /// Each page's draw list (JSON, see the module) and a hash of its content.
+/// Parsed font programs, by a hash of the font file's bytes: kept across
+/// builds (a new PDF's fonts are mostly the last one's), so drawing a page
+/// parses only fonts it has not seen.
+pub type Fonts = HashMap<u64, Option<std::rc::Rc<crate::type1::Type1>>>;
+
+/// Each page's hash (its content and size): cheap, no drawing.
+pub fn hashes(pdf: &[u8]) -> Vec<u64> {
+    let Some(p) = Pdf::open(pdf) else { return Vec::new() };
+    p.pages().iter().map(|page| page_content(&p, page).1).collect()
+}
+
+/// Page `k`'s draw list (v2), its fonts parsed through `fonts`.
+pub fn page(pdf: &[u8], k: usize, fonts: &mut Fonts) -> Option<String> {
+    let p = Pdf::open(pdf)?;
+    let page = p.pages().into_iter().nth(k)?;
+    Some(draw(&p, &page, fonts))
+}
+
+/// Every page's draw list and hash (tools).
 pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
     let Some(p) = Pdf::open(pdf) else { return Vec::new() };
+    let mut fonts = Fonts::new();
+    p.pages().iter().map(|page| (draw(&p, page, &mut fonts), page_content(&p, page).1)).collect()
+}
+
+/// A page's content (its streams joined) and hash (with its size).
+fn page_content(p: &Pdf, page: &O) -> (Vec<u8>, u64) {
+    let media = match page.get("MediaBox") {
+        Some(O::Arr(a)) if a.len() == 4 => a.iter().map(|o| o.num().unwrap_or(0.0)).collect::<Vec<_>>(),
+        _ => vec![0.0, 0.0, 612.0, 792.0],
+    };
+    let (w, h) = (media[2] - media[0], media[3] - media[1]);
+    let mut content = Vec::new();
+    match page.get("Contents") {
+        Some(O::Arr(a)) => {
+            for c in a {
+                if let Some(s) = p.stream(c) {
+                    content.extend_from_slice(s);
+                    content.push(b'\n');
+                }
+            }
+        }
+        Some(c) => {
+            if let Some(s) = p.stream(c) {
+                content.extend_from_slice(s);
+            }
+        }
+        None => {}
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hs = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hs);
+    (w as i64, h as i64).hash(&mut hs);
+    (content, hs.finish())
+}
+
+fn draw(p: &Pdf, page: &O, programs: &mut Fonts) -> String {
     let mut keys: Vec<&'static str> = Vec::new();
-    let mut out = Vec::new();
-    // (each embedded font parsed once for the whole PDF, by its object)
-    let mut programs: HashMap<u32, Option<std::rc::Rc<crate::type1::Type1>>> = HashMap::new();
-    for page in p.pages() {
+    {
         let mut frefs: Vec<String> = Vec::new();
         let media = match page.get("MediaBox") {
             Some(O::Arr(a)) if a.len() == 4 => a.iter().map(|o| o.num().unwrap_or(0.0)).collect::<Vec<_>>(),
@@ -534,7 +586,7 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
                 };
                 let uni = f.get("ToUnicode").and_then(|t| p.stream(t)).map(cmap).unwrap_or_default();
                 let ex = base.to_ascii_uppercase().contains("CMEX");
-                let outlines = font_program(&p, &f, &mut programs).map(|t1| {
+                let outlines = font_program(p, &f, programs).map(|t1| {
                     let mut names = t1.encoding.clone();
                     if let Some(e @ O::Dict(_)) = f.get("Encoding").map(|e| p.resolve(e))
                         && let Some(O::Arr(d)) = e.get("Differences").map(|d| p.resolve(d))
@@ -561,30 +613,7 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
             }
         }
         // the content
-        let mut content = Vec::new();
-        match page.get("Contents") {
-            Some(O::Arr(a)) => {
-                for c in a {
-                    if let Some(s) = p.stream(c) {
-                        content.extend_from_slice(s);
-                        content.push(b'\n');
-                    }
-                }
-            }
-            Some(c) => {
-                if let Some(s) = p.stream(c) {
-                    content.extend_from_slice(s);
-                }
-            }
-            None => {}
-        }
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut hs = std::collections::hash_map::DefaultHasher::new();
-            content.hash(&mut hs);
-            (w as i64, h as i64).hash(&mut hs);
-            hs.finish()
-        };
+        let (content, _) = page_content(p, page);
         let mut used: std::collections::BTreeSet<(usize, u8)> = std::collections::BTreeSet::new();
         let (t, paths) = interpret(&content, &fonts, h, &mut used);
         let f: Vec<String> = keys.iter().map(|k| esc(k)).collect();
@@ -597,12 +626,8 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
             let _ = write!(g, "{}\"{fr}:{c}\":{}", if g.is_empty() { "" } else { "," }, esc(&d));
         }
         let fr: Vec<String> = frefs.iter().map(|b| esc(&ident(b))).collect();
-        out.push((
-            format!("{{\"v\":2,\"w\":{},\"h\":{},\"f\":[{}],\"F\":[{}],\"g\":{{{g}}},\"t\":[{t}],\"p\":[{paths}],\"r\":[]}}", r2(w), r2(h), f.join(","), fr.join(",")),
-            hash,
-        ));
+        format!("{{\"v\":2,\"w\":{},\"h\":{},\"f\":[{}],\"F\":[{}],\"g\":{{{g}}},\"t\":[{t}],\"p\":[{paths}],\"r\":[]}}", r2(w), r2(h), f.join(","), fr.join(","))
     }
-    out
 }
 
 /// A content stream's text runs and paths, as JSON array bodies.
@@ -890,10 +915,18 @@ const CMEX10: [(f64, f64); 128] = [(0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.
 
 /// The embedded Type 1 program of font dictionary `f` (`/FontDescriptor`'s
 /// `/FontFile`), parsed once per object.
-fn font_program(p: &Pdf, f: &O, cache: &mut HashMap<u32, Option<std::rc::Rc<crate::type1::Type1>>>) -> Option<std::rc::Rc<crate::type1::Type1>> {
+fn font_program(p: &Pdf, f: &O, cache: &mut Fonts) -> Option<std::rc::Rc<crate::type1::Type1>> {
     let fd = p.resolve(f.get("FontDescriptor")?);
     let O::Ref(r) = fd.get("FontFile")? else { return None };
-    if let Some(t) = cache.get(r) {
+    let b = p.stream(&O::Ref(*r))?;
+    // (by the program's bytes: the same font in the next build's PDF, another object number)
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut hs = std::collections::hash_map::DefaultHasher::new();
+        b.hash(&mut hs);
+        hs.finish()
+    };
+    if let Some(t) = cache.get(&key) {
         return t.clone();
     }
     let t = (|| {
@@ -902,10 +935,9 @@ fn font_program(p: &Pdf, f: &O, cache: &mut HashMap<u32, Option<std::rc::Rc<crat
             Some(O::Ref(x)) => p.obj(*x)?.0.num()?,
             o => o?.num()?,
         } as usize;
-        let b = p.stream(&O::Ref(*r))?;
         crate::type1::Type1::parse(b, len1).map(std::rc::Rc::new)
     })();
-    cache.insert(*r, t.clone());
+    cache.insert(key, t.clone());
     t
 }
 

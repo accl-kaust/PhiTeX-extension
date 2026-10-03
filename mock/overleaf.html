@@ -196,7 +196,8 @@ window.mockEditor = {
   open: (path) => openDoc(docs.find((d) => d.path === path)),
   text: () => view.state.doc.toString(),
 };
-await openDoc(docs.find((d) => d.path === "main.tex"));
+// (the main file: main.tex, else the doc with \documentclass)
+await openDoc(docs.find((d) => d.path === "main.tex") ?? docs.find((d) => /\\documentclass/.test(d.text)) ?? docs[0]);
 document.getElementById("info").textContent = "Mock: edits kept in the mock server's memory.";
 </script>
 </body>

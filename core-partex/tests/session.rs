@@ -152,27 +152,36 @@ fn pdf_whole_after_edit() {
     let mut files = BTreeMap::new();
     files.insert("main.tex".to_string(), std::fs::read_to_string(Path::new(&dir).join("main.tex")).unwrap());
     let mut s = Session::open(files, "main.tex");
+    // (PHITEX_FLAT: a flat TeX Live, as if the host had it all)
+    let flat = std::env::var("PHITEX_FLAT").ok();
     let mut asked = std::collections::BTreeSet::new();
-    for _ in 0..30 {
+    for _ in 0..400 {
         let st = s.status();
         let want: Vec<String> = st.missing.iter().filter(|n| asked.insert((*n).clone())).cloned().collect();
         if want.is_empty() {
             break;
         }
         for n in want {
-            if let Some(b) = find(&n) {
+            let b = flat.as_ref().and_then(|d| std::fs::read(Path::new(d).join(&n)).ok()).or_else(|| find(&n));
+            if let Some(b) = b {
                 give(&mut s, &n, b);
             }
         }
+        // (as the extension: after discovery's names are given, go)
+        s.go();
     }
     let st = s.status();
     eprintln!("pages {} missing {:?} {:?}", st.pages, st.missing, st.error);
-    s.prepare();
+    // (idle, as the worker: the SSA program, then the rebuilds prepared)
+    while s.prepare() {}
     let tail = |p: &[u8]| String::from_utf8_lossy(&p[p.len().saturating_sub(40)..]).into_owned();
     eprintln!("{}: {} bytes, ends {:?}", s.how, s.pdf.len(), tail(&s.pdf));
     let at = s.text("main.tex").unwrap().find("Every writer").unwrap();
     s.edit_file("main.tex", at..at, "Hello. ").unwrap();
     s.status();
     eprintln!("{}: {} bytes, ends {:?}", s.how.lines().next().unwrap(), s.pdf.len(), tail(&s.pdf));
+    for l in s.builds_log() {
+        eprintln!("log: {}", &l[..l.len().min(120)]);
+    }
     assert!(tail(&s.pdf).contains("%%EOF"));
 }

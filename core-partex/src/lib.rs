@@ -476,6 +476,11 @@ impl Session {
     }
 
     /// The host fetched what the discovery pass asked for: build.
+    /// What each build was (the `log` op's first part).
+    pub fn builds_log(&self) -> &[String] {
+        &self.history_log
+    }
+
     pub fn go(&mut self) {
         self.hold = false;
     }

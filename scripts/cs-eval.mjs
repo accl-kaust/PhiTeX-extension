@@ -18,5 +18,5 @@ await new Promise((r) => setTimeout(r, 300));
 const ctx = contexts.find((c) => c.auxData?.type === "isolated" && c.origin.startsWith("chrome-extension://"));
 if (!ctx) { console.error("no content-script world", contexts.map((c) => c.name)); process.exit(1); }
 const r = await call("Runtime.evaluate", { expression: expr, contextId: ctx.id, awaitPromise: true, returnByValue: true });
-console.log(JSON.stringify(r.result?.result?.value ?? r.result));
-process.exit(0);
+// (exit once stdout has drained: process.exit cuts a long pipe write short)
+process.stdout.write(JSON.stringify(r.result?.result?.value ?? r.result) + "\n", () => process.exit(0));

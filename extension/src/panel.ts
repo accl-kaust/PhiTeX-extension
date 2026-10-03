@@ -631,8 +631,29 @@ export class Panel {
     };
   }
 
+  /** Packages still on their way (the loading card's), so a stop reads as one only once they are in. */
+  private pkgBusy = false;
+
+  /**
+   * Before any page: a build that stopped at an error says so, in place of
+   * "Typesetting…" (a stopped job's PDF is unfinished: no page to draw).
+   */
+  private stopped(): boolean {
+    if (this.last || this.pkgBusy) return false;
+    const e = this.lastStatus?.diagnostics?.find((d) => d.severity === "error");
+    if (!e) return false;
+    const empty = this.$("#empty");
+    empty.innerHTML = `<div class="load"><h3></h3><div class="count"></div><div class="note"></div></div>`;
+    empty.querySelector("h3")!.textContent = "The build stopped before a page could be shown";
+    empty.querySelector(".count")!.textContent = e.message + (e.file && e.line ? ` (${e.file}:${e.line})` : "");
+    empty.querySelector(".note")!.textContent = "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    empty.style.display = "";
+    return true;
+  }
+
   status(s: Status): void {
     this.lastStatus = s;
+    queueMicrotask(() => this.stopped());
     const diags = s.diagnostics ?? [];
     const worst = diags[0]?.severity;
     const chip = this.$("#chip");
@@ -732,11 +753,13 @@ export class Panel {
         // (done: the build's own state says the rest; a card left at "163 of 164" would not.
         // Files not found are optional ones LaTeX only checks for (amsart.cfg, …): the
         // diagnostics list them, and an error says when one was needed)
-        empty.textContent = "Typesetting…";
+        this.pkgBusy = false;
+        if (!this.stopped()) empty.textContent = "Typesetting…";
         return;
       }
       const recent = [...(p.done ?? []).slice(-10).map((n) => [n, "ok"]), ...p.loading.slice(0, 8).map((n) => [n, "ing"])];
       const fetch = p.loading.length > 0;
+      this.pkgBusy = true;
       empty.innerHTML =
         `<div class="load"><div class="steps"><span class="ok">Project read</span><i></i><span class="${fetch ? "now" : "ok"}">Packages</span><i></i><span class="${fetch ? "" : "now"}">Typesetting</span></div>` +
         `<h3></h3><div class="bar${fetch ? "" : " busy"}"><i style="width:${pct}%"></i></div>` +

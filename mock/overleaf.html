@@ -57,8 +57,8 @@
   <div class="cm-editor"><textarea class="cm-content" spellcheck="false"></textarea></div>
 </main>
 <div class="pdf full-size">
-  <div class="toolbar-pdf"><div class="toolbar-pdf-left"><div class="compile-button-group"><button type="button" title="The mock has no compiler">Recompile</button></div></div><div class="toolbar-pdf-right"></div></div>
-  <div class="pdf-viewer">Overleaf's PDF (none in the mock): switch to ⚡ Instant</div>
+  <div class="toolbar-pdf"><div class="toolbar-pdf-left"><div class="compile-button-group"><button type="button" id="recompile" title="Compile with the local pdflatex (latexmk), as Overleaf compiles">Recompile</button></div></div><div class="toolbar-pdf-right"></div></div>
+  <div class="pdf-viewer" id="olpdf">Overleaf's PDF: press Recompile (the local pdflatex)</div>
 </div>
 <script type="module">
 // A mock of CodeMirror 6's EditorView, as far as the extension uses it:
@@ -159,6 +159,27 @@ ta.addEventListener("input", () => {
   prev = s;
 });
 setInterval(save, 2000);
+
+// Recompile: the local pdflatex, as Overleaf's compile; its PDF in the pane,
+// and its download link where Overleaf's is (the extension's ▾ menu reads it)
+document.getElementById("recompile").addEventListener("click", async () => {
+  await save();
+  const v = document.getElementById("olpdf");
+  v.textContent = "Compiling (pdflatex)…";
+  const r = await (await fetch("/project/mock/compile", { method: "POST" })).json();
+  v.innerHTML = r.ok ? `<iframe title="Overleaf's PDF" style="width:100%;height:100%;border:0" src="/project/mock/output/output.pdf?${Date.now()}"></iframe>` : `pdflatex failed (${r.ms} ms): <a href="/project/mock/output/output.log" target="_blank">log</a>`;
+  document.getElementById("oldl")?.remove();
+  if (r.ok) {
+    const a = document.createElement("a");
+    a.id = "oldl";
+    a.href = "/project/mock/output/output.pdf";
+    a.setAttribute("aria-label", "Download PDF");
+    a.className = "btn btn-link pdf-toolbar-btn";
+    a.download = "output.pdf";
+    a.innerHTML = '<span class="material-symbols">download</span>';
+    document.querySelector(".toolbar-pdf-left").append(a);
+  }
+});
 
 document.getElementById("collab").onclick = () => {
   const n = view.state.doc.length;

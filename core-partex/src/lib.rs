@@ -301,6 +301,8 @@ pub struct Session {
     pub builds: u32,
     /// Each build: what changed before it and what it cost (the debug log).
     history_log: Vec<String>,
+    /// The last cold build's time (ms): a rebuild's deadline.
+    cold_ms: f64,
     /// The names changed since the last build (for the log).
     trigger: Vec<String>,
     /// `prepare_rebuilds` done (after the cold build, when idle).
@@ -452,6 +454,7 @@ impl Session {
             build_ms: 0.0,
             builds: 0,
             history_log: Vec::new(),
+            cold_ms: 0.0,
             trigger: Vec::new(),
             prepared: false,
             discovered: false,
@@ -554,6 +557,11 @@ impl Session {
             }
             // (PHITEX_REBUILD_LOG=1: the rebuild traced, its log on stderr)
             let trace = std::env::var("PHITEX_REBUILD_LOG").is_ok();
+            // (a rebuild may take as long as the last cold build took, then
+            // stops and the build goes cold: past that, starting over is
+            // cheaper, a preamble edit say; PHITEX_DEADLINE_MS overrides)
+            let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(self.cold_ms.max(300.0));
+            tex.tracker().deadline.set(Some((clock_ns, clock_ns() + (limit * 1e6) as u64)));
             let r = ssa::rebuild_trips(tex, trace, true, &mut trips);
             if trace {
                 for l in &r.log {
@@ -602,11 +610,11 @@ impl Session {
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
             self.history = s.history.max(r.history);
             self.how = format!("cold: {} commands", r.commands);
-            // (a rebuild past the commands of the whole job built cold stops,
-            // and the build goes cold: it would cost more than starting over,
-            // a preamble edit say; PHITEX_BUDGET overrides)
-            let budget = std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(r.commands.max(50_000));
-            tex.tracker().budget.set(budget);
+            self.cold_ms = ms(t.elapsed());
+            // (a command budget only by PHITEX_BUDGET: the deadline below is the measure)
+            if let Some(b) = std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()) {
+                tex.tracker().budget.set(b);
+            }
             self.prepared = false;
             self.tex = Some(tex);
         }
@@ -667,7 +675,11 @@ impl Session {
                 if !n.starts_with(&j) && !n.contains('/') {
                     a.borrow_mut().insert(n.to_string());
                 }
-                Some(Vec::new())
+                // (a binary file is not found, as it is: an empty font,
+                // virtual font or image is an error that stops the run, and
+                // TeX goes on without one; only input files read as empty)
+                let binary = [".vf", ".tfm", ".pfb", ".enc", ".map", ".png", ".pdf", ".jpg", ".jpeg", ".jbig2"].iter().any(|e| n.ends_with(e));
+                if binary { None } else { Some(Vec::new()) }
             }));
         } else if self.fallback_dir.is_some() {
             host.fallback = Some(Box::new(move |n: &[u8]| from_dir(std::str::from_utf8(n).ok()?)));
@@ -790,7 +802,9 @@ impl Session {
         let term = String::from_utf8_lossy(&self.term);
         let lines: Vec<&str> = term.lines().collect();
         let tail = lines[lines.len().saturating_sub(12)..].join("\n");
-        let error = first_error(&term);
+        // (the discovery pass, empty files for missing ones, is no job of the
+        // document's: its errors are none of the writer's)
+        let error = if self.hold { None } else { first_error(&term) };
         Status { pages: self.page_count(), history: self.history, missing: self.missing.clone(), tail, error }
     }
 
@@ -880,6 +894,12 @@ impl Session {
 #[must_use]
 pub fn pdf_mode() -> bool {
     !std::env::var("PHITEX_DVI").is_ok_and(|v| v == "1")
+}
+
+/// A monotonic clock in ns (the rebuild deadline's): since the first call.
+fn clock_ns() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// The clock, as the host's WASI shim gives it (UTC).

@@ -71,6 +71,31 @@ export interface CoreRes {
   error?: string;
 }
 
+/** A request, for the trace: its op and fields, texts by their length. */
+function traceReq(r: CoreReq): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (k === "op" || k === "id") continue;
+    o[k] = typeof v === "string" && v.length > 40 ? `${v.length} chars` : v && typeof v === "object" ? `${Object.keys(v).length} keys` : v;
+  }
+  return o;
+}
+/** A reply, for the trace: what the core said, briefly. */
+function traceRes(r: CoreRes): Record<string, unknown> {
+  const j = (r.json ?? {}) as Record<string, any>;
+  return {
+    ok: r.ok,
+    ...(r.error ? { error: r.error } : {}),
+    ...(typeof j.how === "string" ? { how: j.how.split("\n")[0].slice(0, 140) } : {}),
+    ...(j.pages !== undefined ? { pages: Array.isArray(j.pages) ? j.pages.length : j.pages } : {}),
+    ...(j.history !== undefined ? { history: j.history } : {}),
+    ...(Array.isArray(j.missing) && j.missing.length ? { missing: j.missing.length } : {}),
+    ...(j.error ? { texError: typeof j.error === "string" ? j.error : j.error.message } : {}),
+    ...(j.build_ms !== undefined ? { build_ms: Math.round(j.build_ms) } : {}),
+    ...(r.pdf ? { pdf: r.pdf.length } : {}),
+  };
+}
+
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
   /** Called when the core is lost (the session reopens). */
@@ -97,6 +122,8 @@ export interface PreviewSink {
   latency(summary: string, details?: string): void;
   /** Packages being downloaded (not the project's files: say so), and those not found. */
   packages?(p: PackageState): void;
+  /** A build is running (true) or none is (false): the view says so if it takes a while. */
+  busy?(on: boolean): void;
   /** A build is in flight. */
   busy?(on: boolean): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
@@ -179,6 +206,22 @@ export class PreviewSession {
   private core: CoreTransport;
   private sink: PreviewSink;
 
+  /**
+   * What happened, in order (dev: scripts/mock-run.mjs reads it): each core
+   * request and its reply, package fetches, layouts. A ring of the last 3000,
+   * times in ms since the session began; never document text, only sizes.
+   */
+  readonly trace: { t: number; k: string; d?: unknown }[] = [];
+  /** Core requests sent and not answered yet; of them, ones that may build. */
+  inflight = 0;
+  private building = 0;
+  private t0 = 0;
+  tr(k: string, d?: unknown): void {
+    this.t0 ||= this.now();
+    this.trace.push({ t: Math.round(this.now() - this.t0), k, d });
+    if (this.trace.length > 3000) this.trace.shift();
+  }
+
   constructor(host: EditorHost, core: CoreTransport, sink: PreviewSink, opts: Partial<Options> = {}) {
     this.host = host;
     // (a trap in the core, a panic, restarts its instance: every session it
@@ -186,7 +229,17 @@ export class PreviewSession {
     // since a panic a build always hits would loop)
     this.core = {
       request: async (r) => {
-        const res = await core.request(r);
+        const t0 = this.now();
+        this.tr(`→ ${r.op}`, traceReq(r));
+        this.inflight++;
+        // (the ops that may build: the view shows a build that takes a while)
+        const builds = r.op === "edit" || r.op === "go" || r.op === "status" || r.op === "open";
+        if (builds && this.building++ === 0) this.sink.busy?.(true);
+        const res = await core.request(r).finally(() => {
+          this.inflight--;
+          if (builds && --this.building === 0) this.sink.busy?.(false);
+        });
+        this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
         const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
         if (lost && this.opened && r.op !== "open") {
           this.opened = false;
@@ -374,8 +427,10 @@ export class PreviewSession {
     // fetched too, before the next build: the build stops at the first file
     // it lacks, so learning them one build at a time costs a build each)
     const got: (readonly [string, string | null])[] = [];
+    this.tr("packages: want", want);
     const fetchOne = async (n: string): Promise<void> => {
       const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      this.tr(t === null ? "package: none" : "package: got", n);
       got.push([n, t]);
       this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
       if (t !== null) {
@@ -484,6 +539,7 @@ export class PreviewSession {
     const r = await this.core.request({ op: "pages" });
     if (!r.ok || !r.json?.pages) return;
     const got: string[] = r.json.pages;
+    this.tr("layout", { pages: got.length, kept: Math.max(0, this.hashes.length - got.length) });
     // (a build that stopped at a file still on its way ships fewer pages than
     // the one before: the pages it didn't reach stay as they were drawn, not
     // dropped and drawn again a moment later, the flicker of every package round)

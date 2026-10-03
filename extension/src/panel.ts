@@ -295,9 +295,11 @@ footer .msg.err { color: var(--danger); }
 @keyframes sheet { from { opacity: 0; transform: translateY(-4px); } }
 .win.docked > .sum { display: none; }
 .win.docked .diags { max-height: 60%; }
-.pkgs { display: none; position: absolute; z-index: 3; left: 12px; right: 12px; top: 8px; padding: 6px 10px; font-size: 12px; border-radius: 6px;
-  background: var(--light); color: var(--fg2); border: 1px solid var(--divider); box-shadow: 0 2px 6px rgba(0,0,0,.15); }
-.pkgs.on { display: flex; gap: 6px; align-items: center; }
+.pkgs { display: none; position: absolute; z-index: 4; left: 50%; transform: translateX(-50%); top: 10px; max-width: calc(100% - 24px); padding: 8px 12px; font-size: 13px; border-radius: 8px;
+  background: var(--light); color: var(--fg); border: 1px solid var(--divider); border-left: 3px solid var(--accent); box-shadow: 0 4px 14px rgba(0,0,0,.28); }
+.pkgs.on { display: flex; gap: 8px; align-items: center; }
+.pkgs > span:not(.mini) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pkgs .mini.busy i { width: 35% !important; animation: phx-busy 1.1s ease-in-out infinite; }
 .pkgs .icon { color: var(--info); }
 /* the loading card: packages downloading, then the first build */
 .load { max-width: 360px; margin: 0 auto; text-align: left; color: var(--fg2-dark); }
@@ -327,7 +329,7 @@ footer .msg.err { color: var(--danger); }
 .load .alive { margin-top: 8px; font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .load .alive::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
 @media (prefers-reduced-motion: reduce) { .load .bar i, .load .steps span.now::before, .load .alive::before { animation: none !important; } }
-.pkgs .mini { flex: none; width: 60px; height: 4px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
+.pkgs .mini { flex: none; width: 80px; height: 4px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
 .pkgs .mini i { display: block; height: 100%; background: var(--accent); }
 .speedchip { display: none; position: absolute; right: 16px; bottom: 14px; z-index: 3; pointer-events: none; white-space: nowrap;
   height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
@@ -633,6 +635,40 @@ export class Panel {
     };
   }
 
+  /** What the strip over the page says: packages on their way, or a build that is taking a while. */
+  private pkgNow?: { names: string[]; done: number; total: number; pct: number; source: string };
+  private buildSince = 0;
+  private actTick: ReturnType<typeof setInterval> | undefined;
+
+  /** A build started (`on`) or ended: past 400 ms the strip says so, with its time. */
+  busy(on: boolean): void {
+    this.$("#chip").classList.toggle("busy", on);
+    this.buildSince = on ? this.buildSince || performance.now() : 0;
+    this.activity();
+  }
+
+  /** The strip over the page: never silent while the writer waits. */
+  private activity(): void {
+    const el = this.$("#pkgs");
+    const p = this.pkgNow;
+    const long = this.buildSince && performance.now() - this.buildSince > 400;
+    // (over a page on screen; before any page, the loading card says it all)
+    const on = (!!this.last || this.viewer.pages > 0) && (!!p || !!long);
+    el.classList.toggle("on", on);
+    if (on || this.buildSince) this.actTick ??= setInterval(() => this.activity(), 250);
+    else (clearInterval(this.actTick), (this.actTick = undefined));
+    if (!on) return;
+    if (p) {
+      const names = p.names.slice(0, 3).join(", ") + (p.names.length > 3 ? ` and ${p.names.length - 3} more` : "");
+      el.innerHTML = `${icon("download", 16)}<span></span><span class="mini"><i style="width:${p.pct}%"></i></span>`;
+      el.querySelector("span")!.textContent = `Fetching ${names} from ${p.source} (${p.done} of ${p.total})…`;
+    } else {
+      const s = (performance.now() - this.buildSince) / 1000;
+      el.innerHTML = `${icon("sync", 16)}<span></span><span class="mini busy"><i></i></span>`;
+      el.querySelector("span")!.textContent = `Typesetting… ${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+    }
+  }
+
   /** Packages still on their way (the loading card's), so a stop reads as one only once they are in. */
   private pkgBusy = false;
 
@@ -792,13 +828,8 @@ export class Panel {
         `From ${p.source} (fetched once, then kept in this browser). Only package names leave it, never your project's files.`;
       return;
     }
-    const el = this.$("#pkgs");
-    el.classList.toggle("on", p.loading.length > 0);
-    if (!p.loading.length) return;
-    const names = p.loading.slice(0, 3).join(", ") + (p.loading.length > 3 ? ` and ${p.loading.length - 3} more` : "");
-    el.innerHTML = `${icon("download", 16)}<span></span><span class="mini"><i style="width:${pct}%"></i></span>`;
-    el.querySelector("span")!.textContent =
-      `Downloading ${p.loading.length === 1 ? "a LaTeX package" : `${p.loading.length} LaTeX packages`} from ${p.source} (${done} of ${total}): ${names}.`;
+    this.pkgNow = p.loading.length ? { names: p.loading, done, total, pct, source: p.source } : undefined;
+    this.activity();
   }
 
   /** Keep the last good page when a build ships nothing (or not this page): dimmed, with why. */
@@ -964,10 +995,6 @@ export class Panel {
   latency(summary: string, details?: string): void {
     this.$("#lat").textContent = summary;
     if (details) this.$("#details").textContent = details;
-  }
-
-  busy(on: boolean): void {
-    this.$("#chip").classList.toggle("busy", on);
   }
 
   msg(t: string, err = false): void {

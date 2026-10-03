@@ -378,6 +378,8 @@ function handle(r: Req): Res {
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };
       core.ph_log(h);
       return { id: r.id, ok: true, json: { log: new TextDecoder().decode(outBytes()) } };
+    case "drawpdf":
+      return { id: r.id, ok: false, error: "drawpdf is the draw worker's" };
     case "origins":
       // (each glyph of page `page`, in stream order, with its source bytes)
       if (!core.ph_origins) return { id: r.id, ok: false, error: "this core keeps no origins" };

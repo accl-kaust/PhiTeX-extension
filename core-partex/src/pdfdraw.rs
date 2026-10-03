@@ -370,6 +370,12 @@ struct Font {
     uni: HashMap<u32, String>,
     /// Computer Modern's math extension font: its big glyphs are drawn at their size.
     ex: bool,
+    /// The embedded Type 1 program and the code → glyph name the PDF uses
+    /// (the font's encoding with the font dictionary's /Differences): the
+    /// glyphs are drawn from their outlines.
+    outlines: Option<(std::rc::Rc<crate::type1::Type1>, Vec<Option<String>>)>,
+    /// The font's id on the page (`F`): its outlines' ids.
+    fref: usize,
 }
 
 /// The CSS face a TeX font is drawn in (`panel.ts` maps these to Latin Modern).
@@ -497,7 +503,10 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
     let Some(p) = Pdf::open(pdf) else { return Vec::new() };
     let mut keys: Vec<&'static str> = Vec::new();
     let mut out = Vec::new();
+    // (each embedded font parsed once for the whole PDF, by its object)
+    let mut programs: HashMap<u32, Option<std::rc::Rc<crate::type1::Type1>>> = HashMap::new();
     for page in p.pages() {
+        let mut frefs: Vec<String> = Vec::new();
         let media = match page.get("MediaBox") {
             Some(O::Arr(a)) if a.len() == 4 => a.iter().map(|o| o.num().unwrap_or(0.0)).collect::<Vec<_>>(),
             _ => vec![0.0, 0.0, 612.0, 792.0],
@@ -525,7 +534,30 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
                 };
                 let uni = f.get("ToUnicode").and_then(|t| p.stream(t)).map(cmap).unwrap_or_default();
                 let ex = base.to_ascii_uppercase().contains("CMEX");
-                fonts.insert(name, Font { key, first, widths, uni, ex });
+                let outlines = font_program(&p, &f, &mut programs).map(|t1| {
+                    let mut names = t1.encoding.clone();
+                    if let Some(e @ O::Dict(_)) = f.get("Encoding").map(|e| p.resolve(e))
+                        && let Some(O::Arr(d)) = e.get("Differences").map(|d| p.resolve(d))
+                    {
+                        let mut code = 0usize;
+                        for o in d {
+                            match o {
+                                O::Num(n) => code = n as usize,
+                                O::Name(n) => {
+                                    if code < names.len() {
+                                        names[code] = Some(n.clone());
+                                    }
+                                    code += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    (t1, names)
+                });
+                let fref = frefs.len();
+                frefs.push(base.clone());
+                fonts.insert(name, Font { key, first, widths, uni, ex, outlines, fref });
             }
         }
         // the content
@@ -553,15 +585,28 @@ pub fn pages(pdf: &[u8]) -> Vec<(String, u64)> {
             (w as i64, h as i64).hash(&mut hs);
             hs.finish()
         };
-        let (t, paths) = interpret(&content, &fonts, h);
+        let mut used: std::collections::BTreeSet<(usize, u8)> = std::collections::BTreeSet::new();
+        let (t, paths) = interpret(&content, &fonts, h, &mut used);
         let f: Vec<String> = keys.iter().map(|k| esc(k)).collect();
-        out.push((format!("{{\"v\":2,\"w\":{},\"h\":{},\"f\":[{}],\"t\":[{t}],\"p\":[{paths}],\"r\":[]}}", r2(w), r2(h), f.join(",")), hash));
+        // (the outlines of the glyphs the page uses, by font and code)
+        let by_ref: HashMap<usize, &Font> = fonts.values().map(|f| (f.fref, f)).collect();
+        let mut g = String::new();
+        for (fr, c) in used {
+            let Some((t1, names)) = by_ref.get(&fr).and_then(|f| f.outlines.as_ref()) else { continue };
+            let Some(d) = names.get(usize::from(c)).cloned().flatten().and_then(|n| t1.path(&n)) else { continue };
+            let _ = write!(g, "{}\"{fr}:{c}\":{}", if g.is_empty() { "" } else { "," }, esc(&d));
+        }
+        let fr: Vec<String> = frefs.iter().map(|b| esc(&ident(b))).collect();
+        out.push((
+            format!("{{\"v\":2,\"w\":{},\"h\":{},\"f\":[{}],\"F\":[{}],\"g\":{{{g}}},\"t\":[{t}],\"p\":[{paths}],\"r\":[]}}", r2(w), r2(h), f.join(","), fr.join(",")),
+            hash,
+        ));
     }
     out
 }
 
 /// A content stream's text runs and paths, as JSON array bodies.
-fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64) -> (String, String) {
+fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64, used: &mut std::collections::BTreeSet<(usize, u8)>) -> (String, String) {
     let names: BTreeMap<usize, &String> = BTreeMap::new();
     let _ = names;
     let mut fidx: HashMap<&str, usize> = HashMap::new();
@@ -581,12 +626,15 @@ fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64) -> (String, S
         let (x, y) = apply(m, x, y);
         (r2(x), r2(page_h - y))
     };
-    let show = |s: &[u8], g: &G, tm: &mut M, text: &mut String, kern_after: &[(usize, f64)]| {
+    let mut show = |s: &[u8], g: &G, tm: &mut M, text: &mut String, kern_after: &[(usize, f64)]| {
         let Some(fi) = g.font else { return };
         let font = flist[fi].1;
         let (mut xs, mut txt) = (String::new(), String::new());
         // (runs: size, y as in the PDF, the x list, the text)
         let mut runs: Vec<(f64, f64, String, String)> = Vec::new();
+        // (the glyphs drawn from outlines: x and code each)
+        let (mut gxs, mut codes) = (String::new(), String::new());
+        let outl = font.outlines.is_some();
         let th = g.tz / 100.0;
         let trm0 = mul(&[g.size * th, 0.0, 0.0, g.size, 0.0, g.rise], &mul(tm, &g.ctm));
         let scale = (trm0[2] * trm0[2] + trm0[3] * trm0[3]).sqrt();
@@ -610,11 +658,17 @@ fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64) -> (String, S
             // (one glyph, several characters: a ligature is drawn as the
             // font's ligature, else the characters share the glyph's width;
             // variation selectors, which pdfTeX's maps add to math, dropped)
+            if outl {
+                let _ = write!(gxs, "{}{}", if gxs.is_empty() { "" } else { " " }, r2(x));
+                let _ = write!(codes, "{}{c}", if codes.is_empty() { "" } else { "," });
+                used.insert((font.fref, c));
+            }
             let u = ligature(&u);
             // (a big operator or delimiter from cmex: a run of its own, the
             // character scaled to the glyph's height and depth, centred on
             // the box TeX set; the text font's ∫ is a text-size glyph)
             if font.ex
+                && !outl
                 && let Some(&(h, d)) = CMEX10.get(usize::from(c))
                 && h + d > 1.3
                 && !u.is_empty()
@@ -656,8 +710,14 @@ fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64) -> (String, S
         if !txt.is_empty() {
             runs.push((scale, y0, xs, txt));
         }
+        // (a run whose glyphs are drawn from outlines is text for selection
+        // only: a sixth field, 1)
         for (size, y, xs, txt) in runs {
-            let _ = write!(text, "{}[{},{},{},{},{}]", if text.is_empty() { "" } else { "," }, font.key, r2(size), r2(page_h - y), esc(&xs), esc(&txt));
+            let _ = write!(text, "{}[{},{},{},{},{}{}]", if text.is_empty() { "" } else { "," }, font.key, r2(size), r2(page_h - y), esc(&xs), esc(&txt), if outl { ",1" } else { "" });
+        }
+        // (the glyphs from outlines: [-1, size, y, xs, "", font ref, codes])
+        if !codes.is_empty() {
+            let _ = write!(text, "{}[-1,{},{},{},\"\",{},[{codes}]]", if text.is_empty() { "" } else { "," }, r2(scale), r2(page_h - y0), esc(&gxs), font.fref);
         }
     };
     while let Some(o) = l.value() {
@@ -827,3 +887,29 @@ fn ligature(u: &str) -> String {
 
 /// cmex10's characters' height and depth, in em (from its TFM).
 const CMEX10: [(f64, f64); 128] = [(0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.04, 1.16), (0.0, 0.6), (0.0, 0.6), (0.04, 1.16), (0.04, 1.16), (0.04, 1.76), (0.04, 1.76), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.36), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 2.96), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.0, 0.6), (0.0, 0.6), (0.0, 0.9), (0.0, 0.9), (0.0, 0.9), (0.0, 0.9), (0.0, 1.8), (0.0, 1.8), (0.0, 0.3), (0.0, 0.6), (0.04, 1.76), (0.04, 1.76), (0.0, 0.6), (0.0, 0.6), (0.04, 1.76), (0.04, 1.76), (0.0, 1.0), (0.1, 1.5), (0.0, 1.111), (0.0, 2.222), (0.0, 1.0), (0.1, 1.5), (0.0, 1.0), (0.1, 1.5), (0.0, 1.0), (0.1, 1.5), (0.0, 1.0), (0.0, 1.0), (0.0, 1.111), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.1, 1.5), (0.1, 1.5), (0.0, 2.222), (0.1, 1.5), (0.1, 1.5), (0.1, 1.5), (0.1, 1.5), (0.1, 1.5), (0.0, 1.0), (0.1, 1.5), (0.722, 0.0), (0.75, 0.0), (0.75, 0.0), (0.722, 0.0), (0.75, 0.0), (0.75, 0.0), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.76), (0.04, 1.16), (0.04, 1.76), (0.04, 2.36), (0.04, 2.96), (0.0, 1.8), (0.0, 0.6), (0.04, 0.56), (0.0, 0.6), (0.0, 0.6), (0.0, 0.6), (0.12, 0.0), (0.12, 0.0), (0.12, 0.0), (0.12, 0.0), (0.0, 0.6), (0.0, 0.6)];
+
+/// The embedded Type 1 program of font dictionary `f` (`/FontDescriptor`'s
+/// `/FontFile`), parsed once per object.
+fn font_program(p: &Pdf, f: &O, cache: &mut HashMap<u32, Option<std::rc::Rc<crate::type1::Type1>>>) -> Option<std::rc::Rc<crate::type1::Type1>> {
+    let fd = p.resolve(f.get("FontDescriptor")?);
+    let O::Ref(r) = fd.get("FontFile")? else { return None };
+    if let Some(t) = cache.get(r) {
+        return t.clone();
+    }
+    let t = (|| {
+        let (d, _) = p.obj(*r)?;
+        let len1 = match d.get("Length1") {
+            Some(O::Ref(x)) => p.obj(*x)?.0.num()?,
+            o => o?.num()?,
+        } as usize;
+        let b = p.stream(&O::Ref(*r))?;
+        crate::type1::Type1::parse(b, len1).map(std::rc::Rc::new)
+    })();
+    cache.insert(*r, t.clone());
+    t
+}
+
+/// A font name as an id (letters and digits).
+fn ident(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}

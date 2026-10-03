@@ -30,6 +30,7 @@ use partex_core::{DateTime, FileKind, Host, OpenedFile, Params, Tex, Untracked, 
 pub mod draws;
 pub mod dvi;
 pub mod pdfdraw;
+pub mod type1;
 
 pub use draws::draws_json;
 
@@ -619,6 +620,11 @@ impl Session {
 
     /// A binary file, new or replaced whole.
     pub fn set_bytes(&mut self, name: &str, bytes: &[u8]) {
+        // (a package's pack can hold a file the project has its own of, a
+        // class it ships: the project's wins, and nothing changed)
+        if self.files.contains_key(name) {
+            return;
+        }
         if self.bytes.get(name).is_none_or(|b| **b != *bytes) {
             self.bytes.insert(name.to_string(), Arc::from(bytes));
             self.changed.push(name.to_string());

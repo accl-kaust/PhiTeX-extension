@@ -16,15 +16,32 @@ Overleaf, and "Overleaf" is used only to say which site it works with.
 
 Third-party material:
 
-- PhiTeX (phitex-ssa, phitex-layout, phitex-syntax, phitex-tex), linked
-  into core.wasm: MIT OR Apache-2.0.
-- core/tex/plain.tex and core/tex/hyphen.tex (TeX Live's, unmodified), built
-  into core.wasm: plain TeX by Donald E. Knuth, and Knuth's hyphenation
-  patterns; distributed unchanged, as their terms ask.
-- core/fonts/*.tfm: the Computer Modern font metrics (Knuth; the copies
-  PhiTeX carries), unmodified, built into core.wasm.
+- extension/dist/core.wasm: the PhiTeX engine (partex: a pdfTeX-compatible
+  engine, and PhiTeX's SSA crates), by the copyright holder above, and the
+  Rust crates miniz_oxide (MIT OR Zlib OR Apache-2.0) and adler2 (0BSD OR
+  MIT OR Apache-2.0).
+- extension/dist/assets.bin.gz, read by the core:
+  - pdflatex.fmt: a LaTeX format built from TeX Live 2026's LaTeX kernel
+    (LaTeX Project Public License 1.3c) and Knuth's and TeX Live's
+    hyphenation patterns, under their own terms.
+  - .tfm/.vf/.enc and pdftex.map: TeX Live 2026's font metrics, virtual
+    fonts, encodings and font map, unmodified, each under its own license
+    (Computer Modern and AMS metrics: Knuth's and AMS's terms; others mostly
+    LPPL, OFL or GPL with the font exception).
+  - Type 1 fonts (.pfb), unmodified: Computer Modern (cm*, AMS/Blue Sky,
+    SIL Open Font License 1.1), Latin Modern (lmr) and TeX Gyre Termes (qtmr)
+    (GUST Font License), Linux Libertine (LinLibertine*, GPL-2.0 with the
+    font exception, or OFL 1.1), CM-Super (sfrm, GPL-2.0-or-later with the
+    font exception), Nimbus Roman (ztmr, URW, AGPL-3.0 with the font
+    exception).
+  - TeX Live 2026's LaTeX packages that common documents read (see texmf/
+    below), unmodified.
+- extension/fonts/*.otf: Latin Modern and Latin Modern Math (GUST e-foundry),
+  GUST Font License, unmodified.
+- extension/dist/pdfjs/: pdf.js (pdfjs-dist 5.7.284), Copyright Mozilla
+  Foundation, Apache-2.0 (its LICENSE ships beside it).
 - extension/src/panel.ts: approximateFraction, ported from pdf.js
-  (pdfjs-dist 5.1.91, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
+  (pdfjs-dist, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
   Apache-2.0.
 - extension/src/panel.ts: icon paths from Google's Material Icons,
   Apache-2.0.

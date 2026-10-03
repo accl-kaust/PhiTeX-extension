@@ -2,7 +2,7 @@
 // its DOM and of CodeMirror 6's EditorView surface) at /project/mock, and
 // the endpoints the extension reads: /entities, /doc/:id/download,
 // /download/zip. Edits made in the mock are kept in memory (as a server).
-//   node mock/server.mjs [port]
+//   node mock/server.mjs [port]      (MOCK_PROJECT=latex: mock/latex/)
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,8 +12,10 @@ const dir = path.dirname(new URL(import.meta.url).pathname);
 const port = +(process.argv[2] ?? 8123);
 const docs = new Map(); // id → { path, text }
 let n = 0;
-for (const f of fs.readdirSync(path.join(dir, "project")))
-  docs.set(`d${String(++n).padStart(23, "0")}`, { path: f, text: fs.readFileSync(path.join(dir, "project", f), "utf8") });
+// (MOCK_PROJECT=latex: mock/latex/, a LaTeX project, for the partex core)
+const proj = path.resolve(dir, process.env.MOCK_PROJECT ?? "project"); // (or an absolute path)
+for (const f of fs.readdirSync(proj))
+  docs.set(`d${String(++n).padStart(23, "0")}`, { path: f, text: fs.readFileSync(path.join(proj, f), "utf8") });
 
 function zip(entries) {
   // (stored and deflated entries, as Overleaf's has both)

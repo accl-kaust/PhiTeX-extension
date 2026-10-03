@@ -14,6 +14,20 @@ export interface Diagnostic {
   file?: string;
   /** 1-based. */
   line?: number;
+  /** More, shown under the message as is (TeX's own context lines). */
+  detail?: string;
+}
+
+/** The build's first TeX error, as the core reads it off the terminal. */
+export interface TexError {
+  message: string;
+  /** The file being read when it happened. */
+  file: string | null;
+  line: number | null;
+  /** The error as TeX printed it, through the `l.N` line. */
+  context: string;
+  /** A file the error says was not found. */
+  missing: string | null;
 }
 
 /** What the core's status reports (session.ts's scan). */
@@ -25,6 +39,12 @@ export interface BuildFacts {
   unavailable?: string[];
   /** Where packages come from ("TeX Live 2025"); undefined: nowhere yet. */
   packageSource?: string;
+  /** The core runs LaTeX (partex's pdfTeX): no "LaTeX is dropped" or non-ASCII warnings. */
+  latex?: boolean;
+  /** The last build's first error. */
+  texError?: TexError;
+  /** Package downloads that failed, with why. */
+  packageErrors?: { name: string; error: string }[];
 }
 
 function lineAt(text: string, i: number): number {
@@ -101,7 +121,7 @@ export function diagnose(files: Record<string, string>, main: string | null, bui
       if (!(n in files) && !(`${n}.tex` in files) && !/\.(aux|bbl|ind|toc)$/.test(n) && !n.startsWith("\\"))
         out.push({ severity: "warning", code: "missing-file", message: `\\input ${n}: no such file in the project`, file, line: lineAt(text, m.index!) });
     }
-    const latex = [...new Set(text.match(LATEX) ?? [])];
+    const latex = build?.latex ? [] : [...new Set(text.match(LATEX) ?? [])];
     if (latex.length) {
       const first = text.search(LATEX);
       out.push({
@@ -119,23 +139,43 @@ export function diagnose(files: Record<string, string>, main: string | null, bui
         nonAscii++;
         if (firstNon < 0) firstNon = i;
       }
-    if (nonAscii)
+    if (nonAscii && !build?.latex)
       out.push({ severity: "info", code: "non-ascii", message: `${nonAscii} non-ASCII characters: PhiTeX's fonts may not typeset them`, file, line: lineAt(text, firstNon) });
   }
   if (main && files[main] !== undefined && !/\\(bye|end|enddocument)\b/.test(files[main]))
     out.push({ severity: "info", code: "no-end", message: "no \\bye: the last page ships at the end of the file anyway", file: main });
+  for (const f of build?.packageErrors ?? [])
+    out.push({ severity: "error", code: "package-download", message: `couldn't download ${f.name}: ${f.error}` });
+  if (build?.texError) {
+    const e = build.texError;
+    const stuck = e.missing && build.unavailable?.includes(e.missing);
+    const failed = e.missing && build.packageErrors?.some((f) => f.name === e.missing);
+    out.push({
+      severity: "error",
+      code: e.missing ? "tex-missing-file" : "tex-error",
+      message: e.missing
+        ? `${e.missing} not found${stuck ? ` in the project or ${build.packageSource ?? "the package source"}` : failed ? " (its download failed, above)" : " (still downloading?)"}: the build stopped here`
+        : e.message,
+      file: e.file ?? undefined,
+      line: e.line ?? undefined,
+      detail: e.context,
+    });
+  }
   if (build) {
     if (build.pending)
       out.push({ severity: "warning", code: "pending", message: `${build.pending} part${build.pending === 1 ? "" : "s"} not read: out of fuel (a loop?) or unsupported` });
     if (build.undefinedNames?.length) out.push({ severity: "warning", code: "undefined", message: `undefined: ${build.undefinedNames.join(" ")}` });
-    if (build.unavailable?.length) {
-      const names = build.unavailable.slice(0, 6).join(" ") + (build.unavailable.length > 6 ? " …" : "");
+    // (most are optional files LaTeX only looks for: .cfg, hooks; the one a
+    // build stopped at is the error above)
+    const optional = build.unavailable?.filter((n) => n !== build.texError?.missing) ?? [];
+    if (optional.length) {
+      const names = optional.slice(0, 6).join(" ") + (optional.length > 6 ? " …" : "");
       out.push({
-        severity: "warning",
+        severity: "info",
         code: "package-unavailable",
         message: build.packageSource
-          ? `not in the project, not found in ${build.packageSource}: ${names}`
-          : `packages are not downloaded yet (PhiTeX runs no LaTeX): ${names}`,
+          ? `looked for and not found in ${build.packageSource} (usually optional): ${names}`
+          : `packages are not downloaded yet: ${names}`,
       });
     }
     if (build.pages === 0) out.push({ severity: "warning", code: "no-pages", message: "no page shipped yet" });

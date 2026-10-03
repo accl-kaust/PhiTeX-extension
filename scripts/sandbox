@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a command in a bubblewrap sandbox: this repo writable, PhiTeX read-only.
+# Run a command in a bubblewrap sandbox: this repo writable, PhiTeX and partex read-only.
 # (Adapted from PhiTeX's scripts/sandbox.)
 #
 #   scripts/sandbox [--net] <command> [args...]
@@ -13,6 +13,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
+partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-3c83e5f}"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
 
@@ -34,6 +35,7 @@ args=(
   --symlink usr/bin /bin --symlink usr/bin /sbin
   --symlink usr/lib /lib --symlink usr/lib /lib64
   --ro-bind /etc /etc
+  --ro-bind-try /var/lib/texmf /var/lib/texmf
   --proc /proc --dev /dev
   --tmpfs /tmp
   --tmpfs "$HOME"
@@ -43,6 +45,7 @@ args=(
   --bind "$cargo_home/git" "$cargo_home/git"
   --bind "$repo" "$repo"
   --ro-bind "$phitex" "$phitex"
+  --ro-bind-try "$partex" "$partex"
   --chdir "$PWD"
   --clearenv
   --setenv HOME "$HOME"

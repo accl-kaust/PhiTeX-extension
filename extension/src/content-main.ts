@@ -8,7 +8,8 @@ import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
-import { cached } from "./packages.ts";
+import { cached, DELIVERED } from "./packages.ts";
+import { drawPage } from "./tabrender.ts";
 
 /** The panel's preferences, in the extension's own storage (not the page's). */
 const prefs: Prefs = {
@@ -123,9 +124,19 @@ class ChromeTransport implements CoreTransport {
   async connect(): Promise<void> {
     await chrome.runtime.sendMessage({ type: "ensure-offscreen" });
     this.port = chrome.runtime.connect({ name: "phitex" });
-    this.port.onMessage.addListener((r: any) => {
+    this.port.onMessage.addListener(async (r: any) => {
       if (r.png) r.png = unb64(r.png);
       if (r.pdf) r.pdf = unb64(r.pdf);
+      // (PDF mode: the page drawn here, from the PDF; the PDF itself only for a download)
+      if (r.render) {
+        const scale = (devicePixelRatio || 1) * 2;
+        const img = await drawPage(r.render.key, r.render.page, scale, r.pdf).catch((e) => (console.warn("[phitex] draw", e), null));
+        if (img) {
+          r.canvas = img.canvas;
+          r.size = [img.w, img.h];
+        }
+        delete r.pdf;
+      }
       this.waiting.get(r.id)?.(r);
       this.waiting.delete(r.id);
     });
@@ -317,7 +328,7 @@ function dockInOverleaf(panel: Panel): Dock {
             <div class="modal-header"><h4 class="modal-title" id="phitex-consent-title">⚡ Instant: an unofficial extension</h4></div>
             <div class="modal-body">
               <p><b>PhiTeX Instant is not part of Overleaf</b>, and is not made, endorsed or supported by Overleaf. It is an
-              <b>unofficial, experimental</b> browser extension that typesets a plain-TeX subset in your browser.</p>
+              <b>unofficial, experimental</b> browser extension that typesets LaTeX in your browser.</p>
               <p>It runs locally: your documents are not sent anywhere (TeX packages it doesn't bundle are downloaded by name from TeX Live's files). Its preview and PDF can differ from, or be missing what,
               Overleaf's compiler makes. For anything that matters, use Overleaf's <b>PDF</b>.</p>
               <p class="small text-muted">Free software under the GNU AGPL, version 3 only
@@ -559,7 +570,7 @@ function dockInOverleaf(panel: Panel): Dock {
       <div class="popover-header"><span class="phitex-bolt" aria-hidden="true">⚡</span> New: the unofficial PhiTeX extension</div>
       <div class="popover-body">No more Recompile: PhiTeX repaints this page <b>as you type</b>, incrementally, in milliseconds, right in your browser. Nothing leaves it.
         <div class="phitex-demo" aria-hidden="true"><code>Hello TeX</code><span class="phitex-arrow">⚡→</span><span class="phitex-mini">Hello TeX</span></div>
-        <div class="small text-muted" style="margin-top:6px">An unofficial browser extension, not an Overleaf feature. Experimental: plain TeX only. Overleaf's PDF is one click away.</div>
+        <div class="small text-muted" style="margin-top:6px">An unofficial browser extension, not an Overleaf feature. Experimental. Overleaf's PDF is one click away.</div>
         <div class="phitex-tip-actions"><button type="button" class="btn btn-link btn-sm" id="phitex-tip-never">Don't show again</button>
         <button type="button" class="btn btn-secondary btn-sm" id="phitex-tip-no">Not now</button>
         <button type="button" class="btn btn-primary btn-sm" id="phitex-tip-yes">⚡ Try it</button></div></div></div>`;
@@ -634,7 +645,7 @@ function dockInOverleaf(panel: Panel): Dock {
   const STEPS: { at: () => Element | null; title: string; body: string; inside?: boolean }[] = [
     { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is added by the unofficial PhiTeX extension (not part of Overleaf), live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
     { at: () => document.querySelector("phitex-preview"), inside: true, title: "Type, and watch", body: "Edit anything in the editor: this page repaints as you type, usually in a few milliseconds. The <b>⚡ chip</b> in the corner shows how fast. No Recompile." },
-    { at: () => document.getElementById("phitex-logs"), title: "What PhiTeX couldn't read", body: "Diagnostics, with a count. Click one to jump to its line. PhiTeX handles plain TeX: LaTeX commands are listed here, not typeset (yet)." },
+    { at: () => document.getElementById("phitex-logs"), title: "What PhiTeX couldn't read", body: "Diagnostics, with a count. Click one to jump to its line. Errors from the build, missing packages, and what LaTeX looked for and did not find." },
     { at: () => document.getElementById("phitex-dlgroup"), title: "Download what you see", body: "This downloads the <b>⚡ Instant</b> PDF (<code>…-instant.pdf</code>). The <b>▾</b> menu has Overleaf's compiled PDF too." },
     { at: () => document.getElementById("phitex-zoom"), title: "Zoom, and the details", body: "Zoom like Overleaf's viewer. At the bottom of this menu: settings and timings (main file, a debug check against a fresh build). Everything runs in your browser; nothing leaves it." },
   ];
@@ -854,7 +865,12 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       format: (saved as PanelPrefs | undefined)?.format ?? "vector",
       packages: cached({
         label: "TeX Live 2026",
-        resolve: (name) => transport.request({ op: "package", name }).then((r) => (r.ok ? (r.text ?? null) : null)),
+        resolve: (name) =>
+          transport.request({ op: "package", name }).then((r) => {
+            // (a failure is an error, shown with why; null is "not in TeX Live")
+            if (!r.ok) throw new Error(r.error ?? "package download failed");
+            return r.delivered ? DELIVERED : (r.text ?? null);
+          }),
       }),
     });
     (globalThis as any).__phitexSession = session; // (tests, devtools)

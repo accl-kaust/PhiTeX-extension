@@ -3,6 +3,7 @@
 #
 #   scripts/build.sh          # release
 #   scripts/build.sh --dev    # also match the local mock (http://localhost:8123/project/*)
+#   scripts/build.sh --phitex # PhiTeX's core instead of partex's
 #
 # The wasm core: cargo for wasm32-wasip1, in the sandbox (PhiTeX read-only),
 # target dir inside this repo. No wasm-bindgen: the core has a raw C ABI
@@ -11,25 +12,50 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/target"
 
-# A WASI reactor: link wasi-libc's crt1-reactor.o, whose `_initialize` (run
-# once by the host) runs libc's constructors. A cdylib gets no crt of its
-# own (rustc's -Zwasi-exec-model applies to binaries only), and without it
-# std's thread-local destructor registration spins forever.
-sysroot=$(cd core && scripts_sandbox=../scripts/sandbox && $scripts_sandbox rustc --print sysroot)
-flags="-C link-arg=$sysroot/lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-reactor.o -C link-arg=--export=_initialize"
-(cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
-  cargo build --release --target wasm32-wasip1)
+# The core: partex-PhiTeX's pdfTeX (core-partex/, real LaTeX), or with
+# --phitex PhiTeX's (core/). Either is a WASI reactor: link wasi-libc's
+# crt1-reactor.o, whose `_initialize` (run once by the host) runs libc's
+# constructors. A cdylib gets no crt of its own (rustc's -Zwasi-exec-model
+# applies to binaries only), and without it std's thread-local destructor
+# registration spins forever.
+engine=partex
+for a in "$@"; do [ "$a" = "--phitex" ] && engine=phitex; done
+sysroot=$(scripts/sandbox rustc --print sysroot)
+flags="-C target-feature=+bulk-memory,+simd128,+nontrapping-fptoint,+sign-ext -C link-arg=$sysroot/lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-reactor.o -C link-arg=--export=_initialize"
 rm -rf extension/dist && mkdir -p extension/dist
-cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
+if [ $engine = partex ]; then
+  (cd core-partex && CARGO_TARGET_DIR="$PWD/../target/partex" ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
+    cargo build --release --target wasm32-wasip1)
+  cp target/partex/wasm32-wasip1/release/phitex_overleaf_partex.wasm extension/dist/core.wasm
+  # The LaTeX format, made by the same engine (mkfmt), and the fonts'
+  # metrics: one gzipped file the worker hands the core.
+  if [ ! -f target/fmt/pdflatex.fmt ]; then
+    (cd core-partex && CARGO_TARGET_DIR="$PWD/../target/partex" ../scripts/sandbox cargo build --release --bin mkfmt)
+    (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
+  fi
+  scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gz
+else
+  (cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
+    cargo build --release --target wasm32-wasip1)
+  cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
+fi
 # (the full license, shipped in the extension, where its links point)
 cp LICENSE extension/LICENSE.txt
 # The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
 # them before asking Shelf.
 rm -rf extension/texmf && cp -r texmf extension/texmf
+# Shelf's index (name -> pack), made by Shelf's build: scripts/shelf-index.sh
+cp shelf-index.tsv.gz extension/shelf-index.tsv.gz
 scripts/sandbox npx tsc -p .
+# Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
+lm=/usr/share/texmf-dist/fonts/opentype/public
+rm -rf extension/fonts && mkdir -p extension/fonts
+cp $lm/lm/lmroman10-{regular,bold,italic,bolditalic}.otf $lm/lm/lmmono10-regular.otf $lm/lm-math/latinmodern-math.otf extension/fonts/
+# pdf.js (Apache-2.0), the PDF-mode page renderer (pdfrender.ts)
+mkdir -p extension/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs node_modules/pdfjs-dist/build/pdf.worker.min.mjs node_modules/pdfjs-dist/LICENSE extension/dist/pdfjs/
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
-dev=false; [ "${1:-}" = "--dev" ] && dev=true
+dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
   if (process.argv[1] === "true") {

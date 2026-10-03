@@ -1,6 +1,6 @@
 // Dev: start the core's worker in the offscreen document and print what it
 // logs or throws (CDP auto-attach), then the reply to one `open`.
-const tabs = await (await fetch("http://localhost:9222/json")).json();
+const tabs = await (await fetch(`http://localhost:${process.env.PHITEX_CDP_PORT ?? 9222}/json`)).json();
 const off = tabs.find((t) => t.url.endsWith("/offscreen.html"));
 const ws = new WebSocket(off.webSocketDebuggerUrl);
 await new Promise((r) => ws.addEventListener("open", r));

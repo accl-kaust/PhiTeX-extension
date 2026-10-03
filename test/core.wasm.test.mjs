@@ -5,11 +5,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { core } from "./wasm-harness.mjs";
 import { Batch } from "../extension/src/edits.ts";
+import { readFileSync } from "node:fs";
+
+// (PhiTeX's plain-TeX core: `scripts/build.sh --phitex`. The default build is
+// partex's, tested by core-partex/ and test/partex-session.mjs)
+const wasm = new WebAssembly.Module(readFileSync(new URL("../extension/dist/core.wasm", import.meta.url)));
+const partex = WebAssembly.Module.exports(wasm).some((e) => e.name === "ph_assets");
+const test_ = (name, f) => test(name, { skip: partex && "the built core is partex's" }, f);
 
 const main = "\\font\\rm=cmr10 \\rm\nHéllo wörld 😀, a paragraph.\n\n\\input part\n\n\\bye\n";
 const part = "Pärt one.\n\n";
 
-test("open, edit (UTF-16 → bytes), check, png, pdf", async () => {
+test_("open, edit (UTF-16 → bytes), check, png, pdf", async () => {
   const c = await core();
   const o = c.open({ "main.tex": main, "part.tex": part }, "main.tex");
   assert.equal(o.pages, 1);
@@ -30,7 +37,7 @@ test("open, edit (UTF-16 → bytes), check, png, pdf", async () => {
   assert.equal(new TextDecoder().decode(c.pdf(o.h).slice(0, 5)), "%PDF-");
 });
 
-test("LaTeX: PhiTeX drops its commands without a trace (so the warning is a source heuristic)", async () => {
+test_("LaTeX: PhiTeX drops its commands without a trace (so the warning is a source heuristic)", async () => {
   const c = await core();
   const o = c.open({ "main.tex": "\\documentclass{article}\n\\begin{document}\nHi.\n\\end{document}\n" }, "main.tex");
   assert.equal(o.pending, 0);

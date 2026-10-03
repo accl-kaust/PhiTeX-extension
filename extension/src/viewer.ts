@@ -4,6 +4,7 @@
 // core). The page most in view is the one an edit paints first.
 
 import type { PageImage } from "./session.ts";
+import { patch, type Draws2 } from "./page2.ts";
 
 export interface ViewerHost {
   /** Draw page `k` (the viewer wants it: in view, and not drawn at its hash). */
@@ -90,6 +91,7 @@ export class Viewer {
     if (!s) return;
     if (hash) this.asked.delete(`${k}:${hash}`);
     if ("draws" in img) this.size = { w: img.draws.w, h: img.draws.h };
+    else if ("w" in img && img.w && img.h) this.size = { w: img.w, h: img.h };
     s.img = img;
     s.drawn = hash ?? s.hash;
     this.paint(s);
@@ -127,9 +129,22 @@ export class Viewer {
     if (!s.img) return;
     const w = this.size.w * (96 / 72) * this.host.scale();
     this.sizeSlot(s);
+    // (v2, from the PDF: updated by parts, not drawn again whole)
+    if ("draws" in s.img && (s.img.draws as unknown as Draws2).v === 2) {
+      const [bw, bh] = this.host.box(this.size, w);
+      patch(s.el, s.img.draws as unknown as Draws2, bw, bh);
+      return;
+    }
     const markup = this.host.svg(s.img, w);
     if (markup !== null) {
       s.el.innerHTML = markup;
+      return;
+    }
+    if ("canvas" in s.img) {
+      // (drawn already: swapped in whole, so the page never blanks)
+      s.img.canvas.style.width = "100%";
+      s.img.canvas.style.height = "100%";
+      if (s.el.firstChild !== s.img.canvas) s.el.replaceChildren(s.img.canvas);
       return;
     }
     if (!("png" in s.img)) return;

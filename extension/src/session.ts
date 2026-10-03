@@ -8,8 +8,8 @@
 // is drawn by a PreviewSink (the shadow-DOM panel; a webview).
 
 import { Batch, type Edit } from "./edits.ts";
-import { diagnose, type Diagnostic } from "./diagnostics.ts";
-import { isPackageFile, noPackages, type PackageSource, type PackageState } from "./packages.ts";
+import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
+import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
 
 /** An editor. Edits are sequential (each against the text just before it), in UTF-16. */
 export interface EditorHost {
@@ -31,6 +31,7 @@ export type CoreReq =
   | { op: "png"; page: number; dpi: number }
   | { op: "pdf" }
   | { op: "status" }
+  | { op: "log" }
   | { op: "pages" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
@@ -49,7 +50,8 @@ export interface Draws {
 }
 
 /** A page to show: its draw list (vector), or a PNG. */
-export type PageImage = { draws: Draws } | { png: Uint8Array };
+/** A page: its draw list, or a PNG (PDF mode: rendered by pdf.js, `w`/`h` its size in PDF points). */
+export type PageImage = { draws: Draws } | { png: Uint8Array; w?: number; h?: number } | { canvas: HTMLCanvasElement; w: number; h: number };
 
 export interface CoreRes {
   ok: boolean;
@@ -60,6 +62,11 @@ export interface CoreRes {
   /** (`package`: the file's text, null: none; and where from) */
   text?: string | null;
   from?: string;
+  /** (a page drawn from the PDF, in the tab: its canvas and size in PDF points) */
+  canvas?: HTMLCanvasElement;
+  size?: [number, number];
+  /** (`package`: a binary file, handed to the core by the offscreen document) */
+  delivered?: boolean;
   error?: string;
 }
 
@@ -106,7 +113,7 @@ export interface Options {
   checkEveryMs: number;
   /** Where files the project doesn't have come from (packages.ts; default: nowhere). */
   packages?: PackageSource;
-  /** Schedules a flush (default: next animation frame, or 100 ms if frames stop). */
+  /** Schedules a flush (default: the next task). */
   schedule?: (f: () => void) => void;
   now?: () => number;
 }
@@ -115,7 +122,14 @@ export interface Options {
 // a runaway recursion costs ~70 ms a keystroke, not 700)
 const defaults: Options = { fuel: 100_000, format: "vector", dpi: 96, checkEveryMs: 5000 };
 
-const image = (r: CoreRes): PageImage | null => (r.draws ? { draws: r.draws } : r.png?.length ? { png: r.png } : null);
+const image = (r: CoreRes): PageImage | null =>
+  r.draws
+    ? { draws: r.draws }
+    : r.canvas && r.size
+      ? { canvas: r.canvas, w: r.size[0], h: r.size[1] }
+      : r.png?.length
+        ? { png: r.png, w: r.size?.[0], h: r.size?.[1] }
+        : null;
 
 export function guessMain(files: Record<string, string>): string | null {
   const names = Object.keys(files).filter((n) => /\.tex$/i.test(n));
@@ -166,7 +180,27 @@ export class PreviewSession {
 
   constructor(host: EditorHost, core: CoreTransport, sink: PreviewSink, opts: Partial<Options> = {}) {
     this.host = host;
-    this.core = core;
+    // (a trap in the core, a panic, restarts its instance: every session it
+    // held is gone, "no such handle". Reopened here, a few times at most,
+    // since a panic a build always hits would loop)
+    this.core = {
+      request: async (r) => {
+        const res = await core.request(r);
+        const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
+        if (lost && this.opened && r.op !== "open") {
+          this.opened = false;
+          const t = this.now();
+          this.traps = this.traps.filter((x) => t - x < 60_000).concat(t);
+          const why = res.error ?? "the core restarted";
+          if (this.traps.length <= 3) {
+            this.sink.error(`${why}; reopening`);
+            this.chain = this.chain.then(() => this.reopen());
+          } else this.sink.error(`${why}, again: the preview stops here (reload the page to retry)`);
+        }
+        return res;
+      },
+      onLost: core.onLost?.bind(core),
+    };
     this.sink = sink;
     this.o = { ...defaults, ...opts };
     host.onOpen((f, t) => {
@@ -227,10 +261,20 @@ export class PreviewSession {
     for (const [f, b] of this.batches) this.files[f] = b.text;
     this.batches.clear();
     const t = this.now();
+    // (what the project's files load, by a scan, fetched before the first
+    // build: a cold build costs the format's load, ~0.7 s in wasm, and stops
+    // at the first file it lacks)
+    // (pdftex.map: every PDF-mode build reads it first)
+    await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
     const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel });
-    if (!r.ok) return this.sink.error(r.json?.error ?? r.error ?? "open failed");
+    if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
-    this.pages = r.json.pages;
+    const latex = r.json.engine === "partex";
+    // (diagnosed before this was known: say it again with it)
+    if (latex !== this.latex) this.lastWarned = 0;
+    this.latex = latex;
+    this.setPages(r.json.pages);
+    this.noteError(r.json);
     this.status(r.json.pending, r.json.undefined_names);
     this.fetchPackages(r.json.missing);
     this.sink.latency(`opened in ${r.json.build_ms.toFixed(1)} ms (round trip ${(this.now() - t).toFixed(1)} ms)`);
@@ -238,7 +282,17 @@ export class PreviewSession {
   }
 
   private lastWarned = 0;
+  /** When the core trapped, in the last minute. */
+  private traps: number[] = [];
+  /** The core runs LaTeX (the open reply's `engine`; until it says, as partex's, the default build). */
+  private latex = true;
   private diags: Diagnostic[] = [];
+  /** The last build's first TeX error (the core's status), if it had one. */
+  private texError?: TexError;
+  private noteError(j: { history?: number; error?: unknown }): void {
+    if (j.history === undefined) return;
+    this.texError = j.error && typeof j.error === "object" ? (j.error as TexError) : undefined;
+  }
   private undefinedNames: string[] = [];
 
   /** The last status scan's pending count (edits keep it until the next scan). */
@@ -257,6 +311,9 @@ export class PreviewSession {
         undefinedNames: this.undefinedNames,
         unavailable: this.pkg.unavailable,
         packageSource: this.source === noPackages ? undefined : this.source.label,
+        latex: this.latex,
+        texError: this.texError,
+        packageErrors: this.pkg.failed,
       });
       this.lastWarned = this.now();
     }
@@ -267,7 +324,7 @@ export class PreviewSession {
   private pkgFiles: Record<string, string> = {};
   /** Every package name asked for once: not asked again. */
   private asked = new Set<string>();
-  private pkg: PackageState = { loading: [], unavailable: [], source: "none" };
+  private pkg: PackageState = { loading: [], unavailable: [], source: "none", done: [], building: false };
   private get source(): PackageSource {
     return this.o.packages ?? noPackages;
   }
@@ -278,13 +335,16 @@ export class PreviewSession {
    * looks for a missing file again). What they read in turn shows up in
    * the next status, and is fetched then.
    */
-  private fetchPackages(missing?: string[]): void {
-    const want = (missing ?? []).filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
+  private fetchPackages(missing?: string[], guessed: string[] = []): void {
+    const wanted = new Set(missing ?? []);
+    missing = [...wanted, ...guessed];
+    const want = [...new Set(missing ?? [])].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
     if (!want.length) return;
     for (const n of want) this.asked.add(n);
     const src = this.source;
     this.pkg.source = src.label;
-    const tell = () => this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable] });
+    const tell = () =>
+      this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
     if (src === noPackages) {
       this.pkg.unavailable.push(...want);
       tell();
@@ -292,20 +352,91 @@ export class PreviewSession {
     }
     this.pkg.loading.push(...want);
     tell();
-    void Promise.all(want.map(async (n) => [n, await src.resolve(n).catch(() => null)] as const)).then((got) => {
-      this.pkg.loading = this.pkg.loading.filter((n) => !want.includes(n));
+    // (each package fetched is scanned for the ones it loads, and those are
+    // fetched too, before the next build: the build stops at the first file
+    // it lacks, so learning them one build at a time costs a build each)
+    const got: (readonly [string, string | null])[] = [];
+    const fetchOne = async (n: string): Promise<void> => {
+      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      got.push([n, t]);
+      this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
+      if (t !== null) {
+        this.pkg.done!.push(n);
+        this.pkg.failed = this.pkg.failed?.filter((f) => f.name !== n);
+      }
+      const more = t === null || t === DELIVERED ? [] : referenced(t).filter((m) => isPackageFile(m) && !(m in this.files) && !this.asked.has(m));
+      for (const m of more) this.asked.add(m);
+      this.pkg.loading.push(...more);
+      tell();
+      await Promise.all(more.map(fetchOne));
+    };
+    void Promise.all(want.map(fetchOne)).then(() => {
       for (const [n, t] of got) {
         if (t === null) {
-          this.pkg.unavailable.push(n);
+          // (a name the scan guessed and the build never asked for is not "unavailable")
+          if (wanted.has(n) && !this.pkg.failed?.some((f) => f.name === n)) this.pkg.unavailable.push(n);
           continue;
         }
+        // (a binary file: the source gave it to the core, and gives it again on a reopen)
+        if (t === DELIVERED) continue;
         this.pkgFiles[n] = t;
         if (this.opened) this.chain = this.chain.then(() => this.core.request({ op: "set_file", file: n, text: t }).then(() => undefined));
       }
+      const any = got.some(([, t]) => t !== null);
+      this.pkg.building = any;
       tell();
       this.status(this.pending, this.undefinedNames);
-      if (got.some(([, t]) => t !== null)) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+      if (any)
+        this.chain = this.chain
+          .then(() => this.layout())
+          .then(() => {
+            this.pkg.building = false;
+            tell();
+            this.statusSoon();
+          });
     });
+  }
+
+  /** A fetch that failed: kept with why (shown), and askable again. */
+  private failed(n: string, e: unknown): null {
+    this.asked.delete(n);
+    const error = e instanceof Error ? e.message : String(e);
+    this.pkg.failed = [...(this.pkg.failed ?? []).filter((f) => f.name !== n), { name: n, error }];
+    return null;
+  }
+
+  /** Fetch `names` (and what they load, by the scan) into pkgFiles, before a session opens. */
+  private async prefetch(names: string[]): Promise<void> {
+    const src = this.source;
+    const want = [...new Set(names)].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
+    if (src === noPackages || !want.length) return;
+    this.pkg.source = src.label;
+    const tell = () =>
+      this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
+    for (const n of want) this.asked.add(n);
+    this.pkg.loading.push(...want);
+    tell();
+    const one = async (n: string): Promise<void> => {
+      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
+      if (t !== null) this.pkg.done!.push(n);
+      if (t !== null && t !== DELIVERED) this.pkgFiles[n] = t;
+      const more = t === null || t === DELIVERED ? [] : referenced(t).filter((m) => isPackageFile(m) && !(m in this.files) && !this.asked.has(m));
+      for (const m of more) this.asked.add(m);
+      this.pkg.loading.push(...more);
+      tell();
+      await Promise.all(more.map(one));
+    };
+    await Promise.all(want.map(one));
+    this.pkg.building = true;
+    tell();
+  }
+
+  /** The page count of the last build; the page in view kept inside it
+   * (a build with no page, an error, keeps the page: it comes back). */
+  private setPages(n: number): void {
+    this.pages = n;
+    if (n > 0 && this.page >= n) this.page = n - 1;
   }
 
   /** The page in view (the one an edit paints first). */
@@ -323,7 +454,7 @@ export class PreviewSession {
     const r = await this.core.request({ op: "pages" });
     if (!r.ok || !r.json?.pages) return;
     this.hashes = r.json.pages;
-    this.pages = this.hashes.length;
+    this.setPages(this.hashes.length);
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)
     if (this.hashes.length) this.sink.layout(this.hashes);
   }
@@ -384,11 +515,10 @@ export class PreviewSession {
       this.scheduled = true;
       const f = () => this.flush();
       if (this.o.schedule) this.o.schedule(f);
-      else {
-        // (rAF: once a frame; a hidden tab gets no frames, so a timer too)
-        requestAnimationFrame(f);
-        setTimeout(f, 100);
-      }
+      // (the next task, not the next frame: a window without frames, an
+      // unfocused or covered one, waited for a 100 ms fallback; edits that
+      // come while a build runs are merged by the send loop anyway)
+      else setTimeout(f, 0);
     }
   }
 
@@ -449,7 +579,8 @@ export class PreviewSession {
       if (this.busy || !this.opened) return this.statusSoon();
       const r = await this.core.request({ op: "status" });
       if (r.ok && r.json) {
-        this.pages = r.json.pages;
+        this.setPages(r.json.pages);
+        this.noteError(r.json);
         this.status(r.json.pending, r.json.undefined_names);
         this.fetchPackages(r.json.missing);
       }
@@ -466,14 +597,15 @@ export class PreviewSession {
       this.builds++;
       const r = await this.core.request({ op: "edit", file, ...e, page: last ? this.page : -1, dpi: this.dpi() });
       if (!r.ok) {
-        this.sink.error(r.json?.error ?? r.error ?? "edit failed");
+        this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "edit failed");
         if (r.error?.includes("trapped")) await this.reopen();
         return false;
       }
       if (!last) continue;
       const tBack = this.now();
       const j = r.json;
-      this.pages = j.pages;
+      this.setPages(j.pages);
+      this.noteError(j);
       this.status(this.pending);
       const img = image(r);
       if (img) this.sink.page(img, this.page, this.pages, j.painted_hash ?? null);

@@ -1,7 +1,7 @@
 // Dev: reload a tab and print exceptions and console errors from every
 // context in it (the content script's isolated world too), for 6 s.
 const [match] = process.argv.slice(2);
-const t = (await (await fetch("http://localhost:9222/json")).json()).find((t) => t.type === "page" && t.url.includes(match));
+const t = (await (await fetch(`http://localhost:${process.env.PHITEX_CDP_PORT ?? 9222}/json`)).json()).find((t) => t.type === "page" && t.url.includes(match));
 const ws = new WebSocket(t.webSocketDebuggerUrl);
 await new Promise((r) => ws.addEventListener("open", r));
 ws.addEventListener("message", (m) => {

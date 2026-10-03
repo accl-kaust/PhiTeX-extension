@@ -1,7 +1,7 @@
 // Dev: evaluate JS in the extension's service worker (e.g. chrome.storage),
 // through the browser's target list (/json does not always list it).
 const [expr] = process.argv.slice(2);
-const { webSocketDebuggerUrl } = await (await fetch("http://localhost:9222/json/version")).json();
+const { webSocketDebuggerUrl } = await (await fetch(`http://localhost:${process.env.PHITEX_CDP_PORT ?? 9222}/json/version`)).json();
 const ws = new WebSocket(webSocketDebuggerUrl);
 await new Promise((r) => ws.addEventListener("open", r));
 let id = 0;

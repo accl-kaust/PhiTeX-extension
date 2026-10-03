@@ -13,9 +13,11 @@ export type Req =
   | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { id: number; client: string; op: "set_file"; file: string; text: string }
+  | { id: number; client: string; op: "set_bytes"; file: string; bytes: Uint8Array }
   | { id: number; client: string; op: "png"; page: number; dpi: number }
   | { id: number; client: string; op: "pdf" }
   | { id: number; client: string; op: "status" }
+  | { id: number; client: string; op: "log" }
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" };
@@ -28,11 +30,15 @@ export interface Res {
   /** A page as its draw list (asked for with dpi 0): see session.ts's Draws. */
   draws?: unknown;
   pdf?: Uint8Array;
+  /** PDF mode: the page to render from the PDF (`pdf`, or the last one sent with this key). */
+  render?: { page: number; dpi: number; key: string };
   error?: string;
 }
 
 interface Core {
   memory: WebAssembly.Memory;
+  /** The partex core: the LaTeX format and fonts (assets.bin.gz, gunzipped). */
+  ph_assets?(p: number, n: number): number;
   ph_alloc(n: number): number;
   ph_free(p: number, n: number): void;
   ph_out_ptr(): number;
@@ -42,10 +48,14 @@ interface Core {
   ph_edit(h: number, p: number, n: number, page: number, dpi: number): number;
   ph_png_last(): void;
   ph_set_file(h: number, p: number, n: number): number;
+  /** The partex core: a binary file (`str name`, then the bytes). */
+  ph_set_bytes?(h: number, p: number, n: number): number;
   ph_png(h: number, page: number, dpi: number): void;
   ph_pdf(h: number): void;
   ph_check(h: number): void;
   ph_status(h: number): void;
+  ph_log?(h: number): void;
+  ph_idle?(): number;
   ph_pages(h: number): void;
   ph_text(h: number, p: number, n: number): void;
   _initialize?(): void;
@@ -62,12 +72,12 @@ function wasi(mem: () => WebAssembly.Memory) {
     clock_time_get(id: number, _precision: bigint, out: number): number {
       // 0 realtime, 1 monotonic: both from performance.now (µs resolution)
       const ms = id === 0 ? origin + performance.now() : performance.now();
-      dv().setBigUint64(out, BigInt(Math.round(ms * 1e6)), true);
+      dv().setBigUint64(out >>> 0, BigInt(Math.round(ms * 1e6)), true);
       return 0;
     },
     environ_sizes_get(count: number, size: number): number {
-      dv().setUint32(count, 0, true);
-      dv().setUint32(size, 0, true);
+      dv().setUint32(count >>> 0, 0, true);
+      dv().setUint32(size >>> 0, 0, true);
       return 0;
     },
     environ_get(): number {
@@ -78,13 +88,13 @@ function wasi(mem: () => WebAssembly.Memory) {
       let total = 0;
       let s = "";
       for (let i = 0; i < n; i++) {
-        const p = d.getUint32(iovs + 8 * i, true);
-        const l = d.getUint32(iovs + 8 * i + 4, true);
+        const p = d.getUint32((iovs >>> 0) + 8 * i, true);
+        const l = d.getUint32((iovs >>> 0) + 8 * i + 4, true);
         s += new TextDecoder().decode(new Uint8Array(mem().buffer, p, l));
         total += l;
       }
       if (fd === 1 || fd === 2) console[fd === 2 ? "warn" : "log"]("[phitex]", s);
-      d.setUint32(written, total, true);
+      d.setUint32(written >>> 0, total, true);
       return fd === 1 || fd === 2 ? 0 : ENOSYS;
     },
     // (no files and no preopened directories: std::fs, which PhiTeX calls
@@ -130,6 +140,14 @@ class Frame {
 
 let core: Core;
 let module: WebAssembly.Module;
+let assets: Promise<Uint8Array> | undefined;
+
+/** The partex core's assets (the format, the fonts' metrics), fetched and gunzipped once. */
+const loadAssets = () =>
+  (assets ??= fetch(new URL("assets.bin.gz", import.meta.url)).then(async (r) => {
+    if (!r.ok) throw new Error(`assets: ${r.status}`);
+    return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  }));
 
 async function load(): Promise<void> {
   module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
@@ -138,11 +156,20 @@ async function load(): Promise<void> {
   core = inst.exports as unknown as Core;
   memory = core.memory;
   core._initialize?.();
+  if (core.ph_assets) {
+    const a = await loadAssets();
+    const p = core.ph_alloc(a.length);
+    new Uint8Array(core.memory.buffer, p >>> 0, a.length).set(a);
+    const n = core.ph_assets(p, a.length);
+    core.ph_free(p, a.length);
+    if (!n) throw new Error("assets: bad framing");
+  }
 }
 
 function call<T>(f: Frame, g: (p: number, n: number) => T): T {
   const p = core.ph_alloc(f.len);
-  const m = new Uint8Array(core.memory.buffer, p, f.len);
+  // (pointers past 2 GB come back negative as i32: unsigned)
+  const m = new Uint8Array(core.memory.buffer, p >>> 0, f.len);
   let at = 0;
   for (const part of f.parts) {
     m.set(part, at);
@@ -155,8 +182,27 @@ function call<T>(f: Frame, g: (p: number, n: number) => T): T {
   }
 }
 
+/**
+ * PDF mode (the partex core): page `page` to be rendered from the PDF, by
+ * the offscreen document (pdf.js). The PDF goes along only when it changed
+ * since the last one this worker sent (its length and hash say so).
+ */
+let lastPdf = "";
+function pdfPage(h: number, page: number, dpi: number): Partial<Res> {
+  core.ph_pdf(h);
+  const pdf = outBytes();
+  if (!pdf.length) return {};
+  // (FNV-1a over every byte: ~2 ms a MB; a sample would miss a one-letter edit)
+  let x = 0x811c9dc5;
+  for (let i = 0; i < pdf.length; i++) x = Math.imul(x ^ pdf[i], 0x01000193);
+  const key = `${h}:${pdf.length}:${x}`;
+  const same = key === lastPdf;
+  lastPdf = key;
+  return { render: { page, dpi, key }, pdf: same ? undefined : pdf };
+}
+
 function outBytes(): Uint8Array {
-  return new Uint8Array(core.memory.buffer, core.ph_out_ptr(), core.ph_out_len()).slice();
+  return new Uint8Array(core.memory.buffer, core.ph_out_ptr() >>> 0, core.ph_out_len() >>> 0).slice();
 }
 const outJson = () => JSON.parse(new TextDecoder().decode(outBytes()));
 
@@ -183,6 +229,8 @@ function handle(r: Req): Res {
       if (ok && r.page >= 0) {
         core.ph_png_last();
         png = outBytes();
+        // (PDF mode: no draw list; the PDF, for the offscreen document's renderer)
+        if (!png.length && core.ph_assets) return { id: r.id, ok: ok === 1, json, ...pdfPage(h, Math.min(r.page, Math.max((json.pages ?? 1) - 1, 0)), r.dpi) };
       }
       return { id: r.id, ok: ok === 1, json, png };
     }
@@ -190,12 +238,28 @@ function handle(r: Req): Res {
       const ok = call(new Frame().str(r.file).str(r.text), (p, n) => core.ph_set_file(h, p, n));
       return { id: r.id, ok: ok === 1, json: ok ? outJson() : undefined };
     }
-    case "png":
+    case "set_bytes": {
+      if (!core.ph_set_bytes) return { id: r.id, ok: false, error: "this core takes no binary files" };
+      const f = new Frame().str(r.file);
+      f.parts.push(r.bytes);
+      f.len += r.bytes.length;
+      const ok = call(f, (p, n) => core.ph_set_bytes!(h, p, n));
+      return { id: r.id, ok: ok === 1 };
+    }
+    case "png": {
       core.ph_png(h, r.page, r.dpi);
-      return { id: r.id, ok: true, png: outBytes() };
+      const png = outBytes();
+      if (!png.length && core.ph_assets) return { id: r.id, ok: true, ...pdfPage(h, r.page, r.dpi) };
+      return { id: r.id, ok: true, png };
+    }
     case "status":
       core.ph_status(h);
       return { id: r.id, ok: true, json: outJson() };
+    case "log":
+      // (debugging: the whole terminal and the job's .log)
+      if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };
+      core.ph_log(h);
+      return { id: r.id, ok: true, json: { log: new TextDecoder().decode(outBytes()) } };
     case "pages":
       core.ph_pages(h);
       return { id: r.id, ok: true, json: outJson() };
@@ -246,7 +310,8 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
   try {
     await ready;
     res = handle(r);
-    if ("dpi" in r && r.dpi === 0 && res.png) {
+    // (the partex core draws pages only as draw lists, whatever the dpi)
+    if (res.png && (("dpi" in r && r.dpi === 0) || (core.ph_assets && res.png[0] !== 0x89))) {
       res.draws = res.png.length ? JSON.parse(new TextDecoder().decode(res.png)) : undefined;
       delete res.png;
     } else if (res.png?.length) {
@@ -265,4 +330,14 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
   }
   const transfer = [res.png?.buffer, res.pdf?.buffer].filter((b): b is ArrayBuffer => !!b);
   (self as unknown as Worker).postMessage(res, transfer);
+  // (after the reply: the engine readied for its first rebuild, so the
+  // first keystroke after a cold build doesn't pay it; a message arriving
+  // meanwhile waits that long, once per cold build)
+  setTimeout(() => {
+    try {
+      core?.ph_idle?.();
+    } catch {
+      /* a trap here shows on the next request */
+    }
+  }, 50);
 };

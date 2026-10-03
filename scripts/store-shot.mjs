@@ -2,7 +2,7 @@
 // emulated at that size, captured, restored.  node scripts/store-shot.mjs <url-substring> <out.png> [ms to settle]
 import fs from "node:fs";
 const [match, file, settle = "1200"] = process.argv.slice(2);
-const t = (await (await fetch("http://localhost:9222/json")).json()).find((t) => t.type === "page" && t.url.includes(match));
+const t = (await (await fetch(`http://localhost:${process.env.PHITEX_CDP_PORT ?? 9222}/json`)).json()).find((t) => t.type === "page" && t.url.includes(match));
 const ws = new WebSocket(t.webSocketDebuggerUrl);
 await new Promise((r) => ws.addEventListener("open", r));
 let id = 0;

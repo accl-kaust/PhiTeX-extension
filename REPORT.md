@@ -178,7 +178,7 @@ Tested on the project `6abc4b17…`, a new-project `article` template:
 
 ## PhiTeX changes needed
 
-All are in **REQUESTS.md**, ordered by value:
+All were in **REQUESTS.md** (PhiTeX's, in git history before the move to partex; the current one is partex's), ordered by value:
 1. SyncTeX source spans on draws;
 2. builder diagnostics with a `--json` shape, including undefined commands
    dropped without a trace;

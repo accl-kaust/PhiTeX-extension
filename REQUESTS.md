@@ -1,310 +1,135 @@
-# Requests to PhiTeX
-
-What the Overleaf preview needs from PhiTeX, or does itself today but
-should move into PhiTeX. Ordered by value. Each item says what the extension
-does meanwhile. Measured against PhiTeX `241bd29`.
-
-## 1. SyncTeX: source positions on what a page draws
-
-**Need.** What SyncTeX gives pdfTeX: for each thing on a page, where in
-the source it came from. Then:
-- **Editor → page.** Selecting or moving in the editor highlights the words
-  it made, live, on the page they are on (and turns to that page).
-- **Page → editor.** Clicking a word selects its source.
-- **Build diagnostics at a place** (see 2).
-
-The extension does not guess this with text matching. Repeated phrases,
-macro output and `\input` make a guess wrong exactly where it matters, so
-the feature waits for PhiTeX.
-
-**What exists.** `ir::Value` has a `line`, but no file (a value read from
-`\input chapter` says `l.3`, not which file) and no range. `pack::Draw`,
-what a page draws, has neither.
-
-**Shape (a proposal).**
-- **Origins on tokens.** Each character token keeps the `(file, byte)` it
-  was read from. The builder already re-reads source characters with the
-  real catcodes, so it has them. A token that came from a macro's
-  expansion keeps the origin of the macro *call*: SyncTeX's rule, "this
-  word came from here".
-- **A span on each drawn word:** `Draw::Text { .., src: Option<Span> }`,
-  with `Span { file: FileId, bytes: Range<u32> }`, the span of the tokens
-  that made the word (merged, if they are contiguous in one file). Rules
-  and boxes can carry the span of their command.
-- **Kept incrementally.** Spans live on the chunk's material. A chunk not
-  rebuilt keeps its spans, but byte offsets after an edit move. So store
-  them relative to the chunk's first paragraph, which the Doc already
-  places (`starts`), and resolve them to absolute bytes only when a page's
-  draws are asked for, as values resolve imports only when printed.
-- **Queries**, whichever is cheaper to keep:
-  - `Doc::page_spans(k) -> Vec<(Span, DrawIndex)>`: the host finds the
-    words for a selection itself;
-  - `Doc::forward(file, bytes) -> Vec<(page, DrawIndex)>` and
-    `Doc::inverse(page, DrawIndex) -> Span`.
-
-**How the extension would use it.** The draw list's words get
-`[x, y, size, font, text, file, start, end]`. On an editor selection
-(UTF-16, converted to bytes as edits already are), the words whose span
-intersects it are highlighted: an SVG `<rect>` behind each `<tspan>`. This
-is local and needs no core call, since the page's spans came with its
-draws. A selection on another page turns to it (`forward`). A click on a
-word selects its span in the editor (the hook's one write: the
-selection).
-
-## 2. Diagnostics from the builder, as records (and `--json`)
-
-(With 1's spans, each one points at its place in the source.)
-
-**Need.** The builder knows exactly what the extension guesses with regexes:
-- a group still open at the end of a file, and where it opened;
-- a `\def` whose body swallowed the rest (0 pages ship);
-- `\if…` without `\fi`, and math still open;
-- an `\input` of a missing file;
-- fuel running out, and in which chunk and macro (a runaway recursion);
-- an **undefined control sequence**. Today it is dropped with no trace in
-  the program: `\documentclass{article}` becomes the paragraph "article …".
-  `build.rs` `command()`: `return; // (undefined: ignored)`. I tried
-  emitting `self.constant("undefined \x")` there, the way `reg()` does. The
-  constant never reached the program (dead constants are not kept?), so
-  that was not the fix, and no patch is included.
-
-**Shape.** `Doc::diagnostics() -> Vec<Diagnostic { severity, code, message,
-file, range }>`, kept incrementally like the rest (each chunk's own, merged).
-The same list in the CLI as `--json` for tooling, with stable `code`s
-(`unclosed-group`, `undefined-cs`, `out-of-fuel`, `missing-file`, …).
-`diagnostics.ts` already uses this shape, so it would pass them through.
-
-**Meanwhile.** `diagnostics.ts` scans the source: brace and `$` balance
-(skipping comments and escapes), `\def` without a body, `\if`/`\fi` counts,
-`\input` of files not in the project, LaTeX markers, non-ASCII. These are
-heuristics; they do not expand macros.
-
-## 3. A file that appears after it was found missing
-
-**Need.** Once `\input part` resolves `part` to missing (`FileKind::Missing`),
-the chunk that read it records no dependency on that file. A later
-`edit_file("part.tex", 0..0, "")` returns early (`splice`: Missing → return),
-and nothing is rebuilt. This is Overleaf's "new file", and the case where
-files are fetched on demand.
-
-**Shape.** Record each file a chunk *looked up*, found or not, among its
-imports, or in `readers` keyed by file name. Then add
-`Doc::add_file(name, text) -> EditStats`, which turns Missing into Source
-and queues those readers.
-
-**Meanwhile.** A new file costs a full `Doc::project_with_fuel` rebuild
-(`core/src/lib.rs`, `Session::set_file`). It is also why the extension
-fetches all docs up front instead of on demand.
-
-## 4. `edit_view` in two halves
-
-**Need.** `edit_view` paints the page first and then runs to the fixed
-point, but it returns only after both. Across the worker boundary the host
-therefore cannot show the first paint before the fixed point. It gets both
-at once, and `paint_ms` is a number, not something the user sees earlier.
-
-**Shape.** `Doc::edit_view_begin(..) -> Option<Rc<BoxVal>>` (spliced, run up
-to the page's output chunk), then `Doc::finish() -> View` (the rest). Or an
-agenda the host can step: `Doc::step(budget)`. The host would post the
-first paint, then call `finish`, and could drop `finish` if another
-keystroke arrives: `edit_view_begin` again from where it is.
-
-## 5. Several edits, one run
-
-**Need.** A flush can hold edits at several places (multi-cursor, a
-collaborator's transaction, two files). Each `edit_file` runs to the fixed
-point, so N edits cost N runs.
-
-**Shape.** `Doc::edit_files(&[(name, range, text)]) -> EditStats`: splice all
-of them, then one `run` + `converge`.
-
-**Meanwhile.** Adjacent edits are merged (`edits.ts`), and only the last
-edit of a round is painted. Separate places still cost a run each.
-
-## 6. A cheap status
-
-**Need.** Pages pending (out of fuel or unsupported) are only visible by
-flattening the program: `Doc::program()` is O(document), 4.2 ms at 180 KB,
-against 0.26 ms for the edit itself.
-
-**Shape.** `Doc::pending() -> usize` (and the undefined names, see 2), kept
-per chunk.
-
-**Meanwhile.** The status scan runs off the keystroke path, once edits
-settle, at most every 300 ms (`ph_status`).
-
-## 7. UTF-8 input, and fonts beyond the base 14
-
-**Need.** Non-ASCII input is read byte by byte: `Ünï` typesets as `Ã…`. The
-PDF writer turns non-ASCII into `?`, and the metrics are base-14 Times,
-Helvetica and Courier only.
-
-**Meanwhile.** Offsets are exact (UTF-16 → UTF-8, tested), so edits never
-split a character. The panel warns ("N non-ASCII characters").
-
-## 8. The page as a draw list, public and with widths
-
-**Need.** The vector preview uses `phitex_layout::pdf::draws` (public, good)
-and paints words with the browser's Times. Word positions are PhiTeX's, but
-a browser glyph run can be wider or narrower than TeX's. A word's TeX width
-on `Draw::Text` would let the host stretch it to fit
-(`ctx.fillText(text, x, y, maxWidth)`). Also: page size per page (today the
-`PAGE_WIDTH`/`PAGE_HEIGHT` consts, US Letter), and the margin convention.
-
-**PNG.** `png::page` writes *stored* (uncompressed) deflate: 0.9 MB a page
-at 96 dpi, and glyphs are grey boxes. Either deflate it, or export raw
-8-bit pixels and let the host encode. The extension recompresses in the
-worker (~40 ms), but defaults to vector.
-
-## 9. Threads
-
-The core is going multithreaded. `Doc` holds `Rc`, `RefCell` and
-`thread_local!` (`build::PLAIN`, `VOID`), so it is `!Send`: one `Doc` lives
-on one thread. For wasm threads (`wasm32-wasip1-threads`, SharedArrayBuffer)
-this needs one of:
-- work *inside* a `Doc` parallelized with `Send` data (`Arc`, owned
-  chunks), with the `Doc` itself staying on its thread; or
-- a `Doc` that is `Send`, to move whole.
-
-The extension is ready for either. Each `Doc` sits behind a session handle
-(never a bare global), and the core runs in an extension page (the
-offscreen document) that can be made cross-origin isolated. Note:
-COEP `require-corp` on the extension blocked the worker script today
-(REPORT.md), so isolation needs a worker-loading scheme that satisfies it
-(COEP on the worker's own response, which extension resources can't set).
-
-## 10. `std::time::Instant` on wasm32-unknown-unknown
-
-`Doc::edit_view`, `prof::Scope` and `Typeset::project_timed` call
-`Instant::now()`, which panics on wasm32-unknown-unknown. The extension
-avoids it by building for **wasm32-wasip1** (a WASI reactor, with its own
-tiny shim). To build with wasm-bindgen instead, apply
-`patches/0001-phitex-web-time-instant.patch`: an optional `web-time`
-feature on phitex-ssa and phitex-layout. It is tested: phitex-layout builds
-for wasm32-unknown-unknown with `--features web-time`, and PhiTeX's tests
-pass (45 + 4).
-
-## 11. Fonts that match Overleaf's page: Computer Modern, with glyphs
-
-**Need.** Docked next to (or in place of) Overleaf's PDF, the preview is
-compared glyph for glyph. Overleaf's page is Computer Modern (TeX's own
-fonts). PhiTeX has only base-14 metrics (Times-Roman, …). The draw list
-names those fonts, and the extension paints them with the browser's Times.
-So line breaks and positions are PhiTeX's but the look is not TeX's, and a
-plain-TeX document (whose default is `cmr10`) cannot look like its pdfTeX
-output.
-
-**Shape.** Computer Modern metrics (the `.tfm` files, or their widths, as
-`metrics.rs` has for base 14) for the plain-TeX defaults (`cmr10`,
-`cmbx10`, `cmti10`, `cmmi10`, `cmsy10`, `cmtt10` at their sizes). Also a
-way to get each font's glyphs to the host: the draw list naming
-`Font { name: "cmr10", file: … }`, so the host can load the matching
-webfont (Latin Modern / CMU, OFL-licensed, bundled with the extension,
-never fetched), or the PDF embedding a Type 1 font. With 8's widths, the
-host could also correct any remaining gap per word.
-
-**Meanwhile.** Browser Times, with PhiTeX's positions.
-
-## 12. Page geometry per page
-
-The draw list takes page size from `pdf::PAGE_WIDTH`/`PAGE_HEIGHT` (US
-Letter, fixed) and a fixed 1 in `MARGIN`. Overleaf projects are often A4,
-and TeX sets the page with `\hsize`/`\vsize`/`\hoffset`/`\voffset`
-(and `\pdfpagewidth` for pdfTeX). A page's own size and offsets, on
-what `ships()` gives, would make the preview's page the size of the real
-one.
-
-## 13. A LaTeX kernel
-
-Real Overleaf projects are LaTeX. Until the kernel is there, the preview
-drops `\documentclass`, `\usepackage`, `\begin{…}` and `\section` and shows
-the words left over (see REPORT.md).
-
-## 14. `Typeset` usable as the whole backend
-
-`phitex_layout::Typeset` is what the extension should wrap, but:
-- It has no fuel parameter: `Typeset::project` uses `build::FUEL`, and the
-  preview needs a lower one (a runaway `\def\a{\a}\a` costs ~220 ms a
-  keystroke at 10^6).
-- It gives no `&mut Doc` for `edit_view`'s full `View` or the status.
-- Its drawn-stream cache is private.
-
-So the core wraps `Doc` directly and redoes `Typeset::pdf`'s cache
-(`core/src/lib.rs`, `Session::pdf`).
-
-**Shape.** `Typeset::project_with_fuel`, and a `View` from
-`Typeset::edit_view` that carries the page's draw list (see 8).
-
-## 15. Errors, not panics, at the API
-
-`Doc::edit_file`/`edit_view` panic when a range is outside the file or off
-a character boundary (`# Panics` in their docs). In wasm, built with
-`panic = "abort"`, a panic kills the instance, and every tab's session with
-it. The worker then has to reload the module and reopen each project.
-
-**Shape.** `try_edit_file(..) -> Result<EditStats, EditError>` (range,
-boundary, unknown file), or the same checks in `edit_file` returning an
-error.
-
-**Meanwhile.** `Session::valid` checks the range and boundaries before
-every edit (`core/src/lib.rs`), and a test covers the refusals.
-
-## 16. A wasm build, checked in PhiTeX
-
-A change in PhiTeX can break the wasm build without any native test
-noticing, and it did twice here:
-- `Instant::now()` panics on wasm32-unknown-unknown (see 10).
-- On wasm32-wasip1, a cdylib has no `_initialize`, so wasi-libc's
-  constructors never run and std's thread-local destructor registration
-  spins forever (`__pthread_key_delete`). The fix is linking the
-  toolchain's `crt1-reactor.o` and exporting `_initialize`
-  (`scripts/build.sh`), which a `-Zwasi-exec-model=reactor` flag does not
-  do for a cdylib.
-
-**Shape.** A CI job, or a `scripts/sandbox cargo build --target
-wasm32-wasip1` line in AGENTS.md's checks, building phitex-layout for
-wasm. Better still, a tiny `phitex-wasm` crate in PhiTeX with the ABI of
-`core/`, run under `node:wasi` for one open and one edit
-(`test/wasm-harness.mjs` does exactly this).
-
-## 17. Plain-TeX parameters that print as text
-
-In the pinned `241bd29`, `\parindent=0pt` typesets "=0pt" at the top of
-the page: the assignment isn't read, and its text is. The same goes, likely,
-for other dimen/glue parameters a plain-TeX document sets (`\parskip`,
-`\baselineskip`). Found making the store's showcase document. Check again
-at `9d3ed5e`, which reworks the builder towards TRIP.
-
-## 18. Font names that real TeX also knows (resolved upstream, to adopt)
-
-In `241bd29`, fonts are the PDF base 14 by name (`\font\rm=Times-Roman`),
-with one width table for all of them (`metrics::width(char, size)`): bold
-and italic are laid out with Times-Roman's widths. A document written that
-way fails on Overleaf's pdfTeX ("Metric (TFM) file not found"), and one
-written for pdfTeX (`\font\tenrm=cmr10`) fails in PhiTeX. **`9d3ed5e`
-fixes this** with real TFM fonts (Computer Modern carried in the repository,
-others read from the project) and a per-character draw list. The
-extension's next update adopts it (the port, the OT1/OML/OMS/OMX → Unicode
-mapping, Latin Modern webfonts for the glyphs). Meanwhile, the extension
-fits each drawn word to the width PhiTeX laid it out with (`textLength`),
-so the browser's bold does not overrun.
-
-## 19. An edit to an empty file is lost
-
-In `a21e961` (and the pins before it), `Doc::edit_file`/`edit_view` into a
-file that is empty, or was emptied, leave the Doc at 0 values: the check
-says "106 values fresh vs 0 incremental", and no page ships again. Deleting
-all but one byte and retyping works. In Overleaf, select all + delete and
-the preview is stuck at "this build shipped no page" for good. The
-extension rebuilds the Doc on the first insert into an empty file
-(`Session::refill`, tested by `delete_all_then_retype`) until an edit to an
-empty file reaches the Doc.
-
-## 20. Packages: a missing file, found later
-
-The core now records each name the Doc read and found nowhere (status
-JSON's `missing`), and the extension fetches the packages among them
-(`extension/src/packages.ts`; no source yet: PhiTeX runs no LaTeX) and
-`set_file`s them, a rebuild each (a file found missing is never looked for
-again). Wanted: an API that invalidates a missing file, so a package that
-arrives costs its readers, not the whole document.
+# Requests to partex-PhiTeX
+
+What the Overleaf preview needs from partex-PhiTeX, ordered by value. Each
+item says what the extension does meanwhile. Measured against main
+`cd9e6b6`, embedded as `core-partex/` (a wasm32-wasip1 reactor; an
+in-memory `Host`; the panel's draw list made from `pageir::Page`).
+
+## 1. The incremental build, usable without the CLI
+
+**Need.** `ssa::run_applying` and `ssa::rebuild_trips` are in
+`partex-core` and build for wasm. Turning a rebuild into files is not:
+`SsaLinker` (the spliced link, `link_full`, `write_full`, `names`) lives in
+`partex-cli/src/main.rs`, typed on `NativeHost`, and uses
+`std::time::Instant`, `HashMap` and the system zlib.
+
+**Shape.** A `partex_core::ssa::Linker` (or `effects::Linker`), generic over
+`H: Host`, with the link's state (`Splice`, the deflate cache, what was last
+written by name), `link(&mut Tex<H, SsaTracker>) -> LinkReport`, and the
+clock and deflate passed in (as `Trips::clock` already is). The CLI would
+keep only its reporting.
+
+**Meanwhile.** Every edit is a cold build (`Untracked`): about 80 ms native,
+150 to 280 ms in wasm for a one-page article. A long document is unusable.
+
+## 2. Edits as edits, and a page to see first
+
+**Need.** The host knows what changed: a byte range in one file, many times
+a second. Today a rebuild finds changes by reloading every loaded file and
+comparing (`Host::unchanged` can only answer "same"). DESIGN 4.3 item 3
+sets the target (16.7 ms for a word, rebuild and link).
+
+**Shape.**
+- `ssa::edit(tex, file, bytes: Range<usize>, text)`, or `Host::unchanged`
+  with the changed line ranges, so a rebuild costs what the edit reaches.
+- The page in view first: `rebuild` that stops once page `k` shipped (or
+  reports when it did, through `Host::page_written` in DVI mode), then the
+  rest. The panel paints the page under the cursor before the fixed point.
+- Pages changed by a rebuild: the shipped pages with a version or hash, so
+  the host redraws only those (it hashes `Page` itself today).
+
+## 3. Pages to the host in PDF mode too
+
+**Need.** The preview draws pages from `pageir::Page`, which reaches the
+host only in DVI mode (`Host::page_written` from `dvi.rs`). So the build
+runs with `\pdfoutput=0`, which is not Overleaf's build: `graphicx`,
+`hyperref` and `l3backend` take their dvips paths, and the page size is
+lost (only a `papersize` special gives it).
+
+**Shape.** `Host::page_shipped(&Page, PageGeometry)` at `ship_out` in both
+modes, where `PageGeometry` holds `\pdfpagewidth` and `\pdfpageheight` (or
+`\paperwidth`), and the offsets. Then the preview builds in PDF mode, and
+the PDF download is the same job (item 4).
+
+## 4. A PDF in wasm: deflate without the system zlib
+
+**Need.** pdfTeX's PDF needs `Host::deflate`, and partex gets byte-exact
+streams from the system zlib by FFI (`partex-cli/src/zlib.rs`), which does
+not exist in wasm32-wasip1. Without it, streams are stored, and the PDF is
+valid but large.
+
+**Shape.** A pure-Rust deflate that matches zlib's output (partex's own
+deflate, if it is byte-exact at pdfTeX's levels), behind a `partex-core`
+function that any host can call.
+
+**Meanwhile.** `ph_pdf` returns nothing, and the PDF button is dead with the
+partex core.
+
+## 5. A file found later, without stopping the job
+
+**Need.** A missing `\input`, `.sty` or `.tfm` is fatal with no terminal
+(`term_read_line` → `None`). The host learns names one at a time, and each
+name costs a build: 14 builds for article + amsmath + graphicx, about 20 for
+a one-page test.
+
+**Shape.** Either of:
+- `Host::read_file` able to say "not yet" (`Pending`), so the job
+  records every name it needs in one run and the host fetches them in
+  parallel; or
+- a dependency pre-pass: the `\documentclass`, `\usepackage` and
+  `\RequirePackage` graph from `phitex-doc` (DESIGN 4.3 item 6), so the host
+  fetches the closure first.
+
+With item 1, a file that arrives should wake only its loads (a rebuild), not
+a cold build.
+
+## 6. A format built in, or a documented `.fmt` contract
+
+**Need.** The extension ships `pdflatex.fmt` (15.6 MB, 0.79 MB gzipped),
+made by `core-partex`'s `mkfmt` with the same engine and TeX Live's
+`texmf.cnf` sizes (`texlive_params`). A format made by a different partex
+commit, or with other sizes, is undefined behaviour from the extension's
+side.
+
+**Shape.** A format header that partex checks (engine commit or format
+version, and the sizes), with a clear error on a mismatch. Also: the sizes
+`texmf.cnf` sets, as one `Params::texlive()` instead of each embedder
+copying them.
+
+## 7. Glyphs: fonts for the screen
+
+**Need.** The draw list names TeX fonts (`cmr10`, `cmmi10`, `tcrm1000`, …).
+The panel paints them with the browser's Times, and maps math characters
+by hand (`draws.rs`, `glyph`).
+
+**Shape.** A character's Unicode meaning by font encoding (OT1, OML, OMS,
+OMX, T1, TS1: pdfTeX's `glyphtounicode` and the `.enc` files say it), in
+`partex-core` or `pageir`. Better still, each page's Type 1 glyphs as paths
+(what `writet1` already parses), so the host can draw TeX's own glyphs.
+
+## 8. SyncTeX
+
+**Need.** Selecting in the editor should highlight on the page, and
+clicking the page should jump to the source. pdfTeX has `\synctex`.
+
+**Shape.** Each `Item::Char` and `Item::Rule` (or each box) in the page IR
+with its input position (file, line, and better a byte offset), as SyncTeX
+records them. Or the `.synctex` records through the host.
+
+## 9. A wasm build in partex's gate
+
+`partex-core` is `no_std` and `cargo check`s for wasm32-unknown-unknown,
+but nothing runs it as wasm. `core-partex` does: an INITEX page, a LaTeX
+article from `pdflatex.fmt` under `node:wasi` (`test/partex-harness.mjs`,
+`test/partex-latex.mjs`). A gate step that builds partex-core for
+wasm32-wasip1 and runs one job would catch a `std`-only API or an
+`Instant` before an embedder does.
+
+## 10. A stable embedding API
+
+partex is mid-rewrite (DESIGN 4.3: windows, records, the link), and
+`core-partex` uses `Tex::new`, `Tex::run`, `host_mut`, `Params`, `pageir`
+and, next, `ssa::run_applying`, `rebuild_trips`, `step_effects` and
+`take_step_changes`. Wanted: a small `partex_core::embed` (open a job, edit,
+rebuild, take pages and files) that stays stable while the internals
+change. The extension would pin to it instead of to a commit.

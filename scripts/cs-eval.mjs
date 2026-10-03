@@ -1,7 +1,7 @@
 // Dev: evaluate JS in the extension's content-script world of a tab (it has
 // chrome.storage): node scripts/cs-eval.mjs <url-substring> '<expression>'
 const [match, expr] = process.argv.slice(2);
-const t = (await (await fetch("http://localhost:9222/json")).json()).find((t) => t.type === "page" && t.url.includes(match));
+const t = (await (await fetch(`http://localhost:${process.env.PHITEX_CDP_PORT ?? 9222}/json`)).json()).find((t) => t.type === "page" && t.url.includes(match));
 const ws = new WebSocket(t.webSocketDebuggerUrl);
 await new Promise((r) => ws.addEventListener("open", r));
 const contexts = [];

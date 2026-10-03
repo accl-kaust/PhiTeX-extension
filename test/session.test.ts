@@ -112,7 +112,7 @@ test("packages the core misses are fetched once, set as files, and announced whi
   // (the core reads amsmath.sty and a .aux it doesn't have)
   core.request = async (r: CoreReq) => {
     const res = await open(r);
-    if (r.op === "open" || r.op === "status") res.json = { ...res.json, missing: "amsmath.sty" in core.files ? ["main.aux"] : ["amsmath.sty", "main.aux", "nope.sty"] };
+    if (r.op === "open" || r.op === "status") res.json = { ...res.json, missing: "amsmath.sty" in core.files ? ["main.aux", "nope.sty"] : ["amsmath.sty", "main.aux", "nope.sty"] };
     return res;
   };
   const asked: string[] = [];
@@ -123,12 +123,16 @@ test("packages the core misses are fetched once, set as files, and announced whi
   await s.start();
   await new Promise((ok) => setTimeout(ok, 20));
   await s.flush();
-  assert.deepEqual(asked.sort(), ["amsmath.sty", "nope.sty"]);
-  assert.deepEqual(states[0].loading.sort(), ["amsmath.sty", "nope.sty"]);
-  assert.deepEqual(states.at(-1), { loading: [], unavailable: ["nope.sty"], source: "TeX Live (test)" });
+  // (article.cls: main.tex's \documentclass, fetched ahead by the scan; not found, and never asked for by the build, so not "unavailable")
+  // (and pdftex.map, which every PDF-mode build reads first)
+  assert.deepEqual(asked.sort(), ["amsmath.sty", "article.cls", "nope.sty", "pdftex.map"]);
+  // (first the scan's names, fetched before the core opens; nope.sty is the build's)
+  assert.deepEqual(states[0].loading.sort(), ["amsmath.sty", "article.cls", "pdftex.map"]);
+  assert.ok(states.some((p) => p.loading.includes("nope.sty")));
+  assert.deepEqual(states.at(-1), { loading: [], unavailable: ["nope.sty"], source: "TeX Live (test)", done: ["amsmath.sty"], building: false });
   assert.equal(dec.decode(core.files["amsmath.sty"]), "% ams\n");
   assert.equal(s.text("amsmath.sty"), undefined); // (not a project file)
   await s.reopen(); // (kept across a reopen, and not asked again)
   assert.equal(dec.decode(core.files["amsmath.sty"]), "% ams\n");
-  assert.equal(asked.length, 2);
+  assert.equal(asked.length, 4);
 });

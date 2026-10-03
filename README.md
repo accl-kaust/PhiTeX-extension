@@ -10,9 +10,8 @@ edit. The extension runs it in the browser as WebAssembly, so each keystroke
 rebuilds only the chunks it touched, and the page on screen is repainted
 first.
 
-> **Experimental.** PhiTeX handles a subset of plain TeX and has no LaTeX
-> kernel yet. On a LaTeX project the panel says so, and what it shows is not
-> your document. Overleaf's PDF is the real one.
+> **Experimental.** PhiTeX runs LaTeX (pdfTeX, TeX Live's packages fetched
+> as needed) in your browser. Overleaf's PDF is the real one.
 
 ## Install (unpacked)
 
@@ -202,9 +201,9 @@ warranty.
 - Unicode: offsets are exact, but the fonts are 7-bit Computer Modern, so
   non-ASCII characters do not typeset.
 - A file added to the project after PhiTeX found it missing costs a full
-  rebuild (REQUESTS.md 3).
+  rebuild (REQUESTS.md 5).
 - No SyncTeX yet (editor ↔ page highlighting, click to source): it needs
-  source positions from PhiTeX (REQUESTS.md 1).
+  source positions from the engine (REQUESTS.md 8).
 - Hooking Overleaf relies on its DOM (`.cm-content`'s `cmView`, the file
   tree's `data-file-id`, `aria-label`) and on its endpoints. These are not a
   public API and may change.

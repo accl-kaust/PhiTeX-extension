@@ -6,3 +6,5 @@ extension/manifest.json
 extension/LICENSE.txt
 store/*.zip
 extension/texmf/
+.chrome-profile-2/
+.chrome-profile-3/

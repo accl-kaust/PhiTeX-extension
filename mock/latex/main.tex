@@ -1,0 +1,22 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+
+\title{PhiTeX Instant, on partex}
+\author{A LaTeX document}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+This page is typeset by pdfTeX's algorithms, ported to Rust and run as
+WebAssembly in your browser. Edit the source and the page follows.
+
+Euler's identity, $e^{i\pi} + 1 = 0$, inline; and a display:
+\begin{equation}
+  \int_0^1 x^2\,dx = \frac{1}{3}.
+\end{equation}
+
+\input{chapter}
+
+\end{document}

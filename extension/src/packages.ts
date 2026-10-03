@@ -16,6 +16,12 @@ export interface PackageSource {
   resolve(name: string): Promise<string | null>;
 }
 
+/**
+ * What `resolve` gives for a binary file (a font's metrics) the source
+ * handed to the core itself: fetched, but no text for the session to keep.
+ */
+export const DELIVERED = "\u0000delivered";
+
 /** No packages (PhiTeX runs no LaTeX yet). */
 export const noPackages: PackageSource = { label: "none", resolve: async () => null };
 
@@ -26,11 +32,17 @@ export interface PackageState {
   /** Asked for, found nowhere. */
   unavailable: string[];
   source: string;
+  /** Fetched so far (this project's, since it opened). */
+  done?: string[];
+  /** The core is building with what arrived (a build stops at the first file it lacks). */
+  building?: boolean;
+  /** Fetches that failed (the network, the package server), with why: asked again on the next build. */
+  failed?: { name: string; error: string }[];
 }
 
 /** A name a TeX distribution might have (not an .aux, a .bbl, a .toc: the build's own). A .tex the project lacks is asked for too: shelf.ts sends Shelf only names it lists. */
 export function isPackageFile(name: string): boolean {
-  return /\.(sty|cls|clo|def|cfg|fd|ldf|ltx|tex|dfu)$/i.test(name) && !name.includes("/");
+  return /\.(sty|cls|clo|def|cfg|fd|ldf|ltx|tex|dfu|sto|lbx|bbx|cbx|dbx|mld|tikz|pgf|code\.tex|lua|ini|cmap|fontspec|tfm|vf|pfb|enc|map)$/i.test(name) && !name.includes("/");
 }
 
 /** `inner`, each name fetched once (in flight or done), however often it is asked for. */
@@ -40,8 +52,36 @@ export function cached(inner: PackageSource): PackageSource {
     label: inner.label,
     resolve(name) {
       let p = seen.get(name);
-      if (!p) seen.set(name, (p = inner.resolve(name).catch(() => null)));
+      // (a failure is not remembered: asked again, it is fetched again)
+      if (!p) seen.set(name, (p = inner.resolve(name).catch((e) => (seen.delete(name), Promise.reject(e)))));
       return p;
     },
   };
+}
+
+/**
+ * The package files `text` will read, by a scan of its source (not TeX: a
+ * guess, which is fine, since a name it gets wrong is fetched for nothing,
+ * or found missing by the build, as before): `\documentclass`,
+ * `\LoadClass`, `\usepackage`, `\RequirePackage` (comma lists, options
+ * skipped), `\input`/`\InputIfFileExists` of a name with an extension.
+ */
+export function referenced(text: string): string[] {
+  const out = new Set<string>();
+  const body = text.replace(/(^|[^\\])%.*$/gm, "$1");
+  for (const m of body.matchAll(/\\(documentclass|LoadClass(?:WithOptions)?|usepackage|RequirePackage(?:WithOptions)?)\s*(?:\[[^\]]*\]\s*)?\{([^}]*)\}/g)) {
+    const ext = /class/i.test(m[1]) ? ".cls" : ".sty";
+    for (const n of m[2].split(",")) {
+      const name = n.trim();
+      if (/^[A-Za-z0-9@_.-]+$/.test(name)) out.add(name + ext);
+    }
+  }
+  // (a font definition file: the fonts its shapes name, as metrics; their
+  // packs bring the .vf and .pfb, so a family arrives in one round, not a
+  // build per font: `<-> \\scale@macro name`, `<5-> s*[0.9] name`)
+  if (/\\DeclareFontShape/.test(body))
+    for (const m of body.matchAll(/<[^>]*>\s*(?:\\[A-Za-z@]+\s*|s\*\s*(?:\[[^\]]*\]\s*)?)*([A-Za-z][A-Za-z0-9-]*)(?![A-Za-z0-9-]*\/)/g))
+      if (!/^(s?sub|gen|genb|sgen|fixed|sfixed|error|serror|warning)$/.test(m[1])) out.add(m[1] + ".tfm");
+  for (const m of body.matchAll(/\\(?:input|InputIfFileExists|@input)\s*\{?([A-Za-z0-9@_-]+\.(?:sty|cls|clo|def|cfg|fd|ldf|tex|dfu))\}?/g)) out.add(m[1]);
+  return [...out];
 }

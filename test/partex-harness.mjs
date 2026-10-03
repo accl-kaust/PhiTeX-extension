@@ -1,0 +1,21 @@
+// Run the partex core (core-partex/) under node:wasi: one INITEX job.
+import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const bytes = readFileSync(process.argv[2]);
+const mod = await WebAssembly.compile(bytes);
+console.log("imports:", WebAssembly.Module.imports(mod).map((i) => i.name).join(" "));
+const wasi = new WASI({ version: "preview1", args: [], env: {} });
+const inst = await WebAssembly.instantiate(mod, { wasi_snapshot_preview1: wasi.wasiImport });
+wasi.initialize(inst);
+const x = inst.exports, enc = new TextEncoder();
+const put = (b) => { const p = x.px_alloc(b.length); new Uint8Array(x.memory.buffer, p, b.length).set(b); return [p, b.length]; };
+const file = (n, t) => x.px_set_file(...put(enc.encode(n)), ...put(typeof t === "string" ? enc.encode(t) : t));
+const out = (n) => { const p = x.px_output(...put(enc.encode(n))); return p ? new Uint8Array(x.memory.buffer, p, x.px_out_len()).slice() : null; };
+file("a.tex", "\\catcode`\\{=1 \\catcode`\\}=2 \\pdfoutput=1 \\shipout\\hbox{}\\end\n");
+const t0 = performance.now();
+const h = x.px_run(...put(enc.encode("a")), 1);
+console.log("history", h, (performance.now() - t0).toFixed(1), "ms");
+console.log(new TextDecoder().decode(out("(term)")));
+const pdf = out("a.pdf");
+console.log("a.pdf", pdf?.length, pdf && new TextDecoder().decode(pdf.slice(0, 8)));
+process.exit(pdf ? 0 : 1);

@@ -12,5 +12,8 @@
     "@types/chrome": "^0.1.0",
     "typescript": "^6.0.0"
   },
-  "license": "AGPL-3.0-only"
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "pdfjs-dist": "5.7.284"
+  }
 }

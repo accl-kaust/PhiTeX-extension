@@ -28,9 +28,9 @@ upload with `scripts/package.sh` (→ `store/phitex-instant-<version>.zip`).
 > • Settings behind the extension's icon: turn it off, choose what opens, reset
 >
 > This is an UNOFFICIAL extension. It is not made, endorsed or supported by
-> Overleaf. It is experimental: PhiTeX handles a subset of plain TeX today
-> (no LaTeX yet), so for anything that matters, use Overleaf's own PDF,
-> one click away. Before its first use it asks you to accept that it is
+> Overleaf. It is experimental: PhiTeX runs LaTeX (pdfTeX, with TeX Live's
+> packages) in your browser, but for anything that matters, use Overleaf's
+> own PDF, one click away. Before its first use it asks you to accept that it is
 > provided as is, without warranty.
 >
 > Free software under the GNU AGPL, version 3 only.
@@ -93,17 +93,18 @@ repository) and paste its URL.
 ## Notes for the reviewer
 
 > To test: open any Overleaf project (a free account works), then click
-> "⚡ Instant" in the PDF toolbar and accept the terms. Plain TeX is what
-> the engine supports; for example, replace main.tex with:
+> "⚡ Instant" in the PDF toolbar and accept the terms. A LaTeX document
+> works; for example, replace main.tex with:
 >
->     \font\rm=Times-Roman at 11pt \rm
+>     \documentclass{article}
+>     \begin{document}
 >     Hello world. This paragraph repaints as you type.
->     \bye
+>     \end{document}
 >
-> A LaTeX document shows a notice that LaTeX is not supported yet. The
-> extension makes no network requests of its own beyond overleaf.com (the
-> project's files, as the signed-in user); the engine runs locally in an
-> offscreen document.
+> The extension's network requests: overleaf.com (the project's files, as
+> the signed-in user) and Shelf (shelf-phitex.pages.dev, TeX Live's package files,
+> fetched by name when a document needs one not bundled; nothing about the
+> document is sent). The engine runs locally in an offscreen document.
 
 ## Updates
 

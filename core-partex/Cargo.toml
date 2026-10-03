@@ -1,0 +1,21 @@
+[package]
+name = "phitex-overleaf-partex"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# (PDF streams: a pure-Rust zlib for Host::deflate, which works in wasm; not
+# zlib's bytes, so not byte-exact with pdfTeX, which a preview doesn't need)
+miniz_oxide = "0.8"
+partex-core = { path = "../../../tmp/partex-phitex-3c83e5f/crates/partex-core" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -12,6 +12,9 @@ import type { Draws, PageImage, Status } from "./session.ts";
 import type { PackageState } from "./packages.ts";
 import { Viewer } from "./viewer.ts";
 
+/** How long a build may ship no page before the last good one is dimmed (typing through `{`). */
+const STALE_GRACE_MS = 1000;
+
 /** What the panel shows, for controls that live outside it (a host's own toolbar). */
 export interface ViewState {
   page: number;
@@ -240,6 +243,7 @@ button.btn:hover { background: var(--accent2); }
 .diag:first-child { border-top: 0; }
 .diag[data-line] { cursor: pointer; } .diag[data-line]:hover { background: var(--light2); }
 .diag .icon { margin-top: 1px; }
+.diag .detail { margin: 4px 0 0; padding: 4px 6px; font: 11px/1.35 "DM Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--divider); border-radius: 4px; max-height: 12em; overflow: auto; }
 .diag.error .icon { color: var(--danger); } .diag.warning .icon { color: var(--warn); } .diag.info .icon { color: var(--info); }
 .diag .where { color: var(--fg2); white-space: nowrap; margin-left: auto; padding-left: 8px; font-family: "DM Mono", monospace; font-size: 11px; }
 .stage { position: relative; flex: 1; overflow: auto; background: var(--light3); padding: 12px; text-align: center; min-height: 0; }
@@ -293,6 +297,23 @@ footer .msg.err { color: var(--danger); }
   background: var(--light); color: var(--fg2); border: 1px solid var(--divider); box-shadow: 0 2px 6px rgba(0,0,0,.15); }
 .pkgs.on { display: flex; gap: 6px; align-items: center; }
 .pkgs .icon { color: var(--info); }
+/* the loading card: packages downloading, then the first build */
+.load { max-width: 360px; margin: 0 auto; text-align: left; color: var(--fg2-dark); }
+.win.docked.light .load, .win:not(.docked) .load { color: var(--fg2); }
+.load h3 { margin: 0 0 10px; font: 600 14px "Noto Sans", system-ui, sans-serif; color: inherit; }
+.load .bar { height: 6px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
+.load .bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
+.load .bar.busy i { width: 35% !important; animation: phx-busy 1.1s ease-in-out infinite; }
+@keyframes phx-busy { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.load .count { margin: 8px 0 10px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.load .names { display: flex; flex-wrap: wrap; gap: 4px; min-height: 22px; }
+.load .names span { font: 11px "DM Mono", monospace; padding: 1px 6px; border-radius: 4px; background: rgb(127 127 127 / 18%); }
+.load .names span.ing { animation: phx-pulse 1s ease-in-out infinite alternate; }
+.load .names span.ok { color: var(--accent); }
+@keyframes phx-pulse { from { opacity: .45; } to { opacity: 1; } }
+.load .note { margin-top: 12px; font-size: 11px; opacity: .8; }
+.pkgs .mini { flex: none; width: 60px; height: 4px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
+.pkgs .mini i { display: block; height: 100%; background: var(--accent); }
 .speedchip { display: none; position: absolute; right: 16px; bottom: 14px; z-index: 3; pointer-events: none; white-space: nowrap;
   height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.3); opacity: 0; }
@@ -367,7 +388,7 @@ export class Panel {
   <header>
     <span class="icon" aria-hidden="true">preview</span>
     <span class="title">PhiTeX</span>
-    <span class="badge hide-collapsed" title="An unofficial extension, not part of Overleaf. PhiTeX handles a subset of plain TeX; Overleaf's PDF is the real one.">Unofficial · experimental</span>
+    <span class="badge hide-collapsed" title="An unofficial extension, not part of Overleaf. PhiTeX runs LaTeX (pdfTeX) in your browser; Overleaf's PDF is the real one.">Unofficial · experimental</span>
     <span class="grow"></span>
     <span class="chip" id="chip" title="Status"><span class="dot"></span><span id="chiptext">starting…</span></span>
     <span class="group hide-collapsed">
@@ -400,7 +421,7 @@ export class Panel {
       <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
       endorsed or supported by Overleaf: an experimental incremental TeX engine that runs entirely in your browser. Nothing is
       sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
-      <div class="about-foot">Plain TeX only for now. Free software (AGPL-3.0-only,
+      <div class="about-foot">LaTeX, with TeX Live's packages fetched as needed. Free software (AGPL-3.0-only,
       <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
       To turn it off: <code>chrome://extensions</code>.</div>
     </div>
@@ -621,6 +642,12 @@ export class Panel {
       }
       row.innerHTML = `${icon(d.severity, 16)}<span class="text"></span><span class="where"></span>`;
       row.querySelector(".text")!.textContent = d.message;
+      if (d.detail) {
+        const pre = document.createElement("pre");
+        pre.className = "detail";
+        pre.textContent = d.detail;
+        row.querySelector(".text")!.append(pre);
+      }
       row.querySelector(".where")!.textContent = d.file ? `${d.file}${d.line ? `:${d.line}` : ""}` : "";
       list.append(row);
     }
@@ -649,26 +676,76 @@ export class Panel {
    * download's (TeX Live's files, not the project's, not Overleaf's).
    */
   packages(p: PackageState): void {
+    const done = p.done?.length ?? 0;
+    const total = done + p.loading.length;
+    const pct = total ? Math.round((100 * done) / total) : 100;
+    // (before the first page: a loading card in the stage)
+    if (!this.last) {
+      const empty = this.$("#empty");
+      if (!p.loading.length && !p.building) {
+        // (done: the build's own state says the rest; a card left at "163 of 164" would not)
+        empty.textContent = p.unavailable.length
+          ? `Not found in ${p.source} (most are optional files LaTeX only checks for): ${p.unavailable.slice(0, 6).join(", ")}${p.unavailable.length > 6 ? " …" : ""}.`
+          : "Typesetting…";
+        return;
+      }
+      const recent = [...(p.done ?? []).slice(-10).map((n) => [n, "ok"]), ...p.loading.slice(0, 8).map((n) => [n, "ing"])];
+      empty.innerHTML =
+        `<div class="load"><h3></h3><div class="bar${p.loading.length ? "" : " busy"}"><i style="width:${pct}%"></i></div>` +
+        `<div class="count"></div><div class="names"></div><div class="note"></div></div>`;
+      empty.querySelector("h3")!.textContent = p.loading.length ? "Fetching LaTeX packages…" : "Typesetting…";
+      empty.querySelector(".count")!.textContent = p.loading.length
+        ? `${done} of ${total} files${p.unavailable.length ? ` · ${p.unavailable.length} not found` : ""}`
+        : `with ${done} package file${done === 1 ? "" : "s"}; a build may ask for more`;
+      const names = empty.querySelector(".names")!;
+      for (const [n, k] of recent) {
+        const c = document.createElement("span");
+        c.className = k;
+        c.textContent = n;
+        names.append(c);
+      }
+      empty.querySelector(".note")!.textContent =
+        `From ${p.source} (fetched once, then kept in this browser). Only package names leave it, never your project's files.`;
+      return;
+    }
     const el = this.$("#pkgs");
     el.classList.toggle("on", p.loading.length > 0);
     if (!p.loading.length) return;
     const names = p.loading.slice(0, 3).join(", ") + (p.loading.length > 3 ? ` and ${p.loading.length - 3} more` : "");
-    el.innerHTML = `${icon("download", 16)}<span></span>`;
-    el.querySelector("span:last-child")!.textContent =
-      `PhiTeX is downloading ${p.loading.length === 1 ? "a LaTeX package" : `${p.loading.length} LaTeX packages`} from ${p.source}: ${names}. ` +
-      `Not your project's files, and not from Overleaf; the preview catches up once they're in.`;
+    el.innerHTML = `${icon("download", 16)}<span></span><span class="mini"><i style="width:${pct}%"></i></span>`;
+    el.querySelector("span")!.textContent =
+      `Downloading ${p.loading.length === 1 ? "a LaTeX package" : `${p.loading.length} LaTeX packages`} from ${p.source} (${done} of ${total}): ${names}.`;
   }
 
   /** Keep the last good page when a build ships nothing (or not this page): dimmed, with why. */
+  /** When the page first went missing (a build that shipped none); its dimming waits. */
+  private staleSince = 0;
+  private staleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Dim the last good page when a build ships none, but only once that has
+   * lasted STALE_GRACE_MS: typing `\section{B…` is an error at every
+   * keystroke until the `}`, and the page shouldn't flash grey for each.
+   */
   private stale(s: Status): void {
     const stage = this.$("#stage");
-    const gone = s.pages === 0 || this.at >= s.pages;
-    const on = gone && !!this.last;
-    stage.classList.toggle("stale", on);
-    if (on) {
-      const why = s.diagnostics?.find((d) => d.severity !== "info" && d.code !== "no-pages");
-      this.$("#banner").textContent = `Showing the last complete render: ${why ? why.message + (why.line ? ` (${why.file}:${why.line})` : "") : "this build shipped no page"}.`;
+    const gone = (s.pages === 0 || this.at >= s.pages) && !!this.last;
+    clearTimeout(this.staleTimer);
+    if (!gone) {
+      this.staleSince = 0;
+      stage.classList.remove("stale");
+      return;
     }
+    const now = performance.now();
+    this.staleSince ||= now;
+    const left = STALE_GRACE_MS - (now - this.staleSince);
+    if (left > 0) {
+      this.staleTimer = setTimeout(() => this.lastStatus && this.stale(this.lastStatus), left);
+      return;
+    }
+    stage.classList.add("stale");
+    const why = s.diagnostics?.find((d) => d.severity !== "info" && d.code !== "no-pages");
+    this.$("#banner").textContent = `Showing the last complete render: ${why ? why.message + (why.line ? ` (${why.file}:${why.line})` : "") : "this build shipped no page"}.`;
   }
 
   /** Follow what the panel shows (a host toolbar's controls). */
@@ -689,7 +766,8 @@ export class Panel {
       chipTitle: chip.title,
       speed: this.speed,
       sheet: this.win.classList.contains("sheet-open"),
-      diagCount: this.lastStatus?.diagnostics?.length ?? 0,
+      // (the badge counts what needs a look: info is listed, not counted)
+      diagCount: this.lastStatus?.diagnostics?.filter((d) => d.severity !== "info").length ?? 0,
       diagWorst: this.lastStatus?.diagnostics?.[0]?.severity ?? "",
       percent: Math.round(this.scale() * 100),
     };

@@ -12,10 +12,11 @@ mkdir -p store
 rm -f "$out"
 
 if grep -q localhost extension/manifest.json; then echo "manifest has localhost: not a release build" >&2; exit 1; fi
-files=(manifest.json popup.html offscreen.html LICENSE.txt icons dist texmf)
+files=(manifest.json popup.html offscreen.html LICENSE.txt icons dist texmf shelf-index.tsv.gz)
 for f in "${files[@]}"; do [ -e "extension/$f" ] || { echo "missing extension/$f" >&2; exit 1; }; done
 [ -s extension/dist/core.wasm ] || { echo "no core.wasm" >&2; exit 1; }
 [ -s extension/texmf/names.txt ] || { echo "no texmf/ (scripts/fetch-texmf.sh)" >&2; exit 1; }
+[ -s extension/shelf-index.tsv.gz ] || { echo "no shelf-index.tsv.gz (scripts/shelf-index.sh)" >&2; exit 1; }
 if grep -q localhost extension/dist/shelf.js; then echo "shelf.js points at localhost: not a release build" >&2; exit 1; fi
 if find extension/dist -name '*.map' | grep -q .; then echo "source maps in dist" >&2; exit 1; fi
 

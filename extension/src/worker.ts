@@ -336,6 +336,12 @@ function handle(r: Req): Res {
       for (const [n, b] of bins) f.str(n).bytes(b);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
+      // (the pages' hashes with it: the tab lays them out now, not after
+      // a request that would wait behind readying the first rebuild)
+      if (nh && json) {
+        core.ph_pages(nh);
+        json.hashes = outJson().pages;
+      }
       if (nh) sessions.set(r.client, nh);
       return { id: r.id, ok: nh !== 0, json };
     }

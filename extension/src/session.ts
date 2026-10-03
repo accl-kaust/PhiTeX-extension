@@ -411,7 +411,7 @@ export class PreviewSession {
     this.status(r.json.pending, r.json.undefined_names);
     this.fetchPackages(r.json.missing);
     this.sink.latency(`opened in ${r.json.build_ms.toFixed(1)} ms (round trip ${(this.now() - t).toFixed(1)} ms)`);
-    await (this.sink.layout ? this.layout() : this.showPage());
+    await (this.sink.layout ? this.layout(Array.isArray(r.json.hashes) ? r.json.hashes : undefined) : this.showPage());
     // (the first build is in: nothing is building for the packages now)
     this.pkg.building = false;
     this.tellPackages();
@@ -599,11 +599,15 @@ export class PreviewSession {
   private hashes: string[] = [];
 
   /** Tell the view which pages there are (by hash). */
-  private async layout(): Promise<void> {
+  /** `given`: the hashes a reply carried (the open's), else asked for. */
+  private async layout(given?: string[]): Promise<void> {
     if (!this.sink.layout) return;
-    const r = await this.core.request({ op: "pages" });
-    if (!r.ok || !r.json?.pages) return;
-    this.hashes = r.json.pages;
+    if (given) this.hashes = given;
+    else {
+      const r = await this.core.request({ op: "pages" });
+      if (!r.ok || !r.json?.pages) return;
+      this.hashes = r.json.pages;
+    }
     this.tr("layout", { pages: this.hashes.length });
     this.setPages(this.hashes.length);
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)

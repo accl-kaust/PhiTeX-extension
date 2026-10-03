@@ -98,11 +98,17 @@ function pack(id: string): Promise<Map<string, Uint8Array>> {
   let p = packs.get(id);
   if (!p) {
     p = (async () => {
-      const r = await fetch(SHELF + "p/" + encodeURIComponent(id) + ".pack");
-      if (!r.ok) throw new Error(`Shelf: pack ${id}: HTTP ${r.status}`);
-      // (a pack Shelf doesn't have comes back as its home page, 200: the
-      // index in this extension is newer than the Shelf deployed)
-      const raw = new Uint8Array(await r.arrayBuffer());
+      const url = SHELF + "p/" + encodeURIComponent(id) + ".pack";
+      const get = async (cache: RequestCache) => {
+        const r = await fetch(url, { cache });
+        return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
+      };
+      // (a pack Shelf doesn't have comes back as its home page, 200, and the
+      // browser keeps that a year (packs are immutable): asked again past the
+      // cache, as a pack deployed since then is there)
+      let raw = await get("default");
+      if (raw[0] !== 0x1f || raw[1] !== 0x8b) raw = await get("reload");
+      if (!raw.length) throw new Error(`Shelf has no pack "${id}" (HTTP error)`);
       if (raw[0] !== 0x1f || raw[1] !== 0x8b) throw new Error(`Shelf has no pack "${id}" (the package server is older than this extension)`);
       const files = unpack(await gunzip(new Response(raw)));
       await idbPutAll(files).catch(() => undefined);

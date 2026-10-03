@@ -761,7 +761,9 @@ function dockInOverleaf(panel: Panel): Dock {
     document.querySelector(".phitex-on")?.classList.remove("phitex-on");
     panel.shown(false);
   }
+  void chrome.storage.local.get("speedOff").then(({ speedOff }) => panel.speedChip(!speedOff));
   chrome.storage.onChanged.addListener((c) => {
+    if (c.speedOff) panel.speedChip(!c.speedOff.newValue);
     // (a reset removes the keys: newValue undefined is the default)
     if (c.view && (c.view.newValue ?? "pdf") !== mode) void set(c.view.newValue === "phitex" ? "phitex" : "pdf");
     if (c.tipOff) {
@@ -804,7 +806,13 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     onNeed: (k) => (DETACHED ? ask({ t: "need", k }) : session?.fetch(k)),
     onPdf: async () => {
       const pdf = await session?.pdf();
-      if (!pdf) return;
+      // (a job that stopped, at a fatal error or a missing file, left pdfTeX's file
+      // unfinished: no xref, no trailer, which no viewer opens; said, not saved)
+      const tail = pdf && new TextDecoder("latin1").decode(pdf.subarray(Math.max(0, pdf.length - 64)));
+      if (!pdf || !pdf.length || !tail!.includes("%%EOF")) {
+        panel.msg("No complete PDF yet: the build stopped before the end of the document (see ⓘ diagnostics). Fix that, or download Overleaf's compiled PDF from the ▾ menu.", true);
+        return;
+      }
       const url = URL.createObjectURL(new Blob([pdf as BlobPart], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;

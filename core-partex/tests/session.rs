@@ -70,6 +70,8 @@ fn article_with_packages() {
     assert!(d.contains("Intro") && d.contains("Hello,"), "{d}");
     eprintln!("{} builds, last {:.0} ms; {d}", s.builds, s.build_ms);
     eprintln!("{}", s.how);
+    // (as the extension does when idle: the SSA program before the first edit)
+    s.prepare();
     // edits, rebuilt in place: each the page a fresh build makes
     for (from, to) in [("world", "there"), ("Intro", "Introduction"), ("$x^2$", "$x^2 + y^2$")] {
         let at = s.text("main.tex").unwrap().find(from).unwrap();
@@ -90,6 +92,10 @@ fn article_with_packages() {
         }
         fresh.status();
         assert_eq!(got, fresh.draws(0).unwrap(), "after {from} -> {to}");
+        // (the PDF a download gives: whole, as the fresh job's is)
+        let tail = |p: &[u8]| String::from_utf8_lossy(&p[p.len().saturating_sub(40)..]).into_owned();
+        assert!(tail(&fresh.pdf).contains("%%EOF"), "fresh: {}", tail(&fresh.pdf));
+        assert!(tail(&s.pdf).contains("%%EOF"), "after {from} -> {to}: {} bytes (fresh {}), ends {:?}", s.pdf.len(), fresh.pdf.len(), tail(&s.pdf));
         // (not the .aux: a fresh job reads none and the rebuilt one read the
         // last, so LaTeX writes \gdef\@abspage@last only in the first, as a
         // second pdflatex run would not)
@@ -135,4 +141,38 @@ fn long_document_timing() {
         eprintln!("edit in section {k}: {}: {:.1} ms; written {:?}", s.how, s.build_ms, s.written());
 
     }
+}
+
+/// A project dir's main.tex (PHITEX_PROJECT), an edit, then the PDF whole (`--ignored`).
+#[test]
+#[ignore]
+fn pdf_whole_after_edit() {
+    assets();
+    let dir = std::env::var("PHITEX_PROJECT").expect("PHITEX_PROJECT");
+    let mut files = BTreeMap::new();
+    files.insert("main.tex".to_string(), std::fs::read_to_string(Path::new(&dir).join("main.tex")).unwrap());
+    let mut s = Session::open(files, "main.tex");
+    let mut asked = std::collections::BTreeSet::new();
+    for _ in 0..30 {
+        let st = s.status();
+        let want: Vec<String> = st.missing.iter().filter(|n| asked.insert((*n).clone())).cloned().collect();
+        if want.is_empty() {
+            break;
+        }
+        for n in want {
+            if let Some(b) = find(&n) {
+                give(&mut s, &n, b);
+            }
+        }
+    }
+    let st = s.status();
+    eprintln!("pages {} missing {:?} {:?}", st.pages, st.missing, st.error);
+    s.prepare();
+    let tail = |p: &[u8]| String::from_utf8_lossy(&p[p.len().saturating_sub(40)..]).into_owned();
+    eprintln!("{}: {} bytes, ends {:?}", s.how, s.pdf.len(), tail(&s.pdf));
+    let at = s.text("main.tex").unwrap().find("Every writer").unwrap();
+    s.edit_file("main.tex", at..at, "Hello. ").unwrap();
+    s.status();
+    eprintln!("{}: {} bytes, ends {:?}", s.how.lines().next().unwrap(), s.pdf.len(), tail(&s.pdf));
+    assert!(tail(&s.pdf).contains("%%EOF"));
 }

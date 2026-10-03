@@ -167,7 +167,8 @@ export function diagnose(files: Record<string, string>, main: string | null, bui
     if (build.undefinedNames?.length) out.push({ severity: "warning", code: "undefined", message: `undefined: ${build.undefinedNames.join(" ")}` });
     // (most are optional files LaTeX only looks for: .cfg, hooks; the one a
     // build stopped at is the error above)
-    const optional = build.unavailable?.filter((n) => n !== build.texError?.missing) ?? [];
+    // (`x.tex` is TeX's first try at `x`: one name, as the source says it)
+    const optional = [...new Set(build.unavailable?.filter((n) => n !== build.texError?.missing).map((n) => n.replace(/(\.[a-z]+)\.tex$/, "$1")))];
     if (optional.length) {
       const names = optional.slice(0, 6).join(" ") + (optional.length > 6 ? " …" : "");
       out.push({

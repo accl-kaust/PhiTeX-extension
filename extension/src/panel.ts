@@ -312,12 +312,26 @@ footer .msg.err { color: var(--danger); }
 .load .names span.ok { color: var(--accent); }
 @keyframes phx-pulse { from { opacity: .45; } to { opacity: 1; } }
 .load .note { margin-top: 12px; font-size: 11px; opacity: .8; }
+.load .steps { display: flex; gap: 6px; margin: 0 0 12px; font-size: 11px; }
+.load .steps span { display: flex; align-items: center; gap: 4px; opacity: .5; }
+.load .steps span::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; box-sizing: border-box; }
+.load .steps span.now { opacity: 1; font-weight: 600; }
+.load .steps span.now::before { background: var(--accent); border-color: var(--accent); animation: phx-pulse .8s ease-in-out infinite alternate; }
+.load .steps span.ok { opacity: .8; }
+.load .steps span.ok::before { background: currentColor; }
+.load .steps i { flex: 1; align-self: center; height: 1px; background: currentColor; opacity: .25; font-style: normal; }
+.load .bar:not(.busy) i { background-image: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 35%) 50%, transparent 70%); background-size: 200% 100%; animation: phx-shine 1.4s linear infinite; }
+@keyframes phx-shine { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+.load .alive { margin-top: 8px; font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.load .alive::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .load .bar i, .load .steps span.now::before, .load .alive::before { animation: none !important; } }
 .pkgs .mini { flex: none; width: 60px; height: 4px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
 .pkgs .mini i { display: block; height: 100%; background: var(--accent); }
 .speedchip { display: none; position: absolute; right: 16px; bottom: 14px; z-index: 3; pointer-events: none; white-space: nowrap;
   height: 24px; padding: 0 10px; border-radius: 9999px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.3); opacity: 0; }
 .win.docked .speedchip { display: inline-flex; }
+.win.docked.nospeed .speedchip { display: none; }
 /* who made this, always said (it looks native on purpose; it must never pass for Overleaf's) */
 .byline { display: none; position: absolute; left: 14px; bottom: 14px; z-index: 3; all: unset; }
 .win.docked .byline { display: inline-flex; position: absolute; left: 14px; bottom: 14px; z-index: 3; align-items: center; height: 22px; padding: 0 9px;
@@ -675,24 +689,61 @@ export class Panel {
    * Packages downloading: said plainly, so a slow first build reads as the
    * download's (TeX Live's files, not the project's, not Overleaf's).
    */
+  /** The loading card's clock: when loading began, the last file that arrived, its ticker. */
+  private loadT0 = 0;
+  private loadLast = 0;
+  private loadDone = -1;
+  private loadTick: ReturnType<typeof setInterval> | undefined;
+  private loadPct = 0;
+
+  /** The card's live line: time so far and the last arrival, so a long fetch reads as working, not stuck. */
+  private alive(): void {
+    const el = this.$("#empty").querySelector<HTMLElement>(".alive");
+    if (!el || this.last) {
+      clearInterval(this.loadTick);
+      this.loadTick = undefined;
+      return;
+    }
+    const now = performance.now(), s = Math.round((now - this.loadT0) / 1000), quiet = (now - this.loadLast) / 1000;
+    const fetching = el.dataset.phase === "fetch";
+    el.textContent = fetching
+      ? quiet < 4
+        ? `Still fetching · ${s} s · files arriving`
+        : `Still fetching · ${s} s · a large package (TikZ, fonts) is on its way`
+      : `Typesetting · ${s} s`;
+    if (s >= 20 && fetching) el.textContent += " · only the first time: next visits reuse them";
+  }
+
   packages(p: PackageState): void {
     const done = p.done?.length ?? 0;
     const total = done + p.loading.length;
-    const pct = total ? Math.round((100 * done) / total) : 100;
+    const now = performance.now();
+    if (!this.loadT0) this.loadT0 = now;
+    if (done !== this.loadDone) {
+      this.loadDone = done;
+      this.loadLast = now;
+    }
+    // (never backwards: a build asking for more grows the total)
+    const pct = (this.loadPct = Math.max(this.loadPct, total ? Math.round((100 * done) / total) : 100));
     // (before the first page: a loading card in the stage)
     if (!this.last) {
       const empty = this.$("#empty");
       if (!p.loading.length && !p.building) {
-        // (done: the build's own state says the rest; a card left at "163 of 164" would not)
-        empty.textContent = p.unavailable.length
-          ? `Not found in ${p.source} (most are optional files LaTeX only checks for): ${p.unavailable.slice(0, 6).join(", ")}${p.unavailable.length > 6 ? " …" : ""}.`
-          : "Typesetting…";
+        // (done: the build's own state says the rest; a card left at "163 of 164" would not.
+        // Files not found are optional ones LaTeX only checks for (amsart.cfg, …): the
+        // diagnostics list them, and an error says when one was needed)
+        empty.textContent = "Typesetting…";
         return;
       }
       const recent = [...(p.done ?? []).slice(-10).map((n) => [n, "ok"]), ...p.loading.slice(0, 8).map((n) => [n, "ing"])];
+      const fetch = p.loading.length > 0;
       empty.innerHTML =
-        `<div class="load"><h3></h3><div class="bar${p.loading.length ? "" : " busy"}"><i style="width:${pct}%"></i></div>` +
+        `<div class="load"><div class="steps"><span class="ok">Project read</span><i></i><span class="${fetch ? "now" : "ok"}">Packages</span><i></i><span class="${fetch ? "" : "now"}">Typesetting</span></div>` +
+        `<h3></h3><div class="bar${fetch ? "" : " busy"}"><i style="width:${pct}%"></i></div>` +
+        `<div class="alive" data-phase="${fetch ? "fetch" : "tex"}"></div>` +
         `<div class="count"></div><div class="names"></div><div class="note"></div></div>`;
+      this.alive();
+      this.loadTick ??= setInterval(() => this.alive(), 1000);
       empty.querySelector("h3")!.textContent = p.loading.length ? "Fetching LaTeX packages…" : "Typesetting…";
       empty.querySelector(".count")!.textContent = p.loading.length
         ? `${done} of ${total} files${p.unavailable.length ? ` · ${p.unavailable.length} not found` : ""}`
@@ -848,6 +899,11 @@ export class Panel {
   sheet(on = !this.win.classList.contains("sheet-open")): void {
     this.win.classList.toggle("sheet-open", on && !!this.docked);
     this.emit();
+  }
+
+  /** The ⚡ chip shown or not (the popup's setting). */
+  speedChip(on: boolean): void {
+    this.win.classList.toggle("nospeed", !on);
   }
 
   /** A repaint reached the screen, `ms` after its keystroke: the ⚡ chip says how fast. */

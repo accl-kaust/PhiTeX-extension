@@ -51,7 +51,15 @@
     <span class="seg" id="view"><button data-v="pdf">PDF</button><button data-v="phitex">⚡ Instant</button></span></div>
   <div class="row"><span>Page<small>Vector: selectable text · PNG: PhiTeX's raster</small></span>
     <span class="seg" id="format"><button data-v="vector">Vector</button><button data-v="png">PNG</button></span></div>
+  <div class="row"><span>Show the ⚡ ms chip<small>How long each repaint took, after a keystroke</small></span>
+    <label class="switch"><input type="checkbox" id="speed"><i></i></label></div>
   <p class="note" id="viewnote" style="margin:0"></p>
+</section>
+
+<section>
+  <h2>Package cache</h2>
+  <div class="row"><span>TeX Live files kept in this browser<small id="cachestats">Counting…</small></span>
+    <button class="btn" id="cacheclear" disabled>Clear</button></div>
 </section>
 
 <section>

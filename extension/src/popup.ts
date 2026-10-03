@@ -22,7 +22,7 @@ function seg(id: string, value: string, onPick: (v: string) => void): void {
 }
 
 async function render(): Promise<void> {
-  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "accepted"]);
+  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "speedOff", "accepted"]);
   const accepted = s.accepted === TERMS;
   $<HTMLElement>("version").textContent = chrome.runtime.getManifest().version;
   const enabled = $<HTMLInputElement>("enabled");
@@ -37,6 +37,10 @@ async function render(): Promise<void> {
   const tips = $<HTMLInputElement>("tips");
   tips.checked = !s.tipOff;
   tips.onchange = () => chrome.storage.local.set({ tipOff: !tips.checked });
+  const speed = $<HTMLInputElement>("speed");
+  speed.checked = !s.speedOff;
+  speed.onchange = () => chrome.storage.local.set({ speedOff: !speed.checked });
+  void cacheStats();
   const news = $<HTMLInputElement>("news");
   news.checked = !s.newsOff;
   news.onchange = () => chrome.storage.local.set({ newsOff: !news.checked });
@@ -81,6 +85,54 @@ async function render(): Promise<void> {
     reset.textContent = "Reset ✓";
     reset.classList.remove("confirm");
     void render();
+  };
+}
+
+/** The package cache (shelf.ts's IndexedDB, this extension's origin): files, bytes, and a clear. */
+function cacheDb(): Promise<IDBDatabase | null> {
+  return new Promise((res) => {
+    const o = indexedDB.open("phitex-shelf");
+    // (none yet: nothing made here, shelf.ts makes it at its version)
+    o.onupgradeneeded = () => {
+      o.transaction!.abort();
+      res(null);
+    };
+    o.onsuccess = () => res(o.result.objectStoreNames.contains("files") ? o.result : (o.result.close(), null));
+    o.onerror = () => res(null);
+  });
+}
+
+async function cacheStats(): Promise<void> {
+  const out = $("cachestats"), btn = $<HTMLButtonElement>("cacheclear");
+  const db = await cacheDb();
+  let n = 0, bytes = 0;
+  if (db) {
+    await new Promise<void>((res) => {
+      const c = db.transaction("files", "readonly").objectStore("files").openCursor();
+      c.onsuccess = () => {
+        const k = c.result;
+        if (!k) return res();
+        n++;
+        const v = k.value as Uint8Array | string;
+        bytes += typeof v === "string" ? v.length : v.byteLength;
+        k.continue();
+      };
+      c.onerror = () => res();
+    });
+  }
+  const mb = bytes / 1048576;
+  out.textContent = n ? `${n} files, ${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · fetched once, reused offline` : "Empty: packages are fetched as documents need them";
+  btn.disabled = !n;
+  btn.onclick = async () => {
+    if (!db) return;
+    btn.disabled = true;
+    await new Promise<void>((res) => {
+      const t = db.transaction("files", "readwrite");
+      t.objectStore("files").clear();
+      t.oncomplete = t.onerror = () => res();
+    });
+    db.close();
+    void cacheStats();
   };
 }
 

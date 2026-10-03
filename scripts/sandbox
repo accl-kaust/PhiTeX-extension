@@ -13,7 +13,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
-partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-0a98905}"
+partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-1483121}"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
 

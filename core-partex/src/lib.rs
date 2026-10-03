@@ -520,12 +520,7 @@ impl Session {
         // (a job that ended fatally, an unclosed brace's runaway argument, is
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
-        // (a font the last job looked for and lacked, now here: a rebuild
-        // does not see that \font's failed lookup changed, so cold)
-        let font_arrived = self.changed.iter().any(|n| {
-            [".tfm", ".vf", ".pfb", ".enc", ".map"].iter().any(|e| n.ends_with(e)) && self.missing.contains(n)
-        });
-        let rebuild = self.tex.is_some() && !font_arrived && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
+        let rebuild = self.tex.is_some() && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
         if !rebuild && !self.want_ssa {
             self.plain_build();
             self.build_ms = ms(t.elapsed());

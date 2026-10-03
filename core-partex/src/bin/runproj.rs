@@ -24,13 +24,15 @@ fn main() {
     add_dir(&mut assets, Path::new("/usr/share/texmf-dist/fonts/tfm/jknappen/ec"));
     add_assets(assets);
     let (mut files, mut binary) = (BTreeMap::new(), Vec::new());
-    for e in std::fs::read_dir(dir).unwrap().flatten() {
-        let n = e.file_name().to_string_lossy().into_owned();
-        match std::fs::read_to_string(e.path()) {
+    // (the project's folders too: names relative to DIR, as Overleaf's paths)
+    let o = Command::new("find").arg(dir).args(["-type", "f"]).output().unwrap();
+    for p in String::from_utf8(o.stdout).unwrap().lines() {
+        let n = Path::new(p).strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+        match std::fs::read_to_string(p) {
             Ok(t) if !n.ends_with(".tfm") && !n.ends_with(".vf") => {
                 files.insert(n, t);
             }
-            _ => binary.push((n, std::fs::read(e.path()).unwrap())),
+            _ => binary.push((n, std::fs::read(p).unwrap())),
         }
     }
     let t0 = std::time::Instant::now();
@@ -63,6 +65,10 @@ fn main() {
         }
     }
     println!("startup: {:.0} ms in {} builds", t0.elapsed().as_secs_f64() * 1e3, s.builds);
+    // (as the worker's idle step: the incremental program built, so edits rebuild)
+    let t = std::time::Instant::now();
+    while s.prepare() {}
+    println!("prepare: {:.0} ms ({})", t.elapsed().as_secs_f64() * 1e3, s.how);
     // (PHITEX_EDITS="file|old|new;...": each edit, rebuilt and timed)
     for e in std::env::var("PHITEX_EDITS").unwrap_or_default().split(';').filter(|e| !e.is_empty()) {
         let mut it = e.splitn(3, '|');

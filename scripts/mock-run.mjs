@@ -78,7 +78,7 @@ const evalIn = async (expr, cs = false) => {
 };
 const state = () => evalIn(`(() => { const s = globalThis.__phitexSession; if (!s) return null; return { n: s.trace.length, last: s.trace.at(-1)?.t ?? 0, now: Math.round(performance.now()), loading: s.pkg.loading.length, building: s.pkg.building, inflight: s.inflight, pages: s.pages } })()`, true);
 /** Until nothing new for `quiet` ms and no package in flight (or `max`). */
-async function idle(quiet = 1500, max = 180_000) {
+async function idle(quiet = 1500, max = 900_000) {
   const t = Date.now();
   let n = -1, since = Date.now();
   while (Date.now() - t < max) {
@@ -104,7 +104,12 @@ for (const s of sc.steps ?? []) {
   const t = Date.now() - T0;
   if (s.type !== undefined) {
     const at = await evalIn(pos(s));
-    if (at < 0) throw new Error(`step: anchor not found: ${JSON.stringify(s)}`);
+    if (at < 0) {
+      // (the run goes on, so the trace is still written)
+      console.log(`step: anchor not found: ${JSON.stringify(s)}`);
+      steps.push({ t, k: "STEP FAILED", d: s });
+      continue;
+    }
     if (s.keys) {
       // (key by key, as typing: each its own transaction)
       await evalIn(`(async () => { let at = ${at}; for (const c of ${JSON.stringify(s.type)}) { mockEditor.type(at, c); at += c.length; await new Promise((r) => setTimeout(r, ${s.keys})); } })()`);
@@ -126,6 +131,12 @@ for (const s of sc.steps ?? []) {
     await sleep(800);
     s.result = await evalIn(`(() => { const v = mockEditor.view, m = v.state.selection?.main; return m && { file: document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label"), text: mockEditor.text().slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)), around: mockEditor.text().slice(Math.max(0, m.anchor - 30), m.anchor + 30) }; })()`);
     console.log("dblpage →", JSON.stringify(s.result));
+  } else if (s.trace !== undefined) {
+    // (the core's rebuilds traced into its log: core-log.txt)
+    await evalIn(`globalThis.__phitexSession.core.request({ op: "trace", on: ${!!s.trace} })`, true);
+  } else if (s.open !== undefined) {
+    await evalIn(`mockEditor.open(${JSON.stringify(s.open)})`);
+    await sleep(500);
   } else if (s.dbloutline !== undefined) {
     // (as a user: two clicks, then the double-click)
     await evalIn(`(() => { const b = [...document.querySelectorAll(".outline-item-link")].find((b) => b.textContent === ${JSON.stringify(s.dbloutline)}); b.click(); b.click(); b.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
@@ -154,6 +165,9 @@ const lines = [
   ...[...steps, ...events].sort((a, b) => a.t - b.t).map((e) => `${String(e.t).padStart(7)} ms  ${e.k.padEnd(18)} ${fmt(e.d)}`),
 ];
 fs.writeFileSync(path.join(out, "trace.txt"), lines.join("\n") + "\n");
+// (the core's own account: each build's how, then the terminal and the job's log)
+const log = await evalIn(`(async () => (await globalThis.__phitexSession.core.request({ op: "log" })).json?.log ?? "")()`, true);
+fs.writeFileSync(path.join(out, "core-log.txt"), log ?? "");
 fs.writeFileSync(path.join(out, "trace.json"), JSON.stringify({ steps, events, ...sess }, null, 1));
 const builds = sess.trace.filter((e) => e.k.startsWith("←") && e.d?.build_ms !== undefined);
 const worst = builds.reduce((a, b) => (b.d.build_ms > (a?.d.build_ms ?? -1) ? b : a), undefined);

@@ -21,6 +21,7 @@ export type Req =
   | { id: number; client: string; op: "log" }
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "origins"; page: number }
+  | { id: number; client: string; op: "trace"; on: boolean }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" }
   /** (the draw worker: the PDF the core just linked, to draw pages from) */
@@ -62,6 +63,7 @@ interface Core {
   ph_idle?(): number;
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
+  ph_trace?(h: number, on: number): void;
   ph_draw_set?(slot: number, p: number, n: number): number;
   ph_draw_page?(slot: number, k: number): number;
   ph_draw_hash?(slot: number, k: number): void;
@@ -384,6 +386,10 @@ function handle(r: Req): Res {
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };
       core.ph_log(h);
       return { id: r.id, ok: true, json: { log: new TextDecoder().decode(outBytes()) } };
+    case "trace":
+      // (debugging: each rebuild's trace kept in the build log, `log`)
+      core.ph_trace?.(h, r.on ? 1 : 0);
+      return { id: r.id, ok: !!core.ph_trace };
     case "drawpdf":
       return { id: r.id, ok: false, error: "drawpdf is the draw worker's" };
     case "origins":

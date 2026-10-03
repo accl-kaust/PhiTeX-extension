@@ -297,6 +297,13 @@ pub struct Session {
     pdf_draws: HashMap<usize, String>,
     /// Font programs parsed, kept across builds.
     pdf_fonts: pdfdraw::Fonts,
+    /// The files the last plain build wrote that a next run reads (`.aux`,
+    /// `.toc`, `.lof`, acronym lists, …), not the PDF or the log: the
+    /// tracked build starts from them, as a second pdflatex run does, so
+    /// its trips don't re-run the whole job for references.
+    carried: BTreeMap<Vec<u8>, Arc<[u8]>>,
+    /// Rebuilds traced, their log kept in the build log (`ph_trace`).
+    pub trace: bool,
     pages: Vec<dvi::DviPage>,
     fonts: BTreeMap<i32, draws::Font>,
     term: Vec<u8>,
@@ -308,8 +315,6 @@ pub struct Session {
     history_log: Vec<String>,
     /// What Shelf packs gave (wasm): every file of every pack fetched, for every later build.
     shelf: shelf::Cache,
-    /// An edit since the last build touched the main file's preamble: cold.
-    preamble_edited: bool,
     /// The last cold build's time (ms): a rebuild's deadline.
     cold_ms: f64,
     /// The names changed since the last build (for the log).
@@ -452,6 +457,8 @@ impl Session {
             pdf_hashes: None,
             pdf_draws: HashMap::new(),
             pdf_fonts: pdfdraw::Fonts::new(),
+            carried: BTreeMap::new(),
+            trace: false,
             pages: Vec::new(),
             fonts: BTreeMap::new(),
             term: Vec::new(),
@@ -461,7 +468,6 @@ impl Session {
             builds: 0,
             history_log: Vec::new(),
             shelf: shelf::Cache::default(),
-            preamble_edited: false,
             cold_ms: 0.0,
             trigger: Vec::new(),
             prepared: false,
@@ -474,6 +480,8 @@ impl Session {
 
     fn host_files(&self) -> BTreeMap<Vec<u8>, Arc<[u8]>> {
         let mut m = ASSETS.with_borrow(Clone::clone);
+        // (the project's own files win: an .aux it ships is its own)
+        m.extend(self.carried.iter().map(|(n, b)| (n.clone(), b.clone())));
         for (n, b) in &self.bytes {
             m.insert(n.clone().into_bytes(), b.clone());
         }
@@ -551,7 +559,9 @@ impl Session {
         // (a job that ended fatally, an unclosed brace's runaway argument, is
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
-        let rebuild = self.tex.is_some() && !std::mem::take(&mut self.preamble_edited) && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
+        // (whether a rebuild turns into a whole re-run, a preamble edit say, is
+        // the engine's to tell: its cascade goes cold, its deadline stops it)
+        let rebuild = self.tex.is_some() && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
         if !rebuild && !self.want_ssa {
             self.plain_build();
             self.build_ms = ms(t.elapsed());
@@ -575,17 +585,21 @@ impl Session {
                 }
             }
             // (PHITEX_REBUILD_LOG=1: the rebuild traced, its log on stderr)
-            let trace = std::env::var("PHITEX_REBUILD_LOG").is_ok();
-            // (a rebuild may take as long as the last cold build took, then
-            // stops and the build goes cold: past that, starting over is
-            // cheaper, a preamble edit say; PHITEX_DEADLINE_MS overrides)
-            let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(self.cold_ms.max(300.0));
+            // (the trace: by PHITEX_REBUILD_LOG natively, by `ph_trace` in wasm)
+            let trace = self.trace || std::env::var("PHITEX_REBUILD_LOG").is_ok();
+            // (a rebuild may take 0.3× the last cold build, then stops and
+            // the build goes cold: a rebuild runs ~2.7× slower a command than
+            // a cold pass, so one that has become a re-run of everything is
+            // better started over early; PHITEX_DEADLINE_MS overrides)
+            let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or((0.3 * self.cold_ms).max(300.0));
             tex.tracker().deadline.set(Some((clock_ns, clock_ns() + (limit * 1e6) as u64)));
             let r = ssa::rebuild_trips(tex, trace, true, &mut trips);
             if trace {
                 for l in &r.log {
                     eprintln!("rebuild-log: {l}");
                 }
+                // (kept for `ph_log`: wasm has no stderr anyone reads)
+                self.history_log.extend(r.log.iter().map(|l| format!("rebuild-log: {l}")));
             }
             if let Some(why) = r.unsupported {
                 // (a rebuild it cannot make: built again cold)
@@ -623,9 +637,18 @@ impl Session {
             // which every keystroke changes, and re-ran that lookup)
             let cmd = format!("&pdflatex \\nonstopmode{mode}\\csname @@input\\endcsname{{{main}}}");
             let r = ssa::run_applying(&mut tex, cmd.as_bytes(), false, 0, false);
+            let run_ms = ms(t.elapsed());
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
             self.history = s.history.max(r.history);
-            self.how = format!("cold: {} commands", r.commands);
+            // (the first pass, then settle's trips: what each cost, in commands and ms)
+            let more: Vec<String> = s.trip_commands.iter().zip(&s.trip_ns).skip(1).map(|(c, n)| format!("{c} commands {:.0} ms", *n as f64 / 1e6)).collect();
+            self.how = format!(
+                "cold: {} commands; pass 1 {run_ms:.0} ms; settle {} trips {:.0} ms [{}]",
+                r.commands,
+                s.trips,
+                ms(t.elapsed()) - run_ms,
+                more.join(", ")
+            );
             self.cold_ms = ms(t.elapsed());
             // (a command budget only by PHITEX_BUDGET: the deadline below is the measure)
             if let Some(b) = std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()) {
@@ -670,7 +693,11 @@ impl Session {
         let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
         let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
         host.fallback = self.fallback();
-        let (h, host) = run(host, texlive_params(false), self.command().as_bytes());
+        // (its command count, beside the tracked build's: the two compared)
+        let mut tex = Tex::new(host, Untracked, texlive_params(false));
+        let h = tex.run(self.command().as_bytes());
+        let commands = tex.commands();
+        let host = std::mem::take(tex.host_mut());
         self.history = h;
         self.term = host.term.clone();
         self.pdf_hashes = None;
@@ -679,8 +706,14 @@ impl Session {
         self.missing.sort();
         self.missing.dedup();
         self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
+        self.carried = host
+            .written
+            .iter()
+            .filter(|(n, _)| !n.ends_with(b".pdf") && !n.ends_with(b".log") && !n.ends_with(b".synctex"))
+            .map(|(n, b)| (n.clone(), Arc::from(&b[..])))
+            .collect();
         self.shipped = self.pdf_hashes().len();
-        self.how = "plain: the first paint".into();
+        self.how = format!("plain: the first paint, {commands} commands, 1 pass");
     }
 
     /// Link the files from the steps' effects; read the DVI's pages.
@@ -765,12 +798,6 @@ impl Session {
 
     pub fn edit_file(&mut self, name: &str, range: Range<usize>, text: &str) -> Result<(), String> {
         self.valid(name, &range)?;
-        // (an edit to the main file's preamble, before \begin{document}:
-        // what follows reads it all again, the whole job; a cold build is
-        // what a rebuild would come to, sooner)
-        if name == self.main && self.files[name].find("\\begin{document}").is_none_or(|b| range.start < b) {
-            self.preamble_edited = true;
-        }
         self.files.get_mut(name).unwrap().replace_range(range, text);
         self.changed.push(name.to_string());
         self.stale = true;
@@ -1270,6 +1297,13 @@ mod abi {
             t
         })
         .unwrap_or_default());
+    }
+
+    /// Trace session `h`'s rebuilds (`on` 1) into its build log (`ph_log`).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_trace(h: u32, on: u32) {
+        with(h, |s| s.trace = on != 0);
+        out_json("{}".into());
     }
 
     /// Page `page`'s glyph origins (out, JSON: `Session::origins`).

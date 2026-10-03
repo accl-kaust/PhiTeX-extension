@@ -652,6 +652,13 @@ export class Panel {
   private buildSince = 0;
   private actTick: ReturnType<typeof setInterval> | undefined;
 
+  private prepSince = 0;
+  /** The core readying its next rebuild: past 400 ms the strip says so, not "Typesetting". */
+  preparing(on: boolean): void {
+    this.prepSince = on ? this.prepSince || performance.now() : 0;
+    this.activity();
+  }
+
   /** A build started (`on`) or ended: past 400 ms the strip says so, with its time. */
   busy(on: boolean): void {
     this.$("#chip").classList.toggle("busy", on);
@@ -663,17 +670,23 @@ export class Panel {
   private activity(): void {
     const el = this.$("#pkgs");
     const p = this.pkgNow;
-    const long = this.buildSince && performance.now() - this.buildSince > 400;
+    const prep = this.prepSince && performance.now() - this.prepSince > 400;
+    const long = (this.buildSince && performance.now() - this.buildSince > 400) || prep;
     // (over a page on screen; before any page, the loading card says it all)
     const on = (!!this.last || this.viewer.pages > 0) && (!!p || !!long);
     el.classList.toggle("on", on);
-    if (on || this.buildSince) this.actTick ??= setInterval(() => this.activity(), 250);
+    if (on || this.buildSince || this.prepSince) this.actTick ??= setInterval(() => this.activity(), 250);
     else (clearInterval(this.actTick), (this.actTick = undefined));
     if (!on) return;
     if (p) {
       const names = p.names.slice(0, 3).join(", ") + (p.names.length > 3 ? ` and ${p.names.length - 3} more` : "");
       el.innerHTML = `${icon("download", 16)}<span></span><span class="mini"><i style="width:${p.pct}%"></i></span>`;
       el.querySelector("span")!.textContent = `Fetching ${names} from ${p.source} (${p.done} of ${p.total})…`;
+    } else if (prep) {
+      // (a build waiting behind it is part of the same wait)
+      const s = (performance.now() - this.prepSince) / 1000;
+      el.innerHTML = `${icon("sync", 16)}<span></span><span class="mini busy"><i></i></span>`;
+      el.querySelector("span")!.textContent = `Getting ready for instant edits… ${s < 10 ? s.toFixed(1) : Math.round(s)} s (pages still scroll)`;
     } else {
       const s = (performance.now() - this.buildSince) / 1000;
       el.innerHTML = `${icon("sync", 16)}<span></span><span class="mini busy"><i></i></span>`;

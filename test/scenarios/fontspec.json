@@ -1,1 +1,1 @@
-{ "project": "test/scenarios/fontspec", "name": "fontspec", "steps": [ { "wait": 1500 }, { "shot": "card" } ] }
+{ "project": "test/scenarios/fontspec", "name": "fontspec", "noidle": true, "steps": [ { "wait": 2500 }, { "shot": "card" } ] }

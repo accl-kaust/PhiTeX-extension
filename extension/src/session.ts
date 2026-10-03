@@ -95,10 +95,12 @@ function traceRes(r: CoreRes): Record<string, unknown> {
     ...(j.error ? { texError: typeof j.error === "string" ? j.error : j.error.message } : {}),
     ...(j.build_ms !== undefined ? { build_ms: Math.round(j.build_ms) } : {}),
     ...(r.pdf ? { pdf: r.pdf.length } : {}),
+    // (a page from the draw worker: its draw time, and whether it was drawn ahead)
+    ...(j.draw_ms !== undefined ? { drawer: true, draw_ms: Math.round(j.draw_ms), kept: j.kept } : {}),
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string };
+export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -132,6 +134,8 @@ export interface PreviewSink {
   busy?(on: boolean): void;
   /** A build is in flight. */
   busy?(on: boolean): void;
+  /** The core readies its next rebuild (pages still draw; an edit waits for it). */
+  preparing?(on: boolean): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
   painted?(ms: number): void;
   /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
@@ -237,7 +241,7 @@ export class PreviewSession {
     this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
   }
   /** The core fetches a pack mid-build (the job goes on with it): the view says which. */
-  private onFetching(e: CoreEvent): void {
+  private onFetching(e: Extract<CoreEvent, { event: "fetching" }>): void {
     this.tr("package: core fetches", e);
     this.pkg.source = this.source.label;
     // (one at a time, in order: the one before it has arrived)
@@ -264,7 +268,10 @@ export class PreviewSession {
     // (a trap in the core, a panic, restarts its instance: every session it
     // held is gone, "no such handle". Reopened here, a few times at most,
     // since a panic a build always hits would loop)
-    core.onEvent?.((e) => this.onFetching(e));
+    core.onEvent?.((e) => {
+      if (e.event === "preparing") return this.sink.preparing?.(e.on);
+      this.onFetching(e);
+    });
     this.core = {
       request: async (r) => {
         const t0 = this.now();
@@ -616,7 +623,8 @@ export class PreviewSession {
     if (!this.opened) return;
     const r = await this.core.request({ op: "png", page: k, dpi: this.dpi() });
     const img = image(r);
-    if (img) this.sink.page(img, k, this.pages, this.hashes[k] ?? null);
+    // (the hash of the page drawn: the draw worker's PDF may be a build behind or ahead)
+    if (img) this.sink.page(img, k, this.pages, r.json?.hash ?? this.hashes[k] ?? null);
   }
 
   async showPage(): Promise<void> {

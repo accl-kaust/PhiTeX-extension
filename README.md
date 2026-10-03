@@ -102,9 +102,10 @@ Permissions:
 It is experimental. When the ⚡ Instant page and Overleaf's PDF disagree,
 Overleaf's is right.
 
-- **pdfLaTeX only**: projects set to XeLaTeX or LuaLaTeX (those that load
-  `fontspec`, `unicode-math` or `polyglossia`) can't be previewed; the card
-  says so.
+- **pdfLaTeX only, for now**: projects that need XeLaTeX or LuaLaTeX
+  (`fontspec`, `unicode-math`, `polyglossia`, …) can't be previewed yet. The
+  card says so and offers pdfLaTeX anyway; Settings → Engine chooses for
+  every project, the card for one.
 - **Images**: PDF and JPEG figures work. PNG figures don't yet; the
   diagnostics say so.
 - **Some packages and fonts aren't fully supported yet.** One example is
@@ -182,6 +183,9 @@ Overleaf page                                            extension
                                                             missing files → Shelf
 ```
 
+- **Pages**: a second worker draws pages from the PDF each build links,
+  the page you read first, then the rest ahead of time, so scrolling never
+  waits for a build.
 - **Edits**: every CodeMirror transaction (yours, and collaborators' edits
   that Overleaf applies) becomes byte-range edits. At most one build is in
   flight; what you type meanwhile is merged into the next build.

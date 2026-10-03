@@ -1,0 +1,64 @@
+{
+ "project": "test/scenarios/sync",
+ "name": "scroll",
+ "noidle": true,
+ "steps": [
+  {
+   "scroll": 0
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 1
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 2
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 3
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 4
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 5
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 6
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 7
+  },
+  {
+   "wait": 400
+  },
+  {
+   "scroll": 8
+  },
+  {
+   "wait": 400
+  },
+  {
+   "shot": "scrolled"
+  }
+ ]
+}

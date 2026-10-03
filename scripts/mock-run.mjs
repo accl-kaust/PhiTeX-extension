@@ -19,6 +19,7 @@
 //       { "wait": 2000 },
 //       { "shot": "after-package" },
 //       { "clean": true },           // ⟳ Clean recompile
+//       { "scroll": 5 },             // the ⚡ view scrolled to page 6
 //       { "recompile": true },       // Overleaf's Recompile (the local pdflatex)
 //       { "dblpage": [0, 0.3, 0.4] }, // double-click page 0 at 30% across, 40% down: the editor's selection after
 //       { "dbltext": "Every writer" }, // double-click the editor at that text: the page's highlight boxes after
@@ -96,7 +97,8 @@ const pos = (s) => `(() => { const t = mockEditor.text(); ${s.after !== undefine
 
 // the first page
 for (let i = 0; i < 100 && !(await state())?.pages; i++) await sleep(300);
-await idle();
+// ("noidle": the steps start at the first page, while the core readies its rebuilds)
+if (!sc.noidle) await idle();
 const steps = [];
 for (const s of sc.steps ?? []) {
   const t = Date.now() - T0;
@@ -113,7 +115,11 @@ for (const s of sc.steps ?? []) {
   else if (s.wait !== undefined) await sleep(s.wait);
   else if (s.shot) await shot(s.shot);
   else if (s.clean) await evalIn(`(() => { document.getElementById("phitex-zoom")?.click(); document.querySelector("[data-act=clean]")?.click(); })()`);
-  else if (s.recompile) await evalIn(`document.getElementById("recompile").click()`);
+  else if (s.scroll !== undefined) {
+    // (the ⚡ view scrolled to page `scroll`, as a reader would)
+    await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; const el = r.querySelector('.slot[data-k="${s.scroll}"]'); if (el) r.getElementById("stage").scrollTop = el.offsetTop - 12; })()`, true);
+    await call("Page.captureScreenshot", { format: "png" }); // (a frame: the observer sees the scroll)
+  } else if (s.recompile) await evalIn(`document.getElementById("recompile").click()`);
   else if (s.dblpage) {
     const [k, fx, fy] = s.dblpage;
     await evalIn(`(() => { const el = document.querySelector('phitex-preview')?.shadowRoot?.querySelector('.slot[data-k="${k}"]') ?? document.querySelector('.slot[data-k="${k}"]'); if (!el) return; el.scrollIntoView(); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, clientX: r.left + r.width * ${fx}, clientY: r.top + r.height * ${fy} })); })()`, true);

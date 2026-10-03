@@ -7,15 +7,36 @@ import type { Req, Res } from "./worker.ts";
 import { resolve } from "./shelf.ts";
 
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
+/**
+ * The draw worker: a second core instance that only draws pages, from the
+ * PDF the build worker links. Pages draw while a build (or readying the
+ * next one) runs; the page read first, then the rest ahead of time.
+ */
+const drawer = new Worker(new URL("worker.js", import.meta.url), { type: "module", name: "draw" });
+/** The clients whose drawer has their current PDF: their pages are asked there. */
+const drawn = new Set<string>();
 const replies = new Map<number, (r: Res) => void>();
 let nextId = 1;
 /** Every tab's port: the worker's progress (a Shelf pack fetched mid-build) goes to each. */
 const ports = new Set<chrome.runtime.Port>();
-worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string }>) => {
+worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string; drawPdf?: boolean; client?: string; pdf?: Uint8Array; preparing?: boolean }>) => {
   if (e.data.fetching) {
     for (const p of ports) p.postMessage({ event: "fetching", pack: e.data.fetching, name: e.data.name });
     return;
   }
+  if (e.data.drawPdf && e.data.client && e.data.pdf) {
+    drawer.postMessage({ id: nextId++, client: e.data.client, op: "drawpdf", pdf: e.data.pdf } as Req, [e.data.pdf.buffer]);
+    drawn.add(e.data.client);
+    return;
+  }
+  if (e.data.preparing !== undefined) {
+    for (const p of ports) p.postMessage({ event: "preparing", on: e.data.preparing });
+    return;
+  }
+  replies.get(e.data.id)?.(e.data);
+  replies.delete(e.data.id);
+};
+drawer.onmessage = (e: MessageEvent<Res>) => {
   replies.get(e.data.id)?.(e.data);
   replies.delete(e.data.id);
 };
@@ -80,7 +101,14 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     });
     // (an open carries the binary files given so far, figures and fonts: the first build has them)
+    // (a new session: its pages from the build worker until its PDF reaches the drawer)
+    if (m.op === "open") drawn.delete(client);
+    if (m.op === "png" && drawn.has(client)) return drawer.postMessage({ ...m, id, client } as Req);
     worker.postMessage({ ...m, id, client, ...(m.op === "open" ? { binaries: Object.fromEntries(binaries) } : {}) } as Req);
   });
-  port.onDisconnect.addListener(() => worker.postMessage({ id: nextId++, client, op: "close" }));
+  port.onDisconnect.addListener(() => {
+    worker.postMessage({ id: nextId++, client, op: "close" });
+    drawer.postMessage({ id: nextId++, client, op: "close" });
+    drawn.delete(client);
+  });
 });

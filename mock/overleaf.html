@@ -11,6 +11,16 @@
   .material-symbols { font-family: "Material Symbols Rounded"; font-size: 20px; line-height: 1; font-feature-settings: "liga"; -webkit-font-smoothing: antialiased; }
   .toolbar-pdf .btn-link, .toolbar-pdf .btn-link:hover { color: #fff; text-decoration: none; }
   .toolbar-pdf .pdf-toolbar-btn { padding: 4px 6px; }
+  /* Overleaf's PDF viewer controls (pdfjs-*), as its stylesheet lays them out */
+  .toolbar-pdf-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+  .pdfjs-viewer-controls { display: flex; align-items: center; gap: 2px; color: #fff; }
+  .pdfjs-toolbar-buttons { display: flex; }
+  .toolbar-pdf .btn-ghost, .toolbar-pdf .btn-ghost:hover { color: #fff; border: 0; }
+  .pdfjs-page-number-input { display: flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 13px; }
+  .pdfjs-page-number-input form { margin: 0; }
+  .pdfjs-page-number-input input { width: 32px; height: 26px; text-align: center; border: 1px solid #6c7380; border-radius: 4px; background: #fff; color: #1b222c; padding: 0; }
+  .pdfjs-zoom-controls { display: flex; align-items: center; }
+  .pdfjs-zoom-dropdown-button { color: #fff !important; white-space: nowrap; }
   /* Overleaf's toggle switch: two radio labels in a pill */
   .toggle-switch { display: inline-flex; background: #495365; border-radius: 9999px; padding: 2px; font-size: 13px; }
   .toggle-switch-input { position: absolute; opacity: 0; pointer-events: none; }

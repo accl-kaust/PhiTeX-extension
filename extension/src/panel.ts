@@ -44,6 +44,8 @@ export interface PanelEvents {
   onDebug(on: boolean): void;
   onMain(m: string): void;
   onReload(): void;
+  /** Clean recompile: the project read again, typeset from the start. */
+  onClean(): void;
   onFormat(f: "vector" | "png"): void;
   onGoto(file: string, line: number): void;
   /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
@@ -439,7 +441,7 @@ export class Panel {
       <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
       To turn it off: <code>chrome://extensions</code>.</div>
     </div>
-    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty">Loading the project…</div><div class="viewer" id="viewer"></div></div>
+    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty"><div class="load"><div class="steps"><span class="now">Project read</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div><h3>Reading the project…</h3><div class="bar busy"><i></i></div></div></div><div class="viewer" id="viewer"></div></div>
   </div>
   <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
 </div>`).replace(/<span class="icon"(?: aria-hidden="true")?>(\w+)<\/span>/g, (_, n) => icon(n, n === "download" ? 16 : 18));
@@ -754,7 +756,15 @@ export class Panel {
         // Files not found are optional ones LaTeX only checks for (amsart.cfg, …): the
         // diagnostics list them, and an error says when one was needed)
         this.pkgBusy = false;
-        if (!this.stopped()) empty.textContent = "Typesetting…";
+        // (the same card as while fetching, at its last step: one screen until the page)
+        if (!this.stopped()) {
+          empty.innerHTML =
+            `<div class="load"><div class="steps"><span class="ok">Project read</span><i></i><span class="ok">Packages</span><i></i><span class="now">Typesetting</span></div>` +
+            `<h3>Typesetting…</h3><div class="bar busy"><i></i></div><div class="alive" data-phase="tex"></div></div>`;
+          this.loadT0 ||= performance.now();
+          this.alive();
+          this.loadTick ??= setInterval(() => this.alive(), 1000);
+        }
         return;
       }
       const recent = [...(p.done ?? []).slice(-10).map((n) => [n, "ok"]), ...p.loading.slice(0, 8).map((n) => [n, "ing"])];
@@ -888,6 +898,10 @@ export class Panel {
   next(): void {
     this.viewer.goTo(this.at + 1);
   }
+  clean(): void {
+    this.ev.onClean();
+  }
+
   pdf(): void {
     this.ev.onPdf();
   }

@@ -423,11 +423,13 @@ function dockInOverleaf(panel: Panel): Dock {
       `<div class="dropdown"><button type="button" id="phitex-zoom" aria-expanded="false" aria-label="PhiTeX zoom level" class="pdf-toolbar-btn pdfjs-zoom-dropdown-button small dropdown-toggle btn btn-link">100%</button>` +
       `<ul class="dropdown-menu dropdown-menu-end" id="phitex-zoom-menu" role="menu">` +
       ZOOMS.map(([v, l]) => `<li><button type="button" class="dropdown-item" data-zoom="${v}">${l}</button></li>`).join("") +
-      `<li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item" data-act="more">PhiTeX settings and timings…</button></li></ul></div></div>` +
+      `<li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item" data-act="clean" title="Read the project again and typeset it from the start (PhiTeX)">⟳ Clean recompile</button></li>` +
+      `<li><button type="button" class="dropdown-item" data-act="more">PhiTeX settings and timings…</button></li></ul></div></div>` +
       // (compact, as Overleaf's own narrow layout: page and zoom steps behind ⋯)
       `<div class="dropdown phitex-compact-only"><button type="button" id="phitex-more" aria-label="More" class="d-inline-grid pdf-toolbar-btn pdfjs-toolbar-popover-button btn btn-ghost">` +
       `<span class="button-content" aria-hidden="false"><span class="material-symbols" aria-hidden="true" translate="no">more_horiz</span></span></button>` +
       `<ul class="dropdown-menu dropdown-menu-end" id="phitex-more-menu" role="menu">` +
+`<li><button type="button" class="dropdown-item" data-act="clean" title="Read the project again and typeset it from the start (PhiTeX)">⟳ Clean recompile</button></li><li><hr class="dropdown-divider"></li>` +
       `<li><button type="button" class="dropdown-item" data-act="prev">Previous page</button></li><li><button type="button" class="dropdown-item" data-act="next">Next page</button></li>` +
       `<li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item" data-act="zin">Zoom in</button></li><li><button type="button" class="dropdown-item" data-act="zout">Zoom out</button></li>` +
       `<li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item" data-act="more">PhiTeX settings and timings…</button></li></ul></div>`;
@@ -457,6 +459,7 @@ function dockInOverleaf(panel: Panel): Dock {
         const act = b?.dataset.act;
         if (b?.dataset.zoom) panel.zoomTo(b.dataset.zoom);
         if (act === "more") panel.sheet(true);
+        if (act === "clean") panel.clean();
         if (act === "prev") panel.prev();
         if (act === "next") panel.next();
         if (act === "zin") panel.zoomStep(1);
@@ -826,6 +829,7 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     // (the hook moves the editor's cursor there: the one thing it writes)
     onGoto: (file, line) => DETACHED ? ask({ t: "goto", file, line }) : window.postMessage({ src: "phitex-content", type: "goto", file, line }, location.origin),
     onReload: async () => session?.refresh(await fetchDocs(panel)),
+    onClean: async () => session?.clean(await fetchDocs(panel)),
     onShortcut: () => dock?.toggle() ?? false,
     onTour: () => dock?.tour(),
     onNews: () => dock?.news(),

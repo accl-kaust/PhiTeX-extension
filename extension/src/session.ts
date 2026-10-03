@@ -256,6 +256,22 @@ export class PreviewSession {
     return this.reopen();
   }
 
+  /**
+   * Clean recompile: the project's files as Overleaf has them now, packages
+   * that failed or were not found asked for again, and a fresh core session
+   * (discovery, first paint, then the incremental program), nothing kept from
+   * the last job but the packages already fetched.
+   */
+  async clean(files: Record<string, string>): Promise<void> {
+    for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+    for (const n of [...this.pkg.unavailable, ...(this.pkg.failed ?? []).map((f) => f.name)]) this.asked.delete(n);
+    this.pkg.unavailable = [];
+    this.pkg.failed = [];
+    this.texError = undefined;
+    this.hashes = [];
+    return this.reopen();
+  }
+
   /** A fresh core session from the texts with every queued edit in. */
   async reopen(): Promise<void> {
     if (!this.main) return this.sink.error("no main .tex file found");

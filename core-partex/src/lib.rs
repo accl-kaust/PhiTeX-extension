@@ -546,6 +546,14 @@ impl Session {
                     eprintln!("rebuild-log: {l}");
                 }
             }
+            if let Some(why) = r.unsupported {
+                // (a rebuild it cannot make: built again cold)
+                self.history_log.push(format!("rebuild stopped ({why}, {} commands): cold", r.commands));
+                self.tex = None;
+                self.stale = true;
+                self.build();
+                return;
+            }
             self.history = r.history;
             self.how = format!(
                 "rebuild: {} steps, {} commands, {} trips (edits {}, seeds {}, phi {}, store readers {}, queries {}, defs changed {}, readers marked {}, new {}, retries {}){}",
@@ -563,6 +571,12 @@ impl Session {
                 }));
             }
             let mut tex = Tex::new(host, SsaTracker::new(Recorder::new()), texlive_params(false));
+            // (windows: steps cut inside long runs, a tikzpicture's say, at
+            // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
+            tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
+            // (a rebuild past this many commands stops, and the build goes
+            // cold: PHITEX_BUDGET overrides)
+            tex.tracker().budget.set(std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(3_000_000));
             let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
             // (DVI mode: the pages are read from the DVI the link writes;
             // nonstop, as Overleaf runs pdflatex: an error is reported and

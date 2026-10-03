@@ -16,7 +16,7 @@
 //!   next query builds. (Cold for now; partex's SSA rebuild comes next.)
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -30,6 +30,7 @@ use partex_core::{DateTime, FileKind, Host, OpenedFile, Params, Tex, Untracked, 
 pub mod draws;
 pub mod dvi;
 pub mod pdfdraw;
+mod shelf;
 pub mod type1;
 
 pub use draws::draws_json;
@@ -301,22 +302,20 @@ pub struct Session {
     pub builds: u32,
     /// Each build: what changed before it and what it cost (the debug log).
     history_log: Vec<String>,
+    /// What Shelf packs gave (wasm): every file of every pack fetched, for every later build.
+    shelf: shelf::Cache,
+    /// An edit since the last build touched the main file's preamble: cold.
+    preamble_edited: bool,
     /// The last cold build's time (ms): a rebuild's deadline.
     cold_ms: f64,
     /// The names changed since the last build (for the log).
     trigger: Vec<String>,
     /// `prepare_rebuilds` done (after the cold build, when idle).
     prepared: bool,
-    /// The discovery pass ran (a plain job where a missing file reads as
-    /// empty: every name the job asks for, fetched at once).
-    discovered: bool,
     /// The last build was plain (no SSA program yet): the first paint.
     plain: bool,
     /// Build the SSA program at the next build (an edit, or idle).
     want_ssa: bool,
-    /// After the discovery pass, no build until the host has fetched what
-    /// it asked for (`go`).
-    hold: bool,
     /// The last build: "cold", or "rebuild" with what it ran.
     pub how: String,
     /// (native tools) A flat directory of TeX Live's files the host reads a
@@ -409,7 +408,8 @@ pub fn first_error(term: &str) -> Option<TexError> {
 impl Status {
     fn json(&self) -> String {
         format!(
-            "\"engine\":\"partex\",\"mode\":\"{}\",\"pages\":{},\"pending\":0,\"undefined\":0,\"undefined_names\":[],\"history\":{},\"missing\":[{}],\"term\":{}",
+            "\"engine\":\"partex\",\"fetches\":{},\"mode\":\"{}\",\"pages\":{},\"pending\":0,\"undefined\":0,\"undefined_names\":[],\"history\":{},\"missing\":[{}],\"term\":{}",
+            shelf::available(),
             if pdf_mode() { "pdf" } else { "dvi" },
             self.pages,
             self.history,
@@ -454,11 +454,11 @@ impl Session {
             build_ms: 0.0,
             builds: 0,
             history_log: Vec::new(),
+            shelf: shelf::Cache::default(),
+            preamble_edited: false,
             cold_ms: 0.0,
             trigger: Vec::new(),
             prepared: false,
-            discovered: false,
-            hold: false,
             plain: false,
             want_ssa: true,
             how: String::new(),
@@ -477,8 +477,8 @@ impl Session {
         m
     }
 
-    /// Start fast (the browser's session): a discovery pass, then a plain
-    /// first paint, the SSA program at the first edit or when idle. Without
+    /// Start fast (the browser's session): a plain first paint, the SSA
+    /// program at the first edit or when idle. Without
     /// it (tests, tools) the first build is the SSA one, as before.
     /// PHITEX_NO_PLAIN keeps the old start.
     pub fn fast_start(&mut self) {
@@ -487,14 +487,27 @@ impl Session {
         }
     }
 
-    /// The host fetched what the discovery pass asked for: build.
     /// What each build was (the `log` op's first part).
     pub fn builds_log(&self) -> &[String] {
         &self.history_log
     }
 
-    pub fn go(&mut self) {
-        self.hold = false;
+    /// A missing file, looked for where the host has more: a flat TeX
+    /// Live (native, `fallback_dir`), or Shelf through the worker (wasm,
+    /// `shelf::fetch`: the job never stops at a file TeX Live has; what a
+    /// pack holds is kept for every later build).
+    fn fallback(&self) -> Option<Box<dyn FnMut(&[u8]) -> Option<Vec<u8>>>> {
+        if let Some(dir) = self.fallback_dir.clone() {
+            return Some(Box::new(move |n: &[u8]| {
+                let n = std::str::from_utf8(n).ok()?;
+                if n.contains('/') {
+                    return None;
+                }
+                std::fs::read(dir.join(n)).ok()
+            }));
+        }
+        let cache = self.shelf.clone();
+        shelf::available().then(|| -> Box<dyn FnMut(&[u8]) -> Option<Vec<u8>>> { Box::new(move |n: &[u8]| shelf::get(&cache, n)) })
     }
 
     /// Ready the engine for its first rebuild (the format's definitions
@@ -502,7 +515,7 @@ impl Session {
     /// pay it. True if there was anything to do.
     pub fn prepare(&mut self) -> bool {
         // (after a plain first paint: the SSA program, now, while idle)
-        if self.plain && self.tex.is_none() && !self.hold {
+        if self.plain && self.tex.is_none() {
             self.want_ssa = true;
             self.stale = true;
             self.build();
@@ -521,7 +534,7 @@ impl Session {
     /// Build if anything changed since the last build: a rebuild of the
     /// engine there is, else (none yet, or the last job stopped) cold.
     pub fn build(&mut self) {
-        if !self.stale || self.hold {
+        if !self.stale {
             return;
         }
         self.stale = false;
@@ -532,7 +545,7 @@ impl Session {
         // (a job that ended fatally, an unclosed brace's runaway argument, is
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
-        let rebuild = self.tex.is_some() && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
+        let rebuild = self.tex.is_some() && !std::mem::take(&mut self.preamble_edited) && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
         if !rebuild && !self.want_ssa {
             self.plain_build();
             self.build_ms = ms(t.elapsed());
@@ -585,13 +598,7 @@ impl Session {
         } else {
             self.changed.clear();
             let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
-            if let Some(dir) = self.fallback_dir.clone() {
-                host.fallback = Some(Box::new(move |n: &[u8]| {
-                    let n = std::str::from_utf8(n).ok()?;
-                    if n.contains('/') { return None; }
-                    std::fs::read(dir.join(n)).ok()
-                }));
-            }
+            host.fallback = self.fallback();
             let mut tex = Tex::new(host, SsaTracker::new(Recorder::new()), texlive_params(false));
             // (windows: steps cut inside long runs, a tikzpicture's say, at
             // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
@@ -646,66 +653,24 @@ impl Session {
     }
 
     /// A build without the SSA program (an untracked run, ~3x faster than
-    /// a cold SSA build): the discovery pass the first time, then the first
-    /// paint. The SSA program is built at the first edit or when idle.
+    /// a cold SSA build): the first paint. The SSA program is built at the first edit or when idle.
     fn plain_build(&mut self) {
         self.changed.clear();
         self.tex = None;
         self.plain = true;
         let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
         let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
-        let dir = self.fallback_dir.clone();
-        let from_dir = move |n: &str| -> Option<Vec<u8>> {
-            if n.contains('/') {
-                return None;
-            }
-            std::fs::read(dir.as_ref()?.join(n)).ok()
-        };
-        let asked = std::rc::Rc::new(std::cell::RefCell::new(BTreeSet::<String>::new()));
-        let discover = !self.discovered;
-        if discover {
-            // (a missing file reads as empty, and is noted: the run goes on
-            // to ask for the rest; the job's own files are not wants)
-            let (a, j) = (asked.clone(), format!("{job}."));
-            host.fallback = Some(Box::new(move |n: &[u8]| {
-                let n = std::str::from_utf8(n).ok()?;
-                if let Some(b) = from_dir(n) {
-                    return Some(b);
-                }
-                if !n.starts_with(&j) && !n.contains('/') {
-                    a.borrow_mut().insert(n.to_string());
-                }
-                // (a binary file is not found, as it is: an empty font,
-                // virtual font or image is an error that stops the run, and
-                // TeX goes on without one; only input files read as empty)
-                let binary = [".vf", ".tfm", ".pfb", ".enc", ".map", ".png", ".pdf", ".jpg", ".jpeg", ".jbig2"].iter().any(|e| n.ends_with(e));
-                if binary { None } else { Some(Vec::new()) }
-            }));
-        } else if self.fallback_dir.is_some() {
-            host.fallback = Some(Box::new(move |n: &[u8]| from_dir(std::str::from_utf8(n).ok()?)));
-        }
+        host.fallback = self.fallback();
         let (h, host) = run(host, texlive_params(false), self.command().as_bytes());
         self.history = h;
         self.term = host.term.clone();
         self.pdf_pages = None;
-        if discover {
-            self.discovered = true;
-            self.missing = asked.borrow().iter().cloned().collect();
-            self.pdf.clear();
-            self.shipped = 0;
-            self.how = format!("discover: {} names asked for", self.missing.len());
-            // (the next build is the first paint, once the host says go)
-            self.stale = true;
-            self.hold = true;
-            self.plain = false;
-        } else {
-            self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
-            self.missing.sort();
-            self.missing.dedup();
-            self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
-            self.shipped = self.pdf_pages().len();
-            self.how = "plain: the first paint".into();
-        }
+        self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
+        self.missing.sort();
+        self.missing.dedup();
+        self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
+        self.shipped = self.pdf_pages().len();
+        self.how = "plain: the first paint".into();
     }
 
     /// Link the files from the steps' effects; read the DVI's pages.
@@ -789,6 +754,12 @@ impl Session {
 
     pub fn edit_file(&mut self, name: &str, range: Range<usize>, text: &str) -> Result<(), String> {
         self.valid(name, &range)?;
+        // (an edit to the main file's preamble, before \begin{document}:
+        // what follows reads it all again, the whole job; a cold build is
+        // what a rebuild would come to, sooner)
+        if name == self.main && self.files[name].find("\\begin{document}").is_none_or(|b| range.start < b) {
+            self.preamble_edited = true;
+        }
         self.files.get_mut(name).unwrap().replace_range(range, text);
         self.changed.push(name.to_string());
         self.stale = true;
@@ -802,9 +773,7 @@ impl Session {
         let term = String::from_utf8_lossy(&self.term);
         let lines: Vec<&str> = term.lines().collect();
         let tail = lines[lines.len().saturating_sub(12)..].join("\n");
-        // (the discovery pass, empty files for missing ones, is no job of the
-        // document's: its errors are none of the writer's)
-        let error = if self.hold { None } else { first_error(&term) };
+        let error = first_error(&term);
         Status { pages: self.page_count(), history: self.history, missing: self.missing.clone(), tail, error }
     }
 
@@ -972,10 +941,13 @@ mod abi {
             Some(u32::from_le_bytes(a.try_into().ok()?))
         }
         fn str(&mut self) -> Option<&'a str> {
+            std::str::from_utf8(self.bytes()?).ok()
+        }
+        fn bytes(&mut self) -> Option<&'a [u8]> {
             let n = self.u32()? as usize;
             let (a, b) = self.0.split_at_checked(n)?;
             self.0 = b;
-            std::str::from_utf8(a).ok()
+            Some(a)
         }
     }
 
@@ -1035,7 +1007,9 @@ mod abi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ph_open(ptr: *const u8, len: usize) -> u32 {
         let mut r = Reader(unsafe { input(ptr, len) });
-        let mut parse = || -> Option<(String, BTreeMap<String, String>)> {
+        // (fuel, main, the text files, then the binary ones, figures: all
+        // there before the first build)
+        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>)> {
             let _fuel = r.u32()?;
             let main = r.str()?.to_string();
             let n = r.u32()?;
@@ -1044,13 +1018,20 @@ mod abi {
                 let name = r.str()?.to_string();
                 files.insert(name, r.str()?.to_string());
             }
-            Some((main, files))
+            let mut bins = Vec::new();
+            for _ in 0..r.u32().unwrap_or(0) {
+                bins.push((r.str()?.to_string(), r.bytes()?));
+            }
+            Some((main, files, bins))
         };
-        let Some((main, files)) = parse() else {
+        let Some((main, files, bins)) = parse() else {
             out_json("{\"error\":\"bad open input\"}".into());
             return 0;
         };
         let mut s = Session::open(files, &main);
+        for (n, b) in bins {
+            s.set_bytes(&n, b);
+        }
         s.fast_start();
         let st = s.status();
         let h = NEXT.with_borrow_mut(|n| {
@@ -1115,13 +1096,6 @@ mod abi {
     #[unsafe(no_mangle)]
     pub extern "C" fn ph_png_last() {
         out(LAST.with_borrow_mut(Option::take).unwrap_or_default());
-    }
-
-    /// The host has fetched what the discovery pass asked for (or knows it
-    /// is nowhere): the first paint may be built.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn ph_go(h: u32) {
-        with(h, Session::go);
     }
 
     /// Idle work: ready every session's engine for its first rebuild.

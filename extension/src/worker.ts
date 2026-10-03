@@ -1,3 +1,4 @@
+import { SHELF } from "./shelf.ts";
 // The PhiTeX core in a dedicated worker: the wasm (wasm32-wasip1) on a
 // minimal WASI shim, one session per client (an Overleaf tab).
 //
@@ -10,7 +11,7 @@
 // Overleaf page.
 
 export type Req =
-  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number }
+  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array> }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { id: number; client: string; op: "set_file"; file: string; text: string }
   | { id: number; client: string; op: "set_bytes"; file: string; bytes: Uint8Array }
@@ -18,7 +19,6 @@ export type Req =
   | { id: number; client: string; op: "pdf" }
   | { id: number; client: string; op: "status" }
   | { id: number; client: string; op: "log" }
-  | { id: number; client: string; op: "go" }
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" };
@@ -56,7 +56,6 @@ interface Core {
   ph_check(h: number): void;
   ph_status(h: number): void;
   ph_log?(h: number): void;
-  ph_go?(h: number): void;
   ph_idle?(): number;
   ph_pages(h: number): void;
   ph_text(h: number, p: number, n: number): void;
@@ -64,6 +63,90 @@ interface Core {
 }
 
 class Exit extends Error {}
+
+/**
+ * Shelf, for the core (its `phitex.fetch` import, shelf.rs): a file TeX asks
+ * for and the session lacks, fetched there and then (a synchronous request,
+ * as a worker may make), so the job never stops at a file TeX Live has.
+ * The name's pack and the packs its loading reads, by the index the
+ * extension ships; the browser's cache keeps them (Shelf's packs are
+ * immutable). The extension's bundled texmf/ files go as a pack of one.
+ */
+let shelfIndex: Map<string, string[]> | undefined;
+let bundledNames: Set<string> | undefined;
+let fetched: Uint8Array | undefined;
+const SHELF_P = SHELF + "p/";
+
+async function loadShelf(): Promise<void> {
+  if (shelfIndex) return;
+  const gz = await fetch(new URL("../shelf-index.tsv.gz", import.meta.url));
+  const tsv = await new Response(gz.body!.pipeThrough(new DecompressionStream("gzip"))).text();
+  const m = new Map<string, string[]>();
+  for (const l of tsv.split("\n")) {
+    const [name, pack, deps] = l.split("\t");
+    if (name && pack) m.set(name, [pack, ...(deps ? deps.split(",") : [])]);
+  }
+  const names = await (await fetch(new URL("../texmf/names.txt", import.meta.url))).text();
+  bundledNames = new Set(names.split("\n").filter(Boolean));
+  shelfIndex = m;
+}
+
+function getSync(url: string): Uint8Array | null {
+  const x = new XMLHttpRequest();
+  x.open("GET", url, false);
+  x.responseType = "arraybuffer";
+  try {
+    x.send();
+  } catch {
+    return null;
+  }
+  return x.status === 200 ? new Uint8Array(x.response as ArrayBuffer) : null;
+}
+
+/** `u32 n, (u32 len, bytes) × n`, little-endian. */
+function framed(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(4 + parts.reduce((a, p) => a + 4 + p.length, 0));
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, parts.length, true);
+  let at = 4;
+  for (const p of parts) {
+    dv.setUint32(at, p.length, true);
+    out.set(p, at + 4);
+    at += 4 + p.length;
+  }
+  return out;
+}
+
+function shelfImports(mem: () => WebAssembly.Memory) {
+  return {
+    fetch(ptr: number, len: number): number {
+      const name = new TextDecoder().decode(new Uint8Array(mem().buffer, ptr >>> 0, len >>> 0));
+      const parts: Uint8Array[] = [];
+      if (bundledNames?.has(name)) {
+        const b = getSync(new URL("../texmf/" + name, import.meta.url).href);
+        if (b) {
+          // (a pack of one file: its count 1, then the name and the bytes, each with its length)
+          const one = framed([enc.encode(name), b]);
+          new DataView(one.buffer).setUint32(0, 1, true);
+          parts.push(one);
+        }
+      } else {
+        for (const id of shelfIndex?.get(name) ?? []) {
+          (self as unknown as Worker).postMessage({ fetching: id, name });
+          const b = getSync(SHELF_P + encodeURIComponent(id) + ".pack");
+          if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
+        }
+      }
+      if (!parts.length) return 0;
+      fetched = framed(parts);
+      return fetched.length;
+    },
+    fetch_copy(dst: number): void {
+      new Uint8Array(mem().buffer, dst >>> 0, fetched!.length).set(fetched!);
+      fetched = undefined;
+    },
+  };
+}
 
 /** Just what the core imports (see the build's import section). */
 function wasi(mem: () => WebAssembly.Memory) {
@@ -131,6 +214,12 @@ class Frame {
     this.len += 4;
     return this;
   }
+  bytes(b: Uint8Array): this {
+    this.u32(b.length);
+    this.parts.push(b);
+    this.len += b.length;
+    return this;
+  }
   str(s: string): this {
     const b = enc.encode(s);
     this.u32(b.length);
@@ -154,7 +243,8 @@ const loadAssets = () =>
 async function load(): Promise<void> {
   module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
   let memory: WebAssembly.Memory | undefined;
-  const inst = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi(() => memory!) });
+  await loadShelf().catch(() => undefined);
+  const inst = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi(() => memory!), phitex: shelfImports(() => memory!) });
   core = inst.exports as unknown as Core;
   memory = core.memory;
   core._initialize?.();
@@ -218,6 +308,10 @@ function handle(r: Req): Res {
       if (h) core.ph_close(h);
       const f = new Frame().u32(r.fuel).str(r.main).u32(Object.keys(r.files).length);
       for (const [n, t] of Object.entries(r.files)) f.str(n).str(t);
+      // (the project's binary files, figures: in the open, so the first build has them)
+      const bins = Object.entries(r.binaries ?? {});
+      f.u32(bins.length);
+      for (const [n, b] of bins) f.str(n).bytes(b);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
       if (nh) sessions.set(r.client, nh);
@@ -257,10 +351,6 @@ function handle(r: Req): Res {
     case "status":
       core.ph_status(h);
       return { id: r.id, ok: true, json: outJson() };
-    case "go":
-      // (the discovery pass's files are fetched: the first paint may build)
-      core.ph_go?.(h);
-      return { id: r.id, ok: true };
     case "log":
       // (debugging: the whole terminal and the job's .log)
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };

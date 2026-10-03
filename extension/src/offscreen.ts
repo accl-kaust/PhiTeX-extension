@@ -9,7 +9,13 @@ import { resolve } from "./shelf.ts";
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
 const replies = new Map<number, (r: Res) => void>();
 let nextId = 1;
-worker.onmessage = (e: MessageEvent<Res>) => {
+/** Every tab's port: the worker's progress (a Shelf pack fetched mid-build) goes to each. */
+const ports = new Set<chrome.runtime.Port>();
+worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string }>) => {
+  if (e.data.fetching) {
+    for (const p of ports) p.postMessage({ event: "fetching", pack: e.data.fetching, name: e.data.name });
+    return;
+  }
   replies.get(e.data.id)?.(e.data);
   replies.delete(e.data.id);
 };
@@ -22,6 +28,8 @@ function b64(b: Uint8Array): string {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "phitex") return;
+  ports.add(port);
+  port.onDisconnect.addListener(() => ports.delete(port));
   const client = `tab${port.sender?.tab?.id}:${port.sender?.frameId ?? 0}:${Math.random()}`;
   // (binary files, font metrics: given to this client's core session here,
   // since the port carries JSON; again after each open, a new session)
@@ -71,8 +79,8 @@ chrome.runtime.onConnect.addListener((port) => {
         /* (the tab went away) */
       }
     });
-    worker.postMessage({ ...m, id, client } as Req);
-    if (m.op === "open") for (const [f, b] of binaries) give(f, b);
+    // (an open carries the binary files given so far, figures and fonts: the first build has them)
+    worker.postMessage({ ...m, id, client, ...(m.op === "open" ? { binaries: Object.fromEntries(binaries) } : {}) } as Req);
   });
   port.onDisconnect.addListener(() => worker.postMessage({ id: nextId++, client, op: "close" }));
 });

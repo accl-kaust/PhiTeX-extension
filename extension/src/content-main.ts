@@ -3,7 +3,7 @@
 // port to the offscreen document's worker for the core, and the panel.
 
 import type { Edit } from "./edits.ts";
-import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type EditorHost } from "./session.ts";
+import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
@@ -48,45 +48,36 @@ let giveBinary: ((path: string, bytes: Uint8Array) => Promise<unknown>) | undefi
 
 async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promise<Record<string, string>> {
   const t = performance.now();
+  const files: Record<string, string> = {};
+  if (!only) {
+    // (the whole project: its ZIP, every doc's current text and the binary
+    // files, figures, in one request, ~1 s; given to the core before the
+    // first build. No waiting on the file tree, whose collapsed folders
+    // never show their docs' ids)
+    const z = await fetch(`${project()}/download/zip`, { credentials: "include" });
+    if (!z.ok) throw new Error(`project download failed: ${z.status}`);
+    const { files: zipped, binaries: bin } = await readZip(await z.arrayBuffer());
+    Object.assign(files, zipped);
+    if (giveBinary) await Promise.all(Object.entries(bin).map(([p, b]) => giveBinary!(p, b)));
+    panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms; ${Object.keys(bin).length} binary files`);
+    return files;
+  }
+  // (a refresh, of the docs not open: each by its id, those the tree shows;
+  // a doc it doesn't show waits for the next refresh or a reload)
   const r = await fetch(`${project()}/entities`, { credentials: "include" });
   if (!r.ok) throw new Error(`project listing failed: ${r.status}`);
   const { entities } = (await r.json()) as { entities: { path: string; type: string }[] };
-  const docs = entities.filter((e) => e.type === "doc").map((e) => e.path.replace(/^\//, "")).filter((p) => !only || only(p));
-  // (the tree renders after the page: wait for every doc's id, up to 10 s)
-  let ids = docIds();
-  for (let i = 0; i < 50 && docs.some((p) => !ids.has(p)); i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    ids = docIds();
-  }
-  const files: Record<string, string> = {};
-  const missing: string[] = [];
+  const ids = docIds();
   await Promise.all(
-    docs.map(async (p) => {
-      const id = ids.get(p);
-      if (!id) return missing.push(p);
-      const d = await fetch(`${project()}/doc/${id}/download`, { credentials: "include" });
-      if (d.ok) files[p] = await d.text();
-      else missing.push(p);
-    }),
+    entities
+      .filter((e) => e.type === "doc")
+      .map((e) => e.path.replace(/^\//, ""))
+      .filter((p) => only(p) && ids.has(p))
+      .map(async (p) => {
+        const d = await fetch(`${project()}/doc/${ids.get(p)}/download`, { credentials: "include" });
+        if (d.ok) files[p] = await d.text();
+      }),
   );
-  // (the project's binary files, figures: from its ZIP, the one place that
-  // has them all; given to the core before the first build)
-  const binaries = only ? 0 : entities.filter((e) => e.type === "file").length;
-  let given = 0;
-  if (missing.length || binaries) {
-    const z = await fetch(`${project()}/download/zip`, { credentials: "include" });
-    if (z.ok) {
-      const { files: zipped, binaries: bin } = await readZip(await z.arrayBuffer());
-      for (const p of missing) if (p in zipped) files[p] = zipped[p];
-      if (binaries && giveBinary) {
-        await Promise.all(Object.entries(bin).map(([p, b]) => giveBinary!(p, b)));
-        given = Object.keys(bin).length;
-      }
-    }
-  }
-  if (!only) {
-    panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms` + (missing.length ? `; ${missing.length} via ZIP` : "") + (binaries ? `; ${given} of ${binaries} binary files` : ""));
-  }
   return files;
 }
 
@@ -135,6 +126,7 @@ class ChromeTransport implements CoreTransport {
     await chrome.runtime.sendMessage({ type: "ensure-offscreen" });
     this.port = chrome.runtime.connect({ name: "phitex" });
     this.port.onMessage.addListener(async (r: any) => {
+      if (r.event) return this.events.forEach((f) => f(r));
       if (r.png) r.png = unb64(r.png);
       if (r.pdf) r.pdf = unb64(r.pdf);
       // (PDF mode: the page drawn here, from the PDF; the PDF itself only for a download)
@@ -165,6 +157,10 @@ class ChromeTransport implements CoreTransport {
   }
   onLost(cb: () => void) {
     this.lost.push(cb);
+  }
+  private events: ((e: CoreEvent) => void)[] = [];
+  onEvent(cb: (e: CoreEvent) => void) {
+    this.events.push(cb);
   }
 }
 

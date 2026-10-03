@@ -32,7 +32,6 @@ export type CoreReq =
   | { op: "pdf" }
   | { op: "status" }
   | { op: "log" }
-  | { op: "go" }
   | { op: "pages" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
@@ -96,10 +95,14 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
+export type CoreEvent = { event: "fetching"; pack: string; name: string };
+
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
   /** Called when the core is lost (the session reopens). */
   onLost?(cb: () => void): void;
+  /** What the core says unasked: a Shelf pack it is fetching mid-build. */
+  onEvent?(cb: (e: CoreEvent) => void): void;
 }
 
 export interface Status {
@@ -212,6 +215,26 @@ export class PreviewSession {
    * times in ms since the session began; never document text, only sizes.
    */
   readonly trace: { t: number; k: string; d?: unknown }[] = [];
+  /** The core fetches what it lacks from Shelf itself (its open reply says so). */
+  private coreFetches = false;
+  /** Shelf packs the core fetched in the build under way (shown as loading until it ends). */
+  private inBuild: string[] = [];
+  private tellPackages(): void {
+    this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
+  }
+  /** The core fetches a pack mid-build (the job goes on with it): the view says which. */
+  private onFetching(e: CoreEvent): void {
+    this.tr("package: core fetches", e);
+    this.pkg.source = this.source.label;
+    // (one at a time, in order: the one before it has arrived)
+    const prev = this.inBuild.at(-1);
+    if (prev) this.pkg.loading = this.pkg.loading.filter((n) => n !== prev);
+    if (prev) this.pkg.done = [...(this.pkg.done ?? []), prev];
+    this.inBuild.push(e.pack);
+    this.pkg.loading = [...this.pkg.loading, e.pack];
+    this.tellPackages();
+  }
+
   /** Core requests sent and not answered yet; of them, ones that may build. */
   inflight = 0;
   private building = 0;
@@ -227,17 +250,25 @@ export class PreviewSession {
     // (a trap in the core, a panic, restarts its instance: every session it
     // held is gone, "no such handle". Reopened here, a few times at most,
     // since a panic a build always hits would loop)
+    core.onEvent?.((e) => this.onFetching(e));
     this.core = {
       request: async (r) => {
         const t0 = this.now();
         this.tr(`→ ${r.op}`, traceReq(r));
         this.inflight++;
         // (the ops that may build: the view shows a build that takes a while)
-        const builds = r.op === "edit" || r.op === "go" || r.op === "status" || r.op === "open";
+        const builds = r.op === "edit" || r.op === "status" || r.op === "open";
         if (builds && this.building++ === 0) this.sink.busy?.(true);
         const res = await core.request(r).finally(() => {
           this.inflight--;
           if (builds && --this.building === 0) this.sink.busy?.(false);
+          // (the build that fetched them is done: the packs are in)
+          if (builds && this.inBuild.length) {
+            this.pkg.done = [...(this.pkg.done ?? []), ...this.inBuild.filter((n) => this.pkg.loading.includes(n))];
+            this.pkg.loading = this.pkg.loading.filter((n) => !this.inBuild.includes(n));
+            this.inBuild = [];
+            this.tellPackages();
+          }
         });
         this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
         const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
@@ -336,7 +367,6 @@ export class PreviewSession {
     // at the first file it lacks)
     // (pdftex.map: every PDF-mode build reads it first)
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
-    this.released = false;
     const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
@@ -344,12 +374,14 @@ export class PreviewSession {
     // (diagnosed before this was known: say it again with it)
     if (latex !== this.latex) this.lastWarned = 0;
     this.latex = latex;
+    this.coreFetches = !!r.json.fetches;
     this.setPages(r.json.pages);
     this.noteError(r.json);
     this.status(r.json.pending, r.json.undefined_names);
     this.fetchPackages(r.json.missing);
     this.sink.latency(`opened in ${r.json.build_ms.toFixed(1)} ms (round trip ${(this.now() - t).toFixed(1)} ms)`);
-    await this.showPage();
+    await (this.sink.layout ? this.layout() : this.showPage());
+    this.statusSoon();
   }
 
   private lastWarned = 0;
@@ -407,10 +439,17 @@ export class PreviewSession {
    * the next status, and is fetched then.
    */
   private fetchPackages(missing?: string[], guessed: string[] = []): void {
+    // (a core that fetches from Shelf itself, mid-build, looked everywhere:
+    // what it still lacks is nowhere; said, not fetched again)
+    if (this.coreFetches) {
+      const none = (missing ?? []).filter((n) => isPackageFile(n) && !this.pkg.unavailable.includes(n));
+      if (none.length) (this.pkg.unavailable.push(...none), this.tellPackages());
+      return;
+    }
     const wanted = new Set(missing ?? []);
     missing = [...wanted, ...guessed];
     const want = [...new Set(missing ?? [])].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
-    if (!want.length) return this.go();
+    if (!want.length) return;
     for (const n of want) this.asked.add(n);
     const src = this.source;
     this.pkg.source = src.label;
@@ -459,7 +498,6 @@ export class PreviewSession {
       this.pkg.building = any;
       tell();
       this.status(this.pending, this.undefinedNames);
-      this.go();
       if (any)
         this.chain = this.chain
           .then(() => this.layout())
@@ -472,16 +510,6 @@ export class PreviewSession {
   }
 
   /** After the core's discovery pass: what it asked for is here (or nowhere), so the first paint may build. Once per open. */
-  private released = false;
-  private go(): void {
-    if (this.released || !this.opened) return;
-    this.released = true;
-    this.chain = this.chain
-      .then(() => this.core.request({ op: "go" }))
-      .then(() => this.layout())
-      .then(() => this.statusSoon());
-  }
-
   /** A fetch that failed: kept with why (shown), and askable again. */
   private failed(n: string, e: unknown): null {
     this.asked.delete(n);
@@ -512,7 +540,10 @@ export class PreviewSession {
       tell();
       await Promise.all(more.map(one));
     };
+    const t0 = this.now();
+    this.tr("prefetch: start", want.length);
     await Promise.all(want.map(one));
+    this.tr("prefetch: done", { files: this.pkg.done?.length ?? 0, ms: Math.round(this.now() - t0) });
     this.pkg.building = true;
     tell();
   }
@@ -538,13 +569,8 @@ export class PreviewSession {
     if (!this.sink.layout) return;
     const r = await this.core.request({ op: "pages" });
     if (!r.ok || !r.json?.pages) return;
-    const got: string[] = r.json.pages;
-    this.tr("layout", { pages: got.length, kept: Math.max(0, this.hashes.length - got.length) });
-    // (a build that stopped at a file still on its way ships fewer pages than
-    // the one before: the pages it didn't reach stay as they were drawn, not
-    // dropped and drawn again a moment later, the flicker of every package round)
-    const fetching = this.pkg.loading.length > 0 || !!this.texError?.missing;
-    this.hashes = fetching && got.length < this.hashes.length ? [...got, ...this.hashes.slice(got.length)] : got;
+    this.hashes = r.json.pages;
+    this.tr("layout", { pages: this.hashes.length });
     this.setPages(this.hashes.length);
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)
     if (this.hashes.length) this.sink.layout(this.hashes);

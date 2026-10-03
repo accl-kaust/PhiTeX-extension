@@ -25,6 +25,9 @@ upload with `scripts/package.sh` (→ `store/phitex-instant-<version>.zip`).
 > • The page repaints as you type; a small chip shows how fast
 > • Diagnostics for what the engine could not read, with a click to the line
 > • Selectable text, zoom, and a PDF of the instant preview
+> • Real LaTeX: TeX Live's packages are downloaded once, when a document
+>   first needs them, and kept in your browser (see and clear the cache in
+>   the settings)
 > • Settings behind the extension's icon: turn it off, choose what opens, reset
 >
 > This is an UNOFFICIAL extension. It is not made, endorsed or supported by

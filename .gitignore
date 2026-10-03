@@ -4,6 +4,7 @@ extension/dist/
 node_modules/
 extension/manifest.json
 extension/LICENSE.txt
+extension/NOTICE.txt
 store/*.zip
 extension/texmf/
 .chrome-profile-2/

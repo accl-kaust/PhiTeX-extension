@@ -41,6 +41,7 @@ else
 fi
 # (the full license, shipped in the extension, where its links point)
 cp LICENSE extension/LICENSE.txt
+cp NOTICE extension/NOTICE.txt
 # The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
 # them before asking Shelf.
 rm -rf extension/texmf && cp -r texmf extension/texmf

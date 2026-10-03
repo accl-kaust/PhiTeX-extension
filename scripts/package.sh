@@ -12,7 +12,7 @@ mkdir -p store
 rm -f "$out"
 
 if grep -q localhost extension/manifest.json; then echo "manifest has localhost: not a release build" >&2; exit 1; fi
-files=(manifest.json popup.html offscreen.html LICENSE.txt icons dist texmf shelf-index.tsv.gz)
+files=(manifest.json popup.html offscreen.html LICENSE.txt NOTICE.txt icons fonts dist texmf shelf-index.tsv.gz)
 for f in "${files[@]}"; do [ -e "extension/$f" ] || { echo "missing extension/$f" >&2; exit 1; }; done
 [ -s extension/dist/core.wasm ] || { echo "no core.wasm" >&2; exit 1; }
 [ -s extension/texmf/names.txt ] || { echo "no texmf/ (scripts/fetch-texmf.sh)" >&2; exit 1; }

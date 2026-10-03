@@ -733,6 +733,14 @@ function dockInOverleaf(panel: Panel): Dock {
     }
     const sw = switchEl(left);
     leftEl(left);
+    // (Overleaf's Recompile, in ⚡ Instant: our clean recompile too, the
+    // button the writer already reaches for; Overleaf still compiles its own)
+    const rc = left.querySelector<HTMLButtonElement>(".compile-button-group button");
+    if (rc && !rc.dataset.phitex) {
+      rc.dataset.phitex = "1";
+      rc.addEventListener("click", () => mode === "phitex" && panel.clean(), true);
+    }
+    if (rc) rc.title = mode === "phitex" ? "Recompile: Overleaf's PDF, and ⚡ Instant from scratch (PhiTeX)" : (rc.title.startsWith("Recompile: Overleaf") ? "" : rc.title);
     // (compact when the full controls do not fit what the toolbar has left: measured here,
     // not taken from Overleaf's own choice, which counts our switch against its room)
     const ctl = controlsEl(right);

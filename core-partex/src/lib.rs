@@ -588,9 +588,6 @@ impl Session {
             // (windows: steps cut inside long runs, a tikzpicture's say, at
             // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
             tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
-            // (a rebuild past this many commands stops, and the build goes
-            // cold: PHITEX_BUDGET overrides)
-            tex.tracker().budget.set(std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(3_000_000));
             let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
             // (DVI mode: the pages are read from the DVI the link writes;
             // nonstop, as Overleaf runs pdflatex: an error is reported and
@@ -605,6 +602,11 @@ impl Session {
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
             self.history = s.history.max(r.history);
             self.how = format!("cold: {} commands", r.commands);
+            // (a rebuild past the commands of the whole job built cold stops,
+            // and the build goes cold: it would cost more than starting over,
+            // a preamble edit say; PHITEX_BUDGET overrides)
+            let budget = std::env::var("PHITEX_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(r.commands.max(50_000));
+            tex.tracker().budget.set(budget);
             self.prepared = false;
             self.tex = Some(tex);
         }

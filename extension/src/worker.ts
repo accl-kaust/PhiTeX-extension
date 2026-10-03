@@ -18,6 +18,7 @@ export type Req =
   | { id: number; client: string; op: "pdf" }
   | { id: number; client: string; op: "status" }
   | { id: number; client: string; op: "log" }
+  | { id: number; client: string; op: "go" }
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" };
@@ -55,6 +56,7 @@ interface Core {
   ph_check(h: number): void;
   ph_status(h: number): void;
   ph_log?(h: number): void;
+  ph_go?(h: number): void;
   ph_idle?(): number;
   ph_pages(h: number): void;
   ph_text(h: number, p: number, n: number): void;
@@ -255,6 +257,10 @@ function handle(r: Req): Res {
     case "status":
       core.ph_status(h);
       return { id: r.id, ok: true, json: outJson() };
+    case "go":
+      // (the discovery pass's files are fetched: the first paint may build)
+      core.ph_go?.(h);
+      return { id: r.id, ok: true };
     case "log":
       // (debugging: the whole terminal and the job's .log)
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };

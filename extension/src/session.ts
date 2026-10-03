@@ -32,6 +32,7 @@ export type CoreReq =
   | { op: "pdf" }
   | { op: "status" }
   | { op: "log" }
+  | { op: "go" }
   | { op: "pages" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
@@ -266,6 +267,7 @@ export class PreviewSession {
     // at the first file it lacks)
     // (pdftex.map: every PDF-mode build reads it first)
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
+    this.released = false;
     const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
@@ -339,7 +341,7 @@ export class PreviewSession {
     const wanted = new Set(missing ?? []);
     missing = [...wanted, ...guessed];
     const want = [...new Set(missing ?? [])].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
-    if (!want.length) return;
+    if (!want.length) return this.go();
     for (const n of want) this.asked.add(n);
     const src = this.source;
     this.pkg.source = src.label;
@@ -386,6 +388,7 @@ export class PreviewSession {
       this.pkg.building = any;
       tell();
       this.status(this.pending, this.undefinedNames);
+      this.go();
       if (any)
         this.chain = this.chain
           .then(() => this.layout())
@@ -395,6 +398,17 @@ export class PreviewSession {
             this.statusSoon();
           });
     });
+  }
+
+  /** After the core's discovery pass: what it asked for is here (or nowhere), so the first paint may build. Once per open. */
+  private released = false;
+  private go(): void {
+    if (this.released || !this.opened) return;
+    this.released = true;
+    this.chain = this.chain
+      .then(() => this.core.request({ op: "go" }))
+      .then(() => this.layout())
+      .then(() => this.statusSoon());
   }
 
   /** A fetch that failed: kept with why (shown), and askable again. */

@@ -16,7 +16,7 @@
 //!   next query builds. (Cold for now; partex's SSA rebuild comes next.)
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -296,6 +296,16 @@ pub struct Session {
     trigger: Vec<String>,
     /// `prepare_rebuilds` done (after the cold build, when idle).
     prepared: bool,
+    /// The discovery pass ran (a plain job where a missing file reads as
+    /// empty: every name the job asks for, fetched at once).
+    discovered: bool,
+    /// The last build was plain (no SSA program yet): the first paint.
+    plain: bool,
+    /// Build the SSA program at the next build (an edit, or idle).
+    want_ssa: bool,
+    /// After the discovery pass, no build until the host has fetched what
+    /// it asked for (`go`).
+    hold: bool,
     /// The last build: "cold", or "rebuild" with what it ran.
     pub how: String,
     /// (native tools) A flat directory of TeX Live's files the host reads a
@@ -435,6 +445,10 @@ impl Session {
             history_log: Vec::new(),
             trigger: Vec::new(),
             prepared: false,
+            discovered: false,
+            hold: false,
+            plain: false,
+            want_ssa: true,
             how: String::new(),
             fallback_dir: None,
         }
@@ -451,10 +465,32 @@ impl Session {
         m
     }
 
+    /// Start fast (the browser's session): a discovery pass, then a plain
+    /// first paint, the SSA program at the first edit or when idle. Without
+    /// it (tests, tools) the first build is the SSA one, as before.
+    /// PHITEX_NO_PLAIN keeps the old start.
+    pub fn fast_start(&mut self) {
+        if std::env::var("PHITEX_NO_PLAIN").is_err() && self.tex.is_none() {
+            self.want_ssa = false;
+        }
+    }
+
+    /// The host fetched what the discovery pass asked for: build.
+    pub fn go(&mut self) {
+        self.hold = false;
+    }
+
     /// Ready the engine for its first rebuild (the format's definitions
     /// decoded): once per cold build, when idle; the first keystroke would
     /// pay it. True if there was anything to do.
     pub fn prepare(&mut self) -> bool {
+        // (after a plain first paint: the SSA program, now, while idle)
+        if self.plain && self.tex.is_none() && !self.hold {
+            self.want_ssa = true;
+            self.stale = true;
+            self.build();
+            return true;
+        }
         match &self.tex {
             Some(tex) if !self.prepared => {
                 ssa::prepare_rebuilds(tex);
@@ -468,7 +504,7 @@ impl Session {
     /// Build if anything changed since the last build: a rebuild of the
     /// engine there is, else (none yet, or the last job stopped) cold.
     pub fn build(&mut self) {
-        if !self.stale {
+        if !self.stale || self.hold {
             return;
         }
         self.stale = false;
@@ -480,6 +516,15 @@ impl Session {
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
         let rebuild = self.tex.is_some() && (self.history < 3 || std::env::var("PHITEX_COLD_AFTER_FATAL").is_err());
+        if !rebuild && !self.want_ssa {
+            self.plain_build();
+            self.build_ms = ms(t.elapsed());
+            let _ = write!(self.how, "; run {:.1} ms", self.build_ms);
+            self.builds += 1;
+            self.history_log.push(format!("build {}: {}", self.builds, self.how));
+            return;
+        }
+        self.plain = false;
         if rebuild {
             let tex = self.tex.as_mut().unwrap();
             let h = tex.host_mut();
@@ -551,6 +596,74 @@ impl Session {
             if t.is_empty() { "nothing: cold".into() } else { t.join(" ") },
             if more > 0 { format!(" +{more}") } else { String::new() }
         ));
+    }
+
+    /// The job's command line.
+    fn command(&self) -> String {
+        let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
+        // (PDF mode uncompressed: pdfdraw reads the content streams back;
+        // the main file by the primitive \input, as `pdflatex main.tex`)
+        let mode = if pdf_mode() { "\\pdfcompresslevel=0 \\pdfobjcompresslevel=0 " } else { "\\pdfoutput=0 " };
+        format!("&pdflatex \\nonstopmode{mode}\\csname @@input\\endcsname{{{main}}}")
+    }
+
+    /// A build without the SSA program (an untracked run, ~3x faster than
+    /// a cold SSA build): the discovery pass the first time, then the first
+    /// paint. The SSA program is built at the first edit or when idle.
+    fn plain_build(&mut self) {
+        self.changed.clear();
+        self.tex = None;
+        self.plain = true;
+        let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
+        let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
+        let dir = self.fallback_dir.clone();
+        let from_dir = move |n: &str| -> Option<Vec<u8>> {
+            if n.contains('/') {
+                return None;
+            }
+            std::fs::read(dir.as_ref()?.join(n)).ok()
+        };
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(BTreeSet::<String>::new()));
+        let discover = !self.discovered;
+        if discover {
+            // (a missing file reads as empty, and is noted: the run goes on
+            // to ask for the rest; the job's own files are not wants)
+            let (a, j) = (asked.clone(), format!("{job}."));
+            host.fallback = Some(Box::new(move |n: &[u8]| {
+                let n = std::str::from_utf8(n).ok()?;
+                if let Some(b) = from_dir(n) {
+                    return Some(b);
+                }
+                if !n.starts_with(&j) && !n.contains('/') {
+                    a.borrow_mut().insert(n.to_string());
+                }
+                Some(Vec::new())
+            }));
+        } else if self.fallback_dir.is_some() {
+            host.fallback = Some(Box::new(move |n: &[u8]| from_dir(std::str::from_utf8(n).ok()?)));
+        }
+        let (h, host) = run(host, texlive_params(false), self.command().as_bytes());
+        self.history = h;
+        self.term = host.term.clone();
+        self.pdf_pages = None;
+        if discover {
+            self.discovered = true;
+            self.missing = asked.borrow().iter().cloned().collect();
+            self.pdf.clear();
+            self.shipped = 0;
+            self.how = format!("discover: {} names asked for", self.missing.len());
+            // (the next build is the first paint, once the host says go)
+            self.stale = true;
+            self.hold = true;
+            self.plain = false;
+        } else {
+            self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
+            self.missing.sort();
+            self.missing.dedup();
+            self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
+            self.shipped = self.pdf_pages().len();
+            self.how = "plain: the first paint".into();
+        }
     }
 
     /// Link the files from the steps' effects; read the DVI's pages.
@@ -637,6 +750,8 @@ impl Session {
         self.files.get_mut(name).unwrap().replace_range(range, text);
         self.changed.push(name.to_string());
         self.stale = true;
+        // (the writer is typing: the program that makes keystrokes cheap)
+        self.want_ssa = true;
         Ok(())
     }
 
@@ -886,6 +1001,7 @@ mod abi {
             return 0;
         };
         let mut s = Session::open(files, &main);
+        s.fast_start();
         let st = s.status();
         let h = NEXT.with_borrow_mut(|n| {
             *n += 1;
@@ -949,6 +1065,13 @@ mod abi {
     #[unsafe(no_mangle)]
     pub extern "C" fn ph_png_last() {
         out(LAST.with_borrow_mut(Option::take).unwrap_or_default());
+    }
+
+    /// The host has fetched what the discovery pass asked for (or knows it
+    /// is nowhere): the first paint may be built.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_go(h: u32) {
+        with(h, Session::go);
     }
 
     /// Idle work: ready every session's engine for its first rebuild.

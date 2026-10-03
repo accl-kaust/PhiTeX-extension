@@ -24,9 +24,12 @@ fn main() {
     let mut out = std::io::stdout().lock();
     for name in &a[2..] {
         let Some((stem, kind)) = name.rsplit_once('.') else { continue };
+        // (a body that uses the shapes a paper does: the fonts a package
+        // brings are read then, so they arrive with it, not one build each)
+        let body = "\\begin{document}\\section{S}x \\textbf{b} \\textit{i} \\emph{e} \\textsc{s} \\texttt{t} \\textsf{f} \\textbf{\\textit{bi}} {\\small s}{\\footnotesize f}{\\large l} $x^2+\\alpha\\sum_{i=1}^n\\int f\\to\\mathbb{R}$ \\[\\sum_i x_i\\]\\end{document}\n";
         let job = match kind {
-            "sty" => format!("\\documentclass{{article}}\\usepackage{{{stem}}}\\begin{{document}}x\\end{{document}}\n"),
-            "cls" => format!("\\documentclass{{{stem}}}\\begin{{document}}x\\end{{document}}\n"),
+            "sty" => format!("\\documentclass{{article}}\\usepackage{{{stem}}}{body}"),
+            "cls" => format!("\\documentclass{{{stem}}}{body}"),
             _ => continue,
         };
         let read = Rc::new(RefCell::new(BTreeSet::<String>::new()));
@@ -43,11 +46,12 @@ fn main() {
             r.borrow_mut().insert(n.to_string());
             Some(b)
         }));
-        // (PHITEX_PDF=1: as a PDF-mode build, which also reads the fonts' .pfb and .enc)
-        let cmd: &[u8] = if std::env::var("PHITEX_PDF").is_ok_and(|v| v == "1") {
-            b"&pdflatex \\nonstopmode\\input{phitexdepsjob}"
-        } else {
+        // (a PDF-mode build, as the preview's: it also reads the fonts'
+        // .vf, .pfb and .enc; PHITEX_DVI=1 for DVI)
+        let cmd: &[u8] = if std::env::var("PHITEX_DVI").is_ok_and(|v| v == "1") {
             b"&pdflatex \\nonstopmode\\pdfoutput=0 \\input{phitexdepsjob}"
+        } else {
+            b"&pdflatex \\nonstopmode\\input{phitexdepsjob}"
         };
         let _ = run(host, texlive_params(false), cmd);
         let files: Vec<String> = read.borrow().iter().cloned().collect();

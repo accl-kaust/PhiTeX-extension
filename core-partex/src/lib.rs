@@ -587,11 +587,11 @@ impl Session {
             // (PHITEX_REBUILD_LOG=1: the rebuild traced, its log on stderr)
             // (the trace: by PHITEX_REBUILD_LOG natively, by `ph_trace` in wasm)
             let trace = self.trace || std::env::var("PHITEX_REBUILD_LOG").is_ok();
-            // (a rebuild may take 0.3× the last cold build, then stops and
-            // the build goes cold: a rebuild runs ~2.7× slower a command than
-            // a cold pass, so one that has become a re-run of everything is
-            // better started over early; PHITEX_DEADLINE_MS overrides)
-            let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or((0.3 * self.cold_ms).max(300.0));
+            // (a rebuild may take as long as the last cold build took, then
+            // stops and the build goes cold: a backstop only; when a rebuild
+            // has become a re-run of everything is the engine's to tell;
+            // PHITEX_DEADLINE_MS overrides)
+            let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(self.cold_ms.max(300.0));
             tex.tracker().deadline.set(Some((clock_ns, clock_ns() + (limit * 1e6) as u64)));
             let r = ssa::rebuild_trips(tex, trace, true, &mut trips);
             if trace {

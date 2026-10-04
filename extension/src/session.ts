@@ -38,6 +38,7 @@ export type CoreReq =
   | { op: "pages" }
   | { op: "origins"; page: number }
   | { op: "trace"; on: boolean }
+  | { op: "auxdump" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
   | { op: "package"; name: string };

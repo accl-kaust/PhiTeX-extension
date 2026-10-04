@@ -30,6 +30,7 @@ use partex_core::{DateTime, FileKind, Host, OpenedFile, Params, Tex, Untracked, 
 pub mod draws;
 pub mod dvi;
 pub mod pdfdraw;
+mod bib;
 mod shelf;
 pub mod type1;
 
@@ -302,6 +303,12 @@ pub struct Session {
     /// tracked build starts from them, as a second pdflatex run does, so
     /// its trips don't re-run the whole job for references.
     carried: BTreeMap<Vec<u8>, Arc<[u8]>>,
+    /// The session's one "now" (\today, \time, the PDF's dates): the plain
+    /// first paint and the tracked build agree, as two pdflatex runs of one
+    /// latexmk would within a minute.
+    started: DateTime,
+    /// Each `.aux`'s contents at its last BibTeX run (bib.rs).
+    bib_memo: bib::Memo,
     /// The last rebuild ran one trip (a keystroke): `settle_idle` is owed.
     unsettled: bool,
     /// Rebuilds traced, their log kept in the build log (`ph_trace`).
@@ -462,6 +469,8 @@ impl Session {
             carried: BTreeMap::new(),
             trace: false,
             unsettled: false,
+            bib_memo: bib::Memo::default(),
+            started: now(),
             pages: Vec::new(),
             fonts: BTreeMap::new(),
             term: Vec::new(),
@@ -531,8 +540,10 @@ impl Session {
     /// decoded): once per cold build, when idle; the first keystroke would
     /// pay it. True if there was anything to do.
     pub fn prepare(&mut self) -> bool {
-        // (after a plain first paint: the SSA program, now, while idle)
+        // (after a plain first paint: the SSA program, now, while idle; from
+        // converged files, as latexmk's last run, so its trips are few)
         if self.plain && self.tex.is_none() {
+            self.converge_plain();
             self.want_ssa = true;
             self.stale = true;
             self.build();
@@ -548,6 +559,37 @@ impl Session {
         }
     }
 
+    /// latexmk's loop on plain passes: BibTeX on the .aux files the last pass
+    /// wrote, then a pass again, until the files read are the files written
+    /// (at most four passes). The tracked build then starts converged: one
+    /// or two trips, not five, and a fraction of the memory a five-trip
+    /// settle records.
+    fn converge_plain(&mut self) {
+        for _ in 0..4 {
+            let before = self.carried.clone();
+            let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
+            host.fallback = self.fallback();
+            let streams: Vec<(Vec<u8>, Arc<[u8]>)> = self.carried.iter().filter(|(n, _)| n.ends_with(b".aux")).map(|(n, b)| (n.clone(), b.clone())).collect();
+            let (_, lines) = bib::tools(self.bib_memo.clone())(&mut host, &streams);
+            self.history_log.extend(lines.iter().map(|l| format!("tool: {l}")));
+            for (n, b) in &host.files {
+                if n.ends_with(b".bbl") || n.ends_with(b".blg") {
+                    self.carried.insert(n.clone(), b.clone());
+                }
+            }
+            if self.carried.iter().all(|(n, b)| before.get(n).is_some_and(|o| o[..] == b[..])) && before.len() == self.carried.len() && self.builds > 1 {
+                break;
+            }
+            let t = Instant::now();
+            self.plain_build();
+            self.builds += 1;
+            self.history_log.push(format!("build {}: plain pass (converging) {:.0} ms", self.builds, ms(t.elapsed())));
+            if self.carried.iter().all(|(n, b)| before.get(n).is_some_and(|o| o[..] == b[..])) && before.len() == self.carried.len() {
+                break;
+            }
+        }
+    }
+
     /// After one-trip keystrokes, on idle: the trips that follow (the .aux,
     /// .toc, … read against what the last trip wrote), as a cold build's
     /// settle, then the link. True if it ran.
@@ -558,8 +600,19 @@ impl Session {
         let Some(tex) = self.tex.as_mut() else { return false };
         self.unsettled = false;
         let t = Instant::now();
-        let mut trips = ssa::Trips { max: 4, tools: &mut no_tools, clock: None };
+        // (until settled, as the cold build)
+        let mut bibtex = bib::tools(self.bib_memo.clone());
+        let mut trips = ssa::Trips { max: 12, tools: &mut bibtex, clock: None };
         let s = ssa::settle(tex, false, true, &mut trips, 0, 0);
+        self.history_log.extend(s.tools.iter().map(|l| format!("tool: {l}")));
+        if !s.settled {
+            self.history_log.push(format!(
+                "settle: not settled after {} trips: {:?}; stopped: {:?}",
+                s.trips,
+                s.unsettled.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect::<Vec<_>>(),
+                s.unsupported
+            ));
+        }
         if let Some(why) = s.unsupported {
             self.history_log.push(format!("settle stopped ({why}): cold"));
             self.tex = None;
@@ -591,8 +644,13 @@ impl Session {
         self.stale = false;
         let t = Instant::now();
         // (trips a build may take; PHITEX_TRIPS overrides)
-        let max = std::env::var("PHITEX_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
-        let mut trips = ssa::Trips { max, tools: &mut no_tools, clock: None };
+        // (until the files read equal the files written: a bibliography's
+        // .bbl, then the reflow it makes, then the page records that move,
+        // can take more than four)
+        let max = std::env::var("PHITEX_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+        // (BibTeX between trips, as latexmk: the engine's own, in process)
+        let mut bibtex = bib::tools(self.bib_memo.clone());
+        let mut trips = ssa::Trips { max, tools: &mut bibtex, clock: None };
         // (a job that ended fatally, an unclosed brace's runaway argument, is
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
@@ -660,7 +718,7 @@ impl Session {
             );
         } else {
             self.changed.clear();
-            let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
+            let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
             host.fallback = self.fallback();
             let mut tex = Tex::new(host, SsaTracker::new(Recorder::new()), texlive_params(false));
             // (windows: steps cut inside long runs, a tikzpicture's say, at
@@ -682,6 +740,10 @@ impl Session {
             let r = ssa::run_applying(&mut tex, cmd.as_bytes(), false, 0, false);
             let run_ms = ms(t.elapsed());
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
+            self.history_log.extend(s.tools.iter().map(|l| format!("tool: {l}")));
+            if !s.settled {
+                self.history_log.push(format!("cold: not settled after {} trips: {:?}; stopped: {:?}", s.trips, s.unsettled.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect::<Vec<_>>(), s.unsupported));
+            }
             self.history = s.history.max(r.history);
             // (the first pass, then settle's trips: what each cost, in commands and ms)
             let more: Vec<String> = s.trip_commands.iter().zip(&s.trip_ns).skip(1).map(|(c, n)| format!("{c} commands {:.0} ms", *n as f64 / 1e6)).collect();
@@ -734,7 +796,7 @@ impl Session {
         self.tex = None;
         self.plain = true;
         let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
-        let mut host = MemHost { files: self.host_files(), now: Some(now()), ..MemHost::default() };
+        let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
         host.fallback = self.fallback();
         // (its command count, beside the tracked build's: the two compared)
         let mut tex = Tex::new(host, Untracked, texlive_params(false));
@@ -749,12 +811,17 @@ impl Session {
         self.missing.sort();
         self.missing.dedup();
         self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
+        // (BibTeX's .bbl/.blg are not the job's: kept from the run before)
+        let tools: BTreeMap<Vec<u8>, Arc<[u8]>> = self.carried.iter().filter(|(n, _)| n.ends_with(b".bbl") || n.ends_with(b".blg")).map(|(n, b)| (n.clone(), b.clone())).collect();
         self.carried = host
             .written
             .iter()
             .filter(|(n, _)| !n.ends_with(b".pdf") && !n.ends_with(b".log") && !n.ends_with(b".synctex"))
             .map(|(n, b)| (n.clone(), Arc::from(&b[..])))
             .collect();
+        for (n, b) in tools {
+            self.carried.entry(n).or_insert(b);
+        }
         self.shipped = self.pdf_hashes().len();
         self.how = format!("plain: the first paint, {commands} commands, 1 pass");
     }
@@ -762,6 +829,10 @@ impl Session {
     /// Link the files from the steps' effects; read the DVI's pages.
     fn link(&mut self) {
         let tex = self.tex.as_mut().unwrap();
+        // (the steps' chunks rendered first: with the log's columns resolved
+        // at link time, a step's text exists only once its flow is resolved,
+        // which taking the changes does; the link below takes every chunk)
+        let _ = ssa::take_step_changes(&mut tex.tracker().rec.borrow_mut());
         let chunks = ssa::step_effects(&tex.tracker().rec.borrow());
         let slices: Vec<&[partex_core::effects::Effect]> = chunks.iter().map(|(_, e)| &e.1[..]).collect();
         let linked = partex_core::effects::link(&slices, &partex_core::Sequential, &mut |level, data| {
@@ -960,6 +1031,27 @@ impl Session {
     #[must_use]
     pub fn written_bytes(&self, name: &str) -> Option<Vec<u8>> {
         self.tex.as_ref()?.host().written.get(name.as_bytes()).cloned()
+    }
+
+    /// For debugging a build's convergence: the auxiliary files (.aux, .toc,
+    /// .lof, .lot, .out, .bbl, .blg, acro/glossary files) as carried into
+    /// the tracked build, as its host holds them now (inputs), and as the job
+    /// wrote them. JSON: {"carried":{name:text},"files":{…},"written":{…}}.
+    pub fn aux_dump(&self) -> String {
+        let aux = |n: &[u8]| {
+            let n = String::from_utf8_lossy(n);
+            !(n.ends_with(".tex") || n.ends_with(".sty") || n.ends_with(".cls") || n.ends_with(".bib") || n.ends_with(".pdf") || n.ends_with(".png") || n.ends_with(".jpg") || n.ends_with(".tfm") || n.ends_with(".vf") || n.ends_with(".fmt") || n.ends_with(".log") || n.contains('.') && (n.ends_with(".def") || n.ends_with(".cfg") || n.ends_with(".fd") || n.ends_with(".map") || n.ends_with(".enc") || n.ends_with(".pfb") || n.ends_with(".clo") || n.ends_with(".ldf") || n.ends_with(".code.tex") || n.ends_with(".dict") || n.ends_with(".trsl") || n.ends_with(".bst") || n.ends_with(".cbx") || n.ends_with(".bbx") || n.ends_with(".lbx")))
+        };
+        let obj = |it: Vec<(&[u8], &[u8])>| {
+            let parts: Vec<String> = it.into_iter().filter(|(n, _)| aux(n)).map(|(n, b)| format!("{}:{}", esc(&String::from_utf8_lossy(n)), esc(&String::from_utf8_lossy(b)))).collect();
+            format!("{{{}}}", parts.join(","))
+        };
+        let carried = obj(self.carried.iter().map(|(n, b)| (&n[..], &b[..])).collect());
+        let (files, written) = self.tex.as_ref().map_or(("{}".into(), "{}".into()), |t| {
+            let h = t.host();
+            (obj(h.files.iter().map(|(n, b)| (&n[..], &b[..])).collect()), obj(h.written.iter().map(|(n, b)| (&n[..], &b[..])).collect()))
+        });
+        format!("{{\"carried\":{carried},\"files\":{files},\"written\":{written}}}")
     }
 
     /// What the job wrote outside the link (`\write` files), by name (tests).
@@ -1202,10 +1294,8 @@ mod abi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ph_assets(ptr: *const u8, len: usize) -> u32 {
         keep_panics();
-        // (the engine's switches: env vars for its CLI, set here for wasm, which
-        // has no environment. Soft reads stay off until they're sound again:
-        // with them, a fresh build can loop in pgfplots)
-        partex_core::ssa::SOFT_READS_ON.store(false, std::sync::atomic::Ordering::Relaxed);
+        // (the engine's switches are env vars for its CLI; wasm has none, so
+        // each runs at its default: soft and class reads on, sound since 468180a)
         let Some(m) = parse_assets(unsafe { input(ptr, len) }) else { return 0 };
         let n = u32::try_from(m.len()).unwrap_or(0);
         add_assets(m);
@@ -1385,6 +1475,12 @@ mod abi {
     pub extern "C" fn ph_trace(h: u32, on: u32) {
         with(h, |s| s.trace = on != 0);
         out_json("{}".into());
+    }
+
+    /// The auxiliary files, for debugging convergence (out, JSON: `Session::aux_dump`).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_auxdump(h: u32) {
+        out_json(with(h, |s| s.aux_dump()).unwrap_or_else(|| "{}".into()));
     }
 
     /// Page `page`'s glyph origins (out, JSON: `Session::origins`).

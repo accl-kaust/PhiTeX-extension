@@ -18,6 +18,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "partex-bibtex"
+version = "0.0.0"
+
+[[package]]
 name = "partex-core"
 version = "0.0.0"
 dependencies = [
@@ -56,6 +60,7 @@ name = "phitex-overleaf-partex"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide",
+ "partex-bibtex",
  "partex-core",
  "partex-engine",
 ]

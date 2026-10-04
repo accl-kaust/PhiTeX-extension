@@ -30,5 +30,13 @@ for p in "${PKGS[@]}"; do
     n=$(basename "$f"); [ -e "$out/$n" ] || cp "$f" "$out/$n"
   done
 done
+# BibTeX's styles, every .bst of TeX Live 2026, for the BibTeX the build runs
+# between its trips (Shelf has no bibtex/ tree): from the local TeX Live, which
+# must be 2026 (TEXMFDIST overrides where it is)
+dist=${TEXMFDIST:-$(kpsewhich -var-value TEXMFDIST)}
+find "$dist/bibtex/bst" -type f -name '*.bst' | sort | while read -r f; do
+  n=$(basename "$f"); [ -e "$out/$n" ] || cp "$f" "$out/$n"
+done
+printf '%s\t%s\t%s\n' "bibtex/bst" "local $(pdftex --version | head -1 | grep -o 'TeX Live [0-9]*')" "-" >> "$out/MANIFEST.tsv"
 find "$out" -type f ! -name MANIFEST.tsv ! -name names.txt -printf '%f\n' | sort > "$out/names.txt"
 echo "files: $(find "$out" -type f ! -name MANIFEST.tsv | wc -l)" >&2

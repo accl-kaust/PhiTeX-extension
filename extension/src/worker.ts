@@ -22,6 +22,7 @@ export type Req =
   | { id: number; client: string; op: "pages" }
   | { id: number; client: string; op: "origins"; page: number }
   | { id: number; client: string; op: "trace"; on: boolean }
+  | { id: number; client: string; op: "auxdump" }
   | { id: number; client: string; op: "check"; file?: string; expect?: string }
   | { id: number; client: string; op: "close" }
   /** (the draw worker: the PDF the core just linked, to draw pages from) */
@@ -64,6 +65,7 @@ interface Core {
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
   ph_trace?(h: number, on: number): void;
+  ph_auxdump?(h: number): void;
   ph_panic_ptr?(): number;
   ph_panic_len?(): number;
   ph_draw_set?(slot: number, p: number, n: number): number;
@@ -388,6 +390,11 @@ function handle(r: Req): Res {
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };
       core.ph_log(h);
       return { id: r.id, ok: true, json: { log: new TextDecoder().decode(outBytes()) } };
+    case "auxdump":
+      // (debugging: the auxiliary files carried in, held, and written)
+      if (!core.ph_auxdump) return { id: r.id, ok: false, error: "no auxdump" };
+      core.ph_auxdump(h);
+      return { id: r.id, ok: true, json: outJson() };
     case "trace":
       // (debugging: each rebuild's trace kept in the build log, `log`)
       core.ph_trace?.(h, r.on ? 1 : 0);
@@ -524,11 +531,18 @@ function handleDraw(r: Req): Res {
 
 /** The panic the core kept before its trap (`: message`), or "". */
 function panicText(): string {
+  // (the memory it had: a trap with no panic is often an allocation that failed, wasm32's 4 GB)
+  let mem = "";
+  try {
+    mem = ` (memory ${Math.round(core.memory.buffer.byteLength / 1048576)} MB)`;
+  } catch {
+    /* (no memory to read) */
+  }
   try {
     const n = core.ph_panic_len?.() ?? 0;
-    return n ? `: ${new TextDecoder().decode(new Uint8Array(core.memory.buffer, core.ph_panic_ptr!() >>> 0, n))}` : "";
+    return (n ? `: ${new TextDecoder().decode(new Uint8Array(core.memory.buffer, core.ph_panic_ptr!() >>> 0, n))}` : ": no panic message") + mem;
   } catch {
-    return "";
+    return mem;
   }
 }
 

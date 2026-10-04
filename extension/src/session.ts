@@ -284,8 +284,10 @@ export class PreviewSession {
         // (the ops that may build: the view shows a build that takes a while)
         const builds = r.op === "edit" || r.op === "status" || r.op === "open";
         if (builds && this.building++ === 0) this.sink.busy?.(true);
-        // (a build or a file changed: the glyphs' sources are asked again)
-        if (r.op === "edit" || r.op === "open" || r.op === "set_file") this.glyphCache.clear();
+        // (the glyphs' sources: an edit maps them, as an editor maps positions;
+        // a file set whole or a new session asks them again)
+        if (r.op === "open" || r.op === "set_file") this.glyphCache.clear();
+        if (r.op === "edit") this.mapGlyphs(r.file, r.start, r.end, new TextEncoder().encode(r.text).length);
         const res = await core.request(r).finally(() => {
           this.inflight--;
           if (builds && --this.building === 0) this.sink.busy?.(false);
@@ -622,6 +624,9 @@ export class PreviewSession {
     this.setPages(this.hashes.length);
     // (no page shipped: the view keeps what it shows, dimmed; see the sink)
     if (this.hashes.length) this.sink.layout(this.hashes);
+    // (the glyphs' sources of the pages around the one read, asked now, after
+    // the build, so a double-click or a selection finds them ready)
+    if (this.sink.goto) for (const k of [this.page, this.page + 1, this.page - 1]) if (k >= 0 && k < this.hashes.length) void this.glyphsOf(k);
   }
 
   /** Everything again, for a view that just joined (a detached PDF tab). */
@@ -668,8 +673,25 @@ export class PreviewSession {
 
   /** Page `k`'s glyphs with their sources, as the core has them now (kept by the page's hash). */
   private glyphCache = new Map<string, Glyph[]>();
+  /**
+   * An edit replaced bytes [start, end) of `file` with `len` bytes: every
+   * cached glyph's source range moved with it. A page the edit changed has a
+   * new hash, so its glyphs are asked again (the cache is by page hash).
+   */
+  private mapGlyphs(file: string, start: number, end: number, len: number): void {
+    const map = (p: number) => (p < start ? p : p >= end ? p + len - (end - start) : start + len);
+    for (const gs of this.glyphCache.values())
+      for (const g of gs) {
+        if (g.file !== file) continue;
+        const [a, b] = [map(g.start), map(g.end)];
+        g.start = a;
+        g.end = Math.max(a, b);
+      }
+  }
+
   private async glyphsOf(k: number): Promise<Glyph[]> {
-    const key = String(k);
+    // (by the page's hash: an unchanged page keeps its glyphs, mapped through edits)
+    const key = `${k}:${this.hashes[k] ?? ""}`;
     const have = this.glyphCache.get(key);
     if (have) return have;
     const r = await this.core.request({ op: "origins", page: k });
@@ -680,7 +702,8 @@ export class PreviewSession {
       return n in this.files ? n : n + ".tex" in this.files ? n + ".tex" : null;
     };
     const gs = glyphs(r.json, path);
-    if (this.glyphCache.size > 64) this.glyphCache.clear();
+    // (old hashes' entries: dropped past a few hundred pages' worth)
+    if (this.glyphCache.size > 300) this.glyphCache.clear();
     this.glyphCache.set(key, gs);
     return gs;
   }

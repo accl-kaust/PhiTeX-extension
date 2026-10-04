@@ -302,6 +302,8 @@ pub struct Session {
     /// tracked build starts from them, as a second pdflatex run does, so
     /// its trips don't re-run the whole job for references.
     carried: BTreeMap<Vec<u8>, Arc<[u8]>>,
+    /// The last rebuild ran one trip (a keystroke): `settle_idle` is owed.
+    unsettled: bool,
     /// Rebuilds traced, their log kept in the build log (`ph_trace`).
     pub trace: bool,
     pages: Vec<dvi::DviPage>,
@@ -459,6 +461,7 @@ impl Session {
             pdf_fonts: pdfdraw::Fonts::new(),
             carried: BTreeMap::new(),
             trace: false,
+            unsettled: false,
             pages: Vec::new(),
             fonts: BTreeMap::new(),
             term: Vec::new(),
@@ -541,8 +544,42 @@ impl Session {
                 self.prepared = true;
                 true
             }
-            _ => false,
+            _ => self.settle_idle(),
         }
+    }
+
+    /// After one-trip keystrokes, on idle: the trips that follow (the .aux,
+    /// .toc, … read against what the last trip wrote), as a cold build's
+    /// settle, then the link. True if it ran.
+    pub fn settle_idle(&mut self) -> bool {
+        if !self.unsettled || self.stale {
+            return false;
+        }
+        let Some(tex) = self.tex.as_mut() else { return false };
+        self.unsettled = false;
+        let t = Instant::now();
+        let mut trips = ssa::Trips { max: 4, tools: &mut no_tools, clock: None };
+        let s = ssa::settle(tex, false, true, &mut trips, 0, 0);
+        if let Some(why) = s.unsupported {
+            self.history_log.push(format!("settle stopped ({why}): cold"));
+            self.tex = None;
+            self.stale = true;
+            self.build();
+            return true;
+        }
+        if s.trips <= 1 {
+            // (nothing read differs from what was written: settled already)
+            return false;
+        }
+        self.history = s.history;
+        self.how = format!("settle: {} trips, {} steps, {} commands", s.trips, s.steps_run, s.commands);
+        let t_run = ms(t.elapsed());
+        self.link();
+        self.build_ms = ms(t.elapsed());
+        let _ = write!(self.how, "; run {t_run:.1} ms, link {:.1} ms", self.build_ms - t_run);
+        self.builds += 1;
+        self.history_log.push(format!("build {}: {} (changed: settling)", self.builds, self.how));
+        true
     }
 
     /// Build if anything changed since the last build: a rebuild of the
@@ -593,7 +630,12 @@ impl Session {
             // PHITEX_DEADLINE_MS overrides)
             let limit = std::env::var("PHITEX_DEADLINE_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(self.cold_ms.max(300.0));
             tex.tracker().deadline.set(Some((clock_ns, clock_ns() + (limit * 1e6) as u64)));
-            let r = ssa::rebuild_trips(tex, trace, true, &mut trips);
+            // (a keystroke: one trip, as one pdflatex run; references and the
+            // TOC settle on idle (`settle_idle`), not on each keystroke;
+            // PHITEX_KEY_TRIPS overrides)
+            let mut key_trips = ssa::Trips { max: std::env::var("PHITEX_KEY_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(1), tools: &mut no_tools, clock: None };
+            let r = ssa::rebuild_trips(tex, trace, true, &mut key_trips);
+            let _ = &mut trips;
             if trace {
                 for l in &r.log {
                     eprintln!("rebuild-log: {l}");
@@ -610,6 +652,7 @@ impl Session {
                 return;
             }
             self.history = r.history;
+            self.unsettled = true;
             self.how = format!(
                 "rebuild: {} steps, {} commands, {} trips (edits {}, seeds {}, phi {}, store readers {}, queries {}, defs changed {}, readers marked {}, new {}, retries {}){}",
                 r.steps_run, r.commands, r.trips, r.edits, r.seeds, r.phi, r.store_readers, r.queries, r.defs_changed, r.readers_marked, r.new_steps, r.retries,
@@ -1159,6 +1202,10 @@ mod abi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ph_assets(ptr: *const u8, len: usize) -> u32 {
         keep_panics();
+        // (the engine's switches: env vars for its CLI, set here for wasm, which
+        // has no environment. Soft reads stay off until they're sound again:
+        // with them, a fresh build can loop in pgfplots)
+        partex_core::ssa::SOFT_READS_ON.store(false, std::sync::atomic::Ordering::Relaxed);
         let Some(m) = parse_assets(unsafe { input(ptr, len) }) else { return 0 };
         let n = u32::try_from(m.len()).unwrap_or(0);
         add_assets(m);

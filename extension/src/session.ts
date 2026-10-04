@@ -102,7 +102,7 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean };
+export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean } | { event: "settled" };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -274,6 +274,11 @@ export class PreviewSession {
     // since a panic a build always hits would loop)
     core.onEvent?.((e) => {
       if (e.event === "preparing") return this.sink.preparing?.(e.on);
+      // (references settled after one-trip keystrokes: the pages that changed drawn again)
+      if (e.event === "settled") {
+        if (this.opened && !this.busy) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+        return;
+      }
       this.onFetching(e);
     });
     this.core = {

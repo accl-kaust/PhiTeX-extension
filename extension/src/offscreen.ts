@@ -29,6 +29,10 @@ worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string; dr
     drawn.add(e.data.client);
     return;
   }
+  if ((e.data as { settled?: boolean }).settled) {
+    for (const p of ports) p.postMessage({ event: "settled" });
+    return;
+  }
   if (e.data.preparing !== undefined) {
     for (const p of ports) p.postMessage({ event: "preparing", on: e.data.preparing });
     return;

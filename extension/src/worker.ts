@@ -449,15 +449,20 @@ const shipped = new Map<string, string>();
 /** After a build: the PDF to the draw worker (through the offscreen document) if its pages changed. */
 function shipPdf(r: Req): void {
   if (!core.ph_draw_set || !(r.op === "open" || r.op === "status" || (r.op === "edit" && r.page >= 0))) return;
-  const h = sessions.get(r.client);
-  if (!h) return;
+  shipFor(r.client);
+}
+
+/** Client `client`'s PDF to the drawer, if its pages changed since the last one sent. */
+function shipFor(client: string): void {
+  const h = sessions.get(client);
+  if (!h || !core.ph_draw_set) return;
   core.ph_pages(h);
   const key = new TextDecoder().decode(outBytes());
-  if (shipped.get(r.client) === key) return;
-  shipped.set(r.client, key);
+  if (shipped.get(client) === key) return;
+  shipped.set(client, key);
   core.ph_pdf(h);
   const pdf = outBytes();
-  if (pdf.length) (self as unknown as Worker).postMessage({ drawPdf: true, client: r.client, pdf }, [pdf.buffer]);
+  if (pdf.length) (self as unknown as Worker).postMessage({ drawPdf: true, client, pdf }, [pdf.buffer]);
 }
 
 // ---- the draw worker ----
@@ -588,8 +593,14 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     try {
       // (readying the next rebuild: the tab says so, not "Typesetting", while it runs)
       (self as unknown as Worker).postMessage({ preparing: true });
-      core?.ph_idle?.();
+      const did = core?.ph_idle?.() ?? 0;
       (self as unknown as Worker).postMessage({ preparing: false });
+      // (the idle work changed the output, the trips that settle references
+      // after one-trip keystrokes: the drawer gets the PDF, the tabs lay out again)
+      if (did) {
+        for (const c of sessions.keys()) shipFor(c);
+        (self as unknown as Worker).postMessage({ settled: true });
+      }
     } catch (e) {
       (self as unknown as Worker).postMessage({ preparing: false });
       // (told to the next request: see idleTrap)

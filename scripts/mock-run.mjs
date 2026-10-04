@@ -175,6 +175,12 @@ for (const s of sc.steps ?? []) {
     await sleep(1500);
     s.result = await evalIn(`[...document.querySelector("phitex-preview").shadowRoot.querySelectorAll(".mark.sel")].map((m) => m.parentElement.dataset.k + "@" + m.style.top)`, true);
     console.log("select →", JSON.stringify(s.result));
+  } else if (s.pdfsave !== undefined) {
+    // (the ⚡ PDF as it is now, saved: a fresh build's compared with it)
+    const b64 = await evalIn(`(async () => { const b = await globalThis.__phitexSession.pdf(); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); })()`, true);
+    const f = path.join(out, `${s.pdfsave}.pdf`);
+    fs.writeFileSync(f, Buffer.from(b64 ?? "", "base64"));
+    console.log(`pdfsave → ${f}: ${fs.statSync(f).size} bytes`);
   } else if (s.report) {
     // (the debug report, as the user opens it: ⓘ, then "Report a problem…")
     await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; r.getElementById("sum").click(); r.querySelector(".reportbtn")?.click(); })()`, true);

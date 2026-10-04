@@ -39,7 +39,9 @@ const args = process.argv.slice(2);
 const sc = JSON.parse(fs.readFileSync(args.find((a) => !a.startsWith("--")), "utf8"));
 const fresh = args.includes("--fresh"), keep = args.includes("--keep");
 // (its own mock port, apart from a mock the user has open on 8123)
-const PORT = 9223, PROFILE = ".chrome-profile-3", MOCK = 8133;
+// (PHITEX_RUN=n: a second run beside the first, on its own ports and profile)
+const RUN = +(process.env.PHITEX_RUN ?? 0);
+const PORT = 9223 + 10 * RUN, PROFILE = `.chrome-profile-${3 + RUN}`, MOCK = 8133 + RUN;
 const out = path.join(root, "target/mock-run", sc.name ?? "run");
 fs.mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -157,9 +159,13 @@ for (const s of sc.steps ?? []) {
     await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; const el = r.querySelector('.slot[data-k="${s.scroll}"]'); if (el) r.getElementById("stage").scrollTop = el.offsetTop - 12; })()`, true);
     await call("Page.captureScreenshot", { format: "png" }); // (a frame: the observer sees the scroll)
   } else if (s.recompile) await evalIn(`document.getElementById("recompile").click()`);
-  else if (s.dblpage) {
+  else if (s.eval !== undefined) {
+    // (an expression in the content script's world, for debugging)
+    s.result = await evalIn(s.eval, true);
+    console.log("eval →", JSON.stringify(s.result));
+  } else if (s.dblpage) {
     const [k, fx, fy] = s.dblpage;
-    await evalIn(`(() => { const el = document.querySelector('phitex-preview')?.shadowRoot?.querySelector('.slot[data-k="${k}"]') ?? document.querySelector('.slot[data-k="${k}"]'); if (!el) return; el.scrollIntoView(); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, clientX: r.left + r.width * ${fx}, clientY: r.top + r.height * ${fy} })); })()`, true);
+    await evalIn(`(() => { const root = document.querySelector('phitex-preview')?.shadowRoot ?? document, all = root.querySelectorAll('.slot'); const el = ${k} < 0 ? all[all.length + ${k}] : root.querySelector('.slot[data-k="${k}"]'); if (!el) return; el.scrollIntoView(); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, clientX: r.left + r.width * ${fx}, clientY: r.top + r.height * ${fy} })); })()`, true);
     await sleep(800);
     s.result = await evalIn(`(() => { const v = mockEditor.view, m = v.state.selection?.main; return m && { file: document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label"), text: mockEditor.text().slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)), around: mockEditor.text().slice(Math.max(0, m.anchor - 30), m.anchor + 30) }; })()`);
     console.log("dblpage →", JSON.stringify(s.result));

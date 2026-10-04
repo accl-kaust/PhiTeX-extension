@@ -498,6 +498,11 @@ impl Status {
     }
 }
 
+/// Whether startup runs plain passes plus BibTeX until the .aux files are
+/// stable before the tracked build (as latexmk); off: the tracked build's
+/// trips converge them.
+pub static CONVERGE_PLAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The incremental link's state, per tracked job (a cold build starts anew).
 #[derive(Default)]
 struct LinkState {
@@ -624,7 +629,12 @@ impl Session {
         // (after a plain first paint: the SSA program, now, while idle; from
         // converged files, as latexmk's last run, so its trips are few)
         if self.plain && self.tex.is_none() {
-            self.converge_plain();
+            // (the tracked build's own trips converge the .aux files, BibTeX
+            // and makeindex being its nodes: from the first paint straight
+            // to it; the plain passes as latexmk runs them only by switch)
+            if CONVERGE_PLAIN.load(std::sync::atomic::Ordering::Relaxed) || std::env::var("PHITEX_CONVERGE").is_ok() {
+                self.converge_plain();
+            }
             self.want_ssa = true;
             self.stale = true;
             self.build();

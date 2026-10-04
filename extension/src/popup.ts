@@ -22,7 +22,7 @@ function seg(id: string, value: string, onPick: (v: string) => void): void {
 }
 
 async function render(): Promise<void> {
-  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "speedOff", "accepted", "engine", "engines"]);
+  const s = await chrome.storage.local.get(["enabled", "view", "panel", "tipOff", "newsOff", "speedOff", "accepted", "engine", "engines", "follow"]);
   const accepted = s.accepted === TERMS;
   $<HTMLElement>("version").textContent = chrome.runtime.getManifest().version;
   const enabled = $<HTMLInputElement>("enabled");
@@ -32,6 +32,7 @@ async function render(): Promise<void> {
     void chrome.storage.local.set({ view: v });
     $("viewnote").textContent = v === "phitex" && !accepted ? "⚡ Instant asks you to accept its terms first, in Overleaf." : "";
   });
+  seg("follow", (s.follow as string | undefined) ?? "select", (v) => void chrome.storage.local.set({ follow: v }));
   seg("engine", (s.engine as string | undefined) ?? "auto", (v) => void chrome.storage.local.set({ engine: v }));
   // (projects given their own engine, from the card's buttons: they keep it; cleared here)
   const own = Object.keys((s.engines as Record<string, string> | undefined) ?? {}).length;

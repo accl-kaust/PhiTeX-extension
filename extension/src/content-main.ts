@@ -899,14 +899,21 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     if (a.t === "sync") void session?.toSource(a.k, a.x, a.y);
     if (a.t === "goto") window.postMessage({ src: "phitex-content", type: "goto", file: a.file, line: a.line }, location.origin);
   });
+  // (when the page highlights the editor's place: "cursor" as it moves,
+  // "select" what is selected, "dblclick" only on a double-click; the popup's)
+  let highlightMode = "select";
+  void chrome.storage.local.get("follow").then(({ follow: f }) => (highlightMode = (f as string | undefined) ?? "select"));
+  chrome.storage.onChanged.addListener((c) => {
+    if (c.follow) highlightMode = (c.follow.newValue as string | undefined) ?? "select";
+  });
   // (a double-click in the editor or on the file outline: that place on the page)
   window.addEventListener("message", (e) => {
     if (e.source !== window || e.data?.src !== "phitex-hook") return;
     if (e.data.type === "sync") void session?.toPage(e.data.file, e.data.pos);
     // (the editor's cursor as it moves: the word it is in, on the page)
-    if (e.data.type === "cursor") session?.follow(e.data.file, e.data.pos);
+    if (e.data.type === "cursor" && highlightMode === "cursor") session?.follow(e.data.file, e.data.pos);
     // (the editor's selection: its text highlighted on the pages)
-    if (e.data.type === "select") void session?.selectSource(e.data.file, e.data.from, e.data.to);
+    if (e.data.type === "select" && (highlightMode !== "dblclick" || e.data.from === e.data.to)) void session?.selectSource(e.data.file, e.data.from, e.data.to);
   });
   const transport = new ChromeTransport();
   try {

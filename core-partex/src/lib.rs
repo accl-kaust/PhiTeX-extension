@@ -818,9 +818,10 @@ impl Session {
         let more = t.len().saturating_sub(8);
         t.truncate(8);
         self.history_log.push(format!(
-            "build {}: {} (changed: {}{})",
+            "build {}: {}; run {t_run:.1} ms, link {:.1} ms (changed: {}{})",
             self.builds,
-            self.how.lines().next().unwrap_or(""),
+            self.how.lines().next().unwrap_or("").split("; run ").next().unwrap_or(""),
+            self.build_ms - t_run,
             if t.is_empty() { "nothing: cold".into() } else { t.join(" ") },
             if more > 0 { format!(" +{more}") } else { String::new() }
         ));

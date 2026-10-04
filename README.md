@@ -139,8 +139,11 @@ Overleaf's is right.
   of your document. Fix the error the diagnostics show, or download
   Overleaf's PDF from the ▾ menu.
 
-Please report bugs, with the diagnostics' text if you can, on the issue
-tracker *(link coming with the public release)*.
+To report a bug, open ⓘ diagnostics → **Report a problem…** (or click an
+error). It shows an anonymized debug report: versions, timings, errors and
+package names, with no document text, nothing you typed, and files named
+`file1.tex`, …. Read it, then **Copy** it or **Email** it to
+flinner@nand.sh. Nothing is sent unless you send it.
 
 ## Building from source
 

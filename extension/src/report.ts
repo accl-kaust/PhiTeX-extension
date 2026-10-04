@@ -6,7 +6,7 @@
 // The user sees the whole text before copying or emailing it.
 
 /** Where reports are emailed; "" hides the Email button. */
-export const REPORT_TO = "";
+export const REPORT_TO = "flinner@nand.sh";
 
 export interface ReportInput {
   version: string;

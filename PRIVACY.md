@@ -25,8 +25,14 @@ is sent to the extension's authors or to anyone else.
   IndexedDB, so they are fetched only once. No document content is stored.
   *Package cache → Clear* in the settings deletes the packages. *Reset
   extension* deletes the settings. Removing the extension deletes both.
+- **Debug reports, only if you send one.** *Report a problem…* shows an
+  anonymized report: versions, timings, errors, TeX package names and a
+  log of what the extension did, with no document text, nothing you typed,
+  no project id, and your files named `file1.tex`, …. You read it first.
+  It leaves your browser only if you copy it somewhere or email it to
+  flinner@nand.sh yourself. The extension never sends it.
 - **Third parties.** Cloudflare hosts Shelf, as described above. Overleaf is a separate service with its own
   privacy policy. This extension is unofficial and not affiliated with
   Overleaf.
 
-Questions: Ammar Seliaman, <contact email or issue tracker URL>.
+Questions: Ammar Seliaman, flinner@nand.sh.

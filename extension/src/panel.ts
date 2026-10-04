@@ -56,8 +56,10 @@ export interface PanelEvents {
   onReport?(): Promise<string>;
   /** Run this project with engine `e` from now on (the card's buttons). */
   onEngine?(e: Engine): void;
-  /** The editor to `file`'s [from, to) (UTF-16 offsets). */
-  onGotoRange?(file: string, from: number, to: number): void;
+  /** The editor to `file`'s [from, to) (UTF-16 offsets); `focus` false keeps the focus on the page. */
+  onGotoRange?(file: string, from: number, to: number, focus?: boolean): void;
+  /** Text selected on the pages (boxes by page, PDF points): to its source. */
+  onSelectPage?(sel: { k: number; rects: [number, number, number, number][] }[]): void;
   /** Alt+Shift+P: return true if the host handled it (docked: PDF ⇄ PhiTeX); else the window collapses. */
   onShortcut?(): boolean;
   /** "Take the tour" (settings). */
@@ -383,6 +385,7 @@ footer .msg.err { color: var(--danger); }
 .diags .reportbtn { margin: 6px 8px; }
 .slot .mark { position: absolute; background: rgba(255, 213, 0, .45); outline: 1px solid rgba(214, 160, 0, .7); border-radius: 2px; pointer-events: none; transition: opacity 1.2s; }
 .slot .mark.fade { opacity: 0; }
+.slot .mark.sel { background: rgba(80, 140, 255, .28); outline: none; transition: none; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
 .win.docked .slot { box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked.pdf-dark .slot { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }
@@ -545,6 +548,7 @@ export class Panel {
       scale: () => this.scale(),
       box: (d, w) => pageBox(d, w),
       dbl: (k, x, y) => ev.onSyncSource?.(k, x, y),
+      selected: (sel) => ev.onSelectPage?.(sel),
     });
     // (keep it on screen when the window shrinks)
     window.addEventListener("resize", () => this.place());
@@ -1159,8 +1163,13 @@ export class Panel {
   }
 
   /** The editor to a page's source (a double-click on it). */
-  goto(file: string, from: number, to: number): void {
-    this.ev.onGotoRange?.(file, from, to);
+  goto(file: string, from: number, to: number, focus?: boolean): void {
+    this.ev.onGotoRange?.(file, from, to, focus);
+  }
+
+  /** The editor's selection on the pages ([] clears). */
+  marks(marks: { k: number; boxes: [number, number, number, number][] }[]): void {
+    this.viewer.marks(marks);
   }
 
   /** The debug report, shown whole before it is copied or emailed. */

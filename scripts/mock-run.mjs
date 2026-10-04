@@ -161,6 +161,20 @@ for (const s of sc.steps ?? []) {
     await sleep(800);
     s.result = await evalIn(`(() => { const v = mockEditor.view, m = v.state.selection?.main; return m && { file: document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label"), text: mockEditor.text().slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)), around: mockEditor.text().slice(Math.max(0, m.anchor - 30), m.anchor + 30) }; })()`);
     console.log("dblpage →", JSON.stringify(s.result));
+  } else if (s.pagesel !== undefined) {
+    // (text selected on page k: its nth text run, as a mouse drag would; the editor's selection after)
+    const [k, n] = s.pagesel;
+    await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; const t = r.querySelectorAll('.slot[data-k="${k}"] text')[${n}]; if (!t) return; const g = document.createRange(); g.selectNodeContents(t); const sel = document.getSelection(); sel.removeAllRanges(); sel.addRange(g); r.getElementById("viewer").dispatchEvent(new PointerEvent("pointerup", { bubbles: true, composed: true })); })()`, true);
+    await sleep(1500);
+    s.result = await evalIn(`(() => { const m = mockEditor.view.state.selection?.main; const t = mockEditor.text(); return m && t.slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)); })()`);
+    const shown = await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; return r.querySelectorAll('.slot[data-k="${k}"] text')[${n}]?.textContent; })()`, true);
+    console.log("pagesel →", JSON.stringify({ selectedOnPage: shown?.slice(0, 80), editorSelection: s.result?.slice(0, 120) }));
+  } else if (s.select !== undefined) {
+    // (the editor's selection over that text: the page's highlight boxes after)
+    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.select)}); mockEditor.view.dispatch({ selection: { anchor: i, head: i + ${JSON.stringify(s.select)}.length } }); })()`);
+    await sleep(1500);
+    s.result = await evalIn(`[...document.querySelector("phitex-preview").shadowRoot.querySelectorAll(".mark.sel")].map((m) => m.parentElement.dataset.k + "@" + m.style.top)`, true);
+    console.log("select →", JSON.stringify(s.result));
   } else if (s.report) {
     // (the debug report, as the user opens it: ⓘ, then "Report a problem…")
     await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; r.getElementById("sum").click(); r.querySelector(".reportbtn")?.click(); })()`, true);

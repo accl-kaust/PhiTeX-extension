@@ -15,6 +15,8 @@ export interface ViewerHost {
   svg(img: PageImage, cssWidth: number): string | null;
   /** CSS pixels per PDF point at the current zoom (1 is 100%). */
   scale(): number;
+  /** Text selected on the pages: its boxes by page, in PDF points from each page's top left. */
+  selected?(sel: { k: number; rects: [number, number, number, number][] }[]): void;
   /** A double-click at (x, y) on page `k`, in PDF points from its top left. */
   dbl?(k: number, x: number, y: number): void;
   /** A page box's CSS size at `cssWidth` (pdf.js's rounding). */
@@ -50,6 +52,29 @@ export class Viewer {
     this.host = host;
     // (a screen above and below: drawn before they scroll in)
     this.io = new IntersectionObserver((es) => this.seen(es), { root: scroller, rootMargin: "100% 0px", threshold: [0, 0.25, 0.5, 0.75, 1] });
+    // (text selected on the pages: its boxes, for the editor to select the source)
+    const pick = () =>
+      setTimeout(() => {
+        const rn = root.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null };
+        const sel = rn.getSelection?.() ?? document.getSelection();
+        if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+        const out = new Map<number, [number, number, number, number][]>();
+        for (let i = 0; i < sel.rangeCount; i++) {
+          for (const r of sel.getRangeAt(i).getClientRects()) {
+            for (const s of this.slots) {
+              const b = s.el.getBoundingClientRect();
+              if (r.bottom < b.top || r.top > b.bottom || r.right < b.left || r.left > b.right) continue;
+              const k = Number(s.el.dataset.k), sx = this.size.w / b.width, sy = this.size.h / b.height;
+              const list = out.get(k) ?? [];
+              list.push([(r.left - b.left) * sx, (r.top - b.top) * sy, r.width * sx, r.height * sy]);
+              out.set(k, list);
+            }
+          }
+        }
+        if (out.size) host.selected?.([...out].map(([k, rects]) => ({ k, rects })));
+      }, 0);
+    root.addEventListener("pointerup", pick);
+    root.addEventListener("keyup", (e) => e.shiftKey && pick());
     // (a double-click: the source of what is under it, as Overleaf's PDF viewer does)
     root.addEventListener("dblclick", (e) => {
       const el = (e.target as Element).closest<HTMLElement>(".slot");
@@ -60,11 +85,40 @@ export class Viewer {
     });
   }
 
+  /**
+   * The editor's selection on the pages: `marks` highlighted until the next
+   * call ([] clears), scrolled to only if none of them is on screen.
+   */
+  marks(marks: { k: number; boxes: [number, number, number, number][] }[]): void {
+    for (const m of this.root.querySelectorAll(".sel")) m.remove();
+    const { w, h } = this.size;
+    let first: HTMLElement | undefined, seen = false;
+    const v = this.scroller.getBoundingClientRect();
+    for (const { k, boxes } of marks) {
+      const s = this.slots[k];
+      if (!s) continue;
+      if (s.drawn !== s.hash && !this.asked.has(`${k}:${s.hash}`)) {
+        this.asked.add(`${k}:${s.hash}`);
+        this.host.need(k);
+      }
+      for (const [x, y, bw, bh] of boxes) {
+        const m = document.createElement("div");
+        m.className = "mark sel";
+        Object.assign(m.style, { left: `${(x / w) * 100}%`, top: `${(y / h) * 100}%`, width: `${(bw / w) * 100}%`, height: `${(bh / h) * 100}%` });
+        s.el.append(m);
+        first ??= m;
+        const r = m.getBoundingClientRect();
+        if (r.bottom > v.top && r.top < v.bottom) seen = true;
+      }
+    }
+    if (first && !seen) this.scroller.scrollTo({ top: first.offsetTop + first.parentElement!.offsetTop - this.scroller.clientHeight / 3, behavior: "auto" });
+  }
+
   /** Highlight `boxes` ([x, y top, w, h], PDF points) on page `k`, scrolled into view, for a moment. */
   mark(k: number, boxes: [number, number, number, number][]): void {
     const s = this.slots[k];
     if (!s || !boxes.length) return;
-    for (const m of this.root.querySelectorAll(".mark")) m.remove();
+    for (const m of this.root.querySelectorAll(".mark:not(.sel)")) m.remove();
     // (the page it jumps to, drawn now: not when the observer next sees it)
     if (s.drawn !== s.hash && !this.asked.has(`${k}:${s.hash}`)) {
       this.asked.add(`${k}:${s.hash}`);
@@ -81,7 +135,7 @@ export class Viewer {
     const top = s.el.offsetTop + (boxes[0][1] / h) * s.el.offsetHeight;
     const v = this.scroller;
     if (top < v.scrollTop + 20 || top > v.scrollTop + v.clientHeight - 40) v.scrollTo({ top: top - v.clientHeight / 2, behavior: "auto" });
-    setTimeout(() => s.el.querySelectorAll(".mark").forEach((m) => m.classList.add("fade")), 1200);
+    setTimeout(() => s.el.querySelectorAll(".mark:not(.sel)").forEach((m) => m.classList.add("fade")), 1200);
     setTimeout(() => s.el.querySelectorAll(".mark.fade").forEach((m) => m.remove()), 2400);
   }
 

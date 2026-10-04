@@ -79,6 +79,8 @@
         if (file === null) held.push(edits);
         else post({ type: "changes", file, edits, t: performance.now() });
       }
+      // (a selection that changed: its text highlighted on the ⚡ page)
+      if (trs.some((tr: any) => tr.selection)) selectionSoon();
       return r;
     };
     const setState = v.setState;
@@ -126,10 +128,28 @@
   }
 
   /** Select [from, to) of the open file (UTF-16 offsets) and scroll to it. */
-  function gotoRange(from: number, to: number): void {
+  function gotoRange(from: number, to: number, focus = true): void {
     const n = view.state.doc.length;
     view.dispatch({ selection: { anchor: Math.min(from, n), head: Math.min(to, n) }, scrollIntoView: true });
-    view.focus();
+    // (a selection made on the page keeps the page focused, and its own selection)
+    if (focus) view.focus();
+  }
+
+  /** The editor's selection, posted a moment after it settles (a drag makes many). */
+  let selTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSel = "";
+  function selectionSoon(): void {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      if (!view || file === null) return;
+      const m = view.state.selection?.main;
+      if (!m) return;
+      const from = Math.min(m.anchor, m.head), to = Math.max(m.anchor, m.head);
+      const key = `${file}:${from}:${to}`;
+      if (key === lastSel) return;
+      lastSel = key;
+      post({ type: "select", file, from, to });
+    }, 120);
   }
 
   // A double-click in the editor, or on Overleaf's file outline (whose click
@@ -157,8 +177,9 @@
       if (m.file === file) gotoLine(m.line);
       else openThen(m.file, () => gotoLine(m.line));
     } else if (m.type === "gotoRange" && view && typeof m.from === "number") {
-      if (m.file === file) gotoRange(m.from, m.to);
-      else openThen(m.file, () => gotoRange(m.from, m.to));
+      const focus = m.focus !== false;
+      if (m.file === file) gotoRange(m.from, m.to, focus);
+      else openThen(m.file, () => gotoRange(m.from, m.to, focus));
     }
   });
 })();

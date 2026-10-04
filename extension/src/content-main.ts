@@ -845,7 +845,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       const m = chrome.runtime.getManifest();
       return session?.report({ version: m.version, engine: m.version_name?.match(/engine ([0-9a-f]+)/)?.[1] ?? "?", userAgent: navigator.userAgent }) ?? "No session yet: nothing to report.";
     },
-    onGotoRange: (file, from, to) => DETACHED || window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to }, location.origin),
+    onGotoRange: (file, from, to, focus) => DETACHED || window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to, focus }, location.origin),
+    onSelectPage: (sel) => (DETACHED ? undefined : void session?.selectPage(sel)),
     onReload: async () => session?.refresh(await fetchDocs(panel)),
     onClean: async () => session?.clean(await fetchDocs(panel)),
     onShortcut: () => dock?.toggle() ?? false,
@@ -900,7 +901,10 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   });
   // (a double-click in the editor or on the file outline: that place on the page)
   window.addEventListener("message", (e) => {
-    if (e.source === window && e.data?.src === "phitex-hook" && e.data.type === "sync") void session?.toPage(e.data.file, e.data.pos);
+    if (e.source !== window || e.data?.src !== "phitex-hook") return;
+    if (e.data.type === "sync") void session?.toPage(e.data.file, e.data.pos);
+    // (the editor's selection: its text highlighted on the pages)
+    if (e.data.type === "select") void session?.selectSource(e.data.file, e.data.from, e.data.to);
   });
   const transport = new ChromeTransport();
   try {

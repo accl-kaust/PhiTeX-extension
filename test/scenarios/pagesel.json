@@ -1,0 +1,1 @@
+{ "project": "test/scenarios/sync", "name": "pagesel", "steps": [ { "wait": 12000 }, { "pagesel": [0, 12] }, { "pagesel": [0, 40] } ] }

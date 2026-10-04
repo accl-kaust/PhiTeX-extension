@@ -103,13 +103,18 @@ class EditorView {
   }
   setState(s) { this.state = s; this.el.value = s.doc.toString(); }
   /** (the textarea's selection, as CM's state has it) */
-  syncSelection() { this.state = { ...this.state, selection: { main: { anchor: this.el.selectionStart, head: this.el.selectionEnd } } }; }
+  // (a selection change is a transaction, as in CM6: the extension's hook sees it in update)
+  syncSelection() {
+    const m = this.state.selection?.main;
+    if (m && m.anchor === this.el.selectionStart && m.head === this.el.selectionEnd) return;
+    this.update([{ selection: true, changes: { length: 0 }, state: { ...this.state, selection: { main: { anchor: this.el.selectionStart, head: this.el.selectionEnd } } } }]);
+  }
   focus() { this.el.focus(); }
   dispatch(spec) {
     if (spec.selection) {
       const { anchor, head = anchor } = spec.selection;
-      this.state = { ...this.state, selection: { main: { anchor, head } } };
-      this.el.focus();
+      this.update([{ selection: true, changes: { length: 0 }, state: { ...this.state, selection: { main: { anchor, head } } } }]);
+      // (as CM6: a dispatch doesn't take focus; view.focus() does)
       this.el.setSelectionRange(Math.min(anchor, head), Math.max(anchor, head));
       if (!spec.changes) return;
     }

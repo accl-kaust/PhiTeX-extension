@@ -141,7 +141,9 @@ export interface PreviewSink {
   /** A repaint is on screen, `ms` after the keystroke that made it. */
   painted?(ms: number): void;
   /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
-  goto?(file: string, from: number, to: number): void;
+  goto?(file: string, from: number, to: number, focus?: boolean): void;
+  /** The editor's selection, highlighted on its pages until it changes ([] clears). */
+  marks?(marks: { k: number; boxes: [number, number, number, number][] }[]): void;
   /** Highlight boxes on page `k` ([x, y top, w, h], PDF points), scrolled into view. */
   mark?(k: number, boxes: [number, number, number, number][]): void;
   /**
@@ -693,6 +695,55 @@ export class PreviewSession {
     if (!g?.file) return;
     const t = this.files[g.file];
     this.sink.goto?.(g.file, charOffset(t, g.start), charOffset(t, g.end));
+  }
+
+  /**
+   * The editor selected [from, to) of `file` (UTF-16): the glyphs that came
+   * from it, on every page, highlighted (an empty selection clears them).
+   */
+  async selectSource(file: string, from: number, to: number): Promise<void> {
+    if (!this.opened || !(file in this.files)) return;
+    if (from === to) return this.sink.marks?.([]);
+    this.flush();
+    await this.chain;
+    const t = this.files[file];
+    const [a, b] = [byteOffset(t, from), byteOffset(t, to)];
+    const out: { k: number; boxes: [number, number, number, number][] }[] = [];
+    for (let k = 0; k < Math.max(this.hashes.length, this.pages); k++) {
+      const all = await this.glyphsOf(k);
+      const hit = all.filter((g) => g.file === file && !g.synth && g.start < b && g.end > a);
+      if (hit.length) out.push({ k, boxes: boxes(hit, all) });
+    }
+    this.tr("select→page", { file, from, to, pages: out.map((m) => m.k) });
+    this.sink.marks?.(out);
+  }
+
+  /**
+   * Text selected on the pages ([x, y top, w, h] boxes in PDF points, by
+   * page): the editor selects the source it came from (the file most of it
+   * came from, from its first glyph's start to its last's end).
+   */
+  async selectPage(sel: { k: number; rects: [number, number, number, number][] }[]): Promise<void> {
+    if (!this.opened || !sel.length) return;
+    this.flush();
+    await this.chain;
+    const by = new Map<string, { lo: number; hi: number; n: number }>();
+    for (const { k, rects } of sel) {
+      for (const g of await this.glyphsOf(k)) {
+        if (!g.file || g.synth) continue;
+        // (a glyph's body: just right of and above its origin)
+        const [gx, gy] = [g.x + 1, g.y - 2];
+        if (!rects.some(([x, y, w, h]) => gx >= x && gx <= x + w && gy >= y && gy <= y + h)) continue;
+        const r = by.get(g.file) ?? { lo: Infinity, hi: -Infinity, n: 0 };
+        by.set(g.file, { lo: Math.min(r.lo, g.start), hi: Math.max(r.hi, g.end), n: r.n + 1 });
+      }
+    }
+    const best = [...by].sort((x, y) => y[1].n - x[1].n)[0];
+    this.tr("select→source", { pages: sel.map((s) => s.k), file: best?.[0], glyphs: best?.[1].n ?? 0 });
+    if (!best) return;
+    const [file, { lo, hi }] = best;
+    const t = this.files[file];
+    this.sink.goto?.(file, charOffset(t, lo), charOffset(t, hi), false);
   }
 
   /** The place `pos` (UTF-16) in `file`: its line's glyphs highlighted on the page (the page in view first). */

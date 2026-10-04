@@ -12,6 +12,7 @@ import type { Draws, PageImage, Status } from "./session.ts";
 import type { PackageState } from "./packages.ts";
 import { ENGINES, errorNeeds, type Engine } from "./engines.ts";
 import { Viewer } from "./viewer.ts";
+import { REPORT_TO } from "./report.ts";
 
 /** How long a build may ship no page before the last good one is dimmed (typing through `{`). */
 const STALE_GRACE_MS = 1000;
@@ -51,6 +52,8 @@ export interface PanelEvents {
   onGoto(file: string, line: number): void;
   /** A double-click on page `k` at (x, y), PDF points from its top left: to the source. */
   onSyncSource?(k: number, x: number, y: number): void;
+  /** The anonymized debug report (report.ts), for "Report a problem". */
+  onReport?(): Promise<string>;
   /** Run this project with engine `e` from now on (the card's buttons). */
   onEngine?(e: Engine): void;
   /** The editor to `file`'s [from, to) (UTF-16 offsets). */
@@ -371,6 +374,13 @@ footer .msg.err { color: var(--danger); }
 .slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); }
 .load .btns { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
 .load .btns .btn { cursor: pointer; padding: 4px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
+.report { display: none; position: absolute; inset: 12px; z-index: 6; padding: 12px; flex-direction: column; gap: 6px; background: var(--bg, #fff); color: var(--fg, #1b222c); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.35); font-size: 12px; }
+.report.on { display: flex; }
+.report p { margin: 0; opacity: .8; }
+.report textarea { flex: 1; min-height: 160px; font: 11px/1.35 ui-monospace, monospace; white-space: pre; resize: none; }
+.report .btns { display: flex; gap: 8px; justify-content: flex-end; }
+.report .btn, .diags .reportbtn { cursor: pointer; padding: 3px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
+.diags .reportbtn { margin: 6px 8px; }
 .slot .mark { position: absolute; background: rgba(255, 213, 0, .45); outline: 1px solid rgba(214, 160, 0, .7); border-radius: 2px; pointer-events: none; transition: opacity 1.2s; }
 .slot .mark.fade { opacity: 0; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
@@ -443,6 +453,12 @@ export class Panel {
   <div class="sum" id="sum" role="button" aria-expanded="false" tabindex="0" title="Diagnostics (click to list)"></div>
   <div class="body">
     <div class="diags" id="diags" role="list" aria-label="Diagnostics"></div>
+    <div class="report" id="report" role="dialog" aria-label="Debug report">
+      <b>Debug report</b>
+      <p>Anonymized: no document text, nothing you typed, no file names (file1.tex, …), no project id. Read it before you send it.</p>
+      <textarea id="reporttext" readonly spellcheck="false"></textarea>
+      <div class="btns"><button class="btn" id="reportcopy">Copy</button><button class="btn" id="reportmail">Email</button><button class="btn" id="reportclose">Close</button></div>
+    </div>
     <div class="speedchip" id="speedchip" aria-live="off"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
@@ -714,8 +730,20 @@ export class Panel {
     empty.querySelector("h3")!.textContent = "The build stopped before a page could be shown";
     empty.querySelector(".count")!.textContent = e.message + (e.file && e.line ? ` (${e.file}:${e.line})` : "");
     empty.querySelector(".note")!.textContent = "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    this.reportLink(empty.querySelector(".load")!);
     empty.style.display = "";
     return true;
+  }
+
+  /** "Copy debug info" under a card, if reports are wired. */
+  private reportLink(card: Element): void {
+    if (!this.ev.onReport) return;
+    const b = document.createElement("button");
+    b.className = "reportbtn";
+    b.textContent = "Copy debug info…";
+    b.style.cssText = "margin-top:10px;cursor:pointer;padding:3px 12px;border-radius:9999px;border:1px solid currentColor;background:none;color:inherit;font:inherit;font-weight:600";
+    b.onclick = () => void this.report();
+    card.append(b);
   }
 
   /** The engine the session runs, as it last said. */
@@ -797,6 +825,13 @@ export class Panel {
       more.className = "diag info";
       more.textContent = `… and ${diags.length - 50} more`;
       list.append(more);
+    }
+    if (this.ev.onReport) {
+      const b = document.createElement("button");
+      b.className = "reportbtn";
+      b.textContent = "Report a problem…";
+      b.onclick = (e) => (e.stopPropagation(), void this.report());
+      list.append(b);
     }
     // (one line, whatever the count: the counts by severity, and the worst)
     const sum = this.$("#sum");
@@ -1070,10 +1105,19 @@ export class Panel {
     m.textContent = t;
     m.className = `msg${err ? " err" : ""}`;
     m.title = t;
+    m.onclick = null;
+    m.style.cursor = "";
   }
 
   error(t: string): void {
     this.msg(t, true);
+    // (an error line opens the debug report, to send)
+    if (this.ev.onReport) {
+      const m = this.$("#msg");
+      m.title = `${t} — click for a debug report to send`;
+      m.style.cursor = "pointer";
+      m.onclick = () => void this.report();
+    }
   }
 
   check(r: { ok: boolean; ms: number; mismatch?: string }): void {
@@ -1117,6 +1161,25 @@ export class Panel {
   /** The editor to a page's source (a double-click on it). */
   goto(file: string, from: number, to: number): void {
     this.ev.onGotoRange?.(file, from, to);
+  }
+
+  /** The debug report, shown whole before it is copied or emailed. */
+  async report(): Promise<void> {
+    const text = (await this.ev.onReport?.()) ?? "";
+    const box = this.$("#report");
+    this.$<HTMLTextAreaElement>("#reporttext").value = text;
+    box.classList.add("on");
+    const copy = () => navigator.clipboard.writeText(text).catch(() => this.$<HTMLTextAreaElement>("#reporttext").select());
+    this.$("#reportcopy").onclick = () => void copy().then(() => (this.$("#reportcopy").textContent = "Copied ✓"));
+    const mail = this.$("#reportmail");
+    mail.style.display = REPORT_TO ? "" : "none";
+    // (a mailto body is short in most mail apps: the report goes by the clipboard, pasted)
+    mail.onclick = () =>
+      void copy().then(() => {
+        const body = "Please paste the debug report here (it is on your clipboard), and say what you were doing:\n\n";
+        window.open(`mailto:${REPORT_TO}?subject=${encodeURIComponent("PhiTeX Instant debug report")}&body=${encodeURIComponent(body)}`);
+      });
+    this.$("#reportclose").onclick = () => box.classList.remove("on");
   }
 
   /** Highlight `boxes` on page `k` (the source the editor is at). */

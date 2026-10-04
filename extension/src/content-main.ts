@@ -840,6 +840,11 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       const { engines } = await chrome.storage.local.get("engines");
       await chrome.storage.local.set({ engines: { ...(engines ?? {}), [project()]: e } });
     },
+    // (the anonymized debug report: report.ts, shown before it is sent)
+    onReport: async () => {
+      const m = chrome.runtime.getManifest();
+      return session?.report({ version: m.version, engine: m.version_name?.match(/engine ([0-9a-f]+)/)?.[1] ?? "?", userAgent: navigator.userAgent }) ?? "No session yet: nothing to report.";
+    },
     onGotoRange: (file, from, to) => DETACHED || window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to }, location.origin),
     onReload: async () => session?.refresh(await fetchDocs(panel)),
     onClean: async () => session?.clean(await fetchDocs(panel)),

@@ -59,13 +59,16 @@ mkdir -p extension/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs no
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
 dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done
+# (the engine's commit, from the pin, as version_name: debug reports name it)
+engine=$(grep -oE "partex-phitex-[0-9a-f]+" core-partex/Cargo.toml | head -1 | sed 's/partex-phitex-//')
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
+  m.version_name = `${m.version} (engine ${process.argv[2]})`;
   if (process.argv[1] === "true") {
     for (const c of m.content_scripts) c.matches.push("http://localhost:8123/project/*");
     m.web_accessible_resources[0].matches.push("http://localhost:8123/*");
   }
-  fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev"
+  fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
 # (--dev: Shelf from a local server, ../shelf.PhiTeX.org/serve.py)
 $dev && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
 # Every module the content script imports must be web-accessible.

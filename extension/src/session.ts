@@ -9,6 +9,7 @@
 
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
 import { ENGINES, type Engine } from "./engines.ts";
+import { report } from "./report.ts";
 import { boxes, from, glyphs, lineAt, nearest, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
@@ -295,6 +296,7 @@ export class PreviewSession {
           }
         });
         this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
+        if (res.error) this.errorsSeen = [...this.errorsSeen.slice(-19), `${r.op}: ${res.error}`];
         const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
         // (a build that came back whole: a trap after it is a new one)
         if (res.ok && (r.op === "edit" || r.op === "status")) this.traps = 0;
@@ -642,6 +644,24 @@ export class PreviewSession {
     if (this.sink.layout) return this.layout();
     const r = await this.core.request({ op: "png", page: this.page, dpi: this.dpi() });
     this.sink.page(image(r), this.page, this.pages);
+  }
+
+  /** The errors replies carried (traps, panics), the last 20. */
+  private errorsSeen: string[] = [];
+
+  /** An anonymized debug report (report.ts) for the user to send. */
+  report(env: { version: string; engine: string; userAgent: string }): string {
+    const st = this.trace.filter((e) => e.k === "← status").at(-1)?.d as Record<string, unknown> | undefined;
+    return report({
+      ...env,
+      paths: Object.keys(this.files),
+      trace: this.trace,
+      diagnostics: this.diags ?? [],
+      status: st,
+      packages: this.pkg,
+      // (TeX's error by its message only: its context is the document's lines)
+      errors: [...this.errorsSeen, ...(this.texError ? [`TeX: ${this.texError.message}`] : [])],
+    });
   }
 
   /** Page `k`'s glyphs with their sources, as the core has them now (kept by the page's hash). */

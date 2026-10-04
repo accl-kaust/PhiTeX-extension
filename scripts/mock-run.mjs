@@ -161,6 +161,13 @@ for (const s of sc.steps ?? []) {
     await sleep(800);
     s.result = await evalIn(`(() => { const v = mockEditor.view, m = v.state.selection?.main; return m && { file: document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label"), text: mockEditor.text().slice(Math.min(m.anchor, m.head), Math.max(m.anchor, m.head)), around: mockEditor.text().slice(Math.max(0, m.anchor - 30), m.anchor + 30) }; })()`);
     console.log("dblpage →", JSON.stringify(s.result));
+  } else if (s.report) {
+    // (the debug report, as the user opens it: ⓘ, then "Report a problem…")
+    await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; r.getElementById("sum").click(); r.querySelector(".reportbtn")?.click(); })()`, true);
+    await sleep(500);
+    const text = await evalIn(`document.querySelector("phitex-preview").shadowRoot.getElementById("reporttext").value`, true);
+    fs.writeFileSync(path.join(out, "report.txt"), text ?? "");
+    console.log(`report → ${text?.length ?? 0} chars, ${path.join(out, "report.txt")}`);
   } else if (s.trace !== undefined) {
     // (the core's rebuilds traced into its log: core-log.txt)
     await evalIn(`globalThis.__phitexSession.core.request({ op: "trace", on: ${!!s.trace} })`, true);

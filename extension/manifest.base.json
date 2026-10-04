@@ -45,6 +45,7 @@
         "dist/session.js",
         "dist/sync.js",
         "dist/engines.js",
+        "dist/report.js",
         "dist/diagnostics.js",
         "dist/viewer.js",
         "dist/mirror.js",

@@ -62,6 +62,9 @@ pub struct MemHost {
     /// Handles an SSA build writes on (`open_write_later`): its bytes are
     /// the build's, a link writes the file; writes on them are dropped.
     later: BTreeSet<u32>,
+    /// The engine's content-keyed memo (`cached`/`cache`: a PNG's decoded
+    /// rows, a Type 1 font's subsets), kept across rebuilds.
+    memo: HashMap<u128, partex_core::host::Memo>,
     /// The outputs the link last wrote (by name): the build's own, not
     /// edited (`output_edited`).
     pub linked: BTreeSet<Vec<u8>>,
@@ -133,6 +136,14 @@ impl Host for MemHost {
 
     fn cache_put(&mut self, key: u128, value: &[u8]) {
         self.cache.insert(key, value.to_vec());
+    }
+
+    fn cached(&mut self, key: u128) -> Option<partex_core::host::Memo> {
+        self.memo.get(&key).cloned()
+    }
+
+    fn cache(&mut self, key: u128, value: partex_core::host::Memo) {
+        self.memo.insert(key, value);
     }
 
     fn unchanged(&mut self, loads: &[partex_core::host::Load<'_>]) -> Vec<bool> {

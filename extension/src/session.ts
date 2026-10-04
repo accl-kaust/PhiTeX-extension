@@ -816,11 +816,31 @@ export class PreviewSession {
       if (!onLine.length) continue;
       const word = w ? from(onLine, file, w[0], w[1]) : [];
       const hit = word.length ? word : lineAt(onLine, at);
+      this.followWant = "";
       this.sink.mark(k, boxes(hit, all), scroll);
       return;
     }
+    // (its page not here yet, far down a long document: asked for now, the
+    // pages not here, then shown if the cursor is still there)
+    const want = `${file}:${pos}`;
+    this.followWant = want;
+    void (async () => {
+      for (const k of order) {
+        if (this.followWant !== want) return;
+        if (k >= this.hashes.length || this.cached(k)) continue;
+        const all = await this.glyphsOf(k);
+        if (from(all, file, a, b).length) {
+          if (this.followWant === want) {
+            this.followLine = "";
+            this.follow(file, pos);
+          }
+          return;
+        }
+      }
+    })();
   }
   private followLine = "";
+  private followWant = "";
 
   /** The place `pos` (UTF-16) in `file`: its line's glyphs highlighted on the page (the page in view first). */
   async toPage(file: string, pos: number): Promise<void> {

@@ -389,7 +389,7 @@ footer .msg.err { color: var(--danger); }
   transition: opacity .25s, left .12s ease-out, top .12s ease-out, width .12s ease-out, height .12s ease-out; animation: phitex-mark-in .18s ease-out; }
 @keyframes phitex-mark-in { from { opacity: 0; transform: scale(1.15); } }
 .slot .mark.fade { opacity: 0; transition: opacity 1.2s; }
-.slot .mark.sel { background: rgba(80, 140, 255, .28); outline: none; transition: none; box-shadow: none; animation: none; }
+.slot .mark.sel { transition: none; animation: none; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
 .win.docked .slot { box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked.pdf-dark .slot { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }

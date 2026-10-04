@@ -866,10 +866,23 @@ impl Session {
                     if n.ends_with(b".pdf") || n.ends_with(b".dvi") {
                         continue;
                     }
+                    let was = h.files.get(n).map_or(0, |o| o.len());
                     if let Some(b) = l.files.get(&id)
                         && h.files.get(n).is_none_or(|o| o[..] != b[..])
                     {
+                        if self.trace {
+                            self.history_log.push(format!("link wrote back {}: {} -> {} bytes", String::from_utf8_lossy(n), was, b.len()));
+                        }
                         h.files.insert(n.to_vec(), Arc::from(&b[..]));
+                    }
+                }
+                if self.trace {
+                    let names: Vec<String> = l.opened.iter().map(|(_, n, _)| String::from_utf8_lossy(n).into_owned()).collect();
+                    self.history_log.push(format!("link opened: {}", names.join(" ")));
+                    for (n, b) in &h.files {
+                        if n.ends_with(b".aux") {
+                            self.history_log.push(format!("host has {}: {} bytes", String::from_utf8_lossy(n), b.len()));
+                        }
                     }
                 }
                 self.shipped = l.pages.len();

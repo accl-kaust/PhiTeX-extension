@@ -941,6 +941,10 @@ export class PreviewSession {
       } finally {
         this.busy = false;
         this.sink.busy?.(false);
+        // (an edit queued after the loop's last look, while the pages were
+        // laid out: its flush found the loop busy; sent now, not at the
+        // next keystroke)
+        if ([...this.batches.values()].some((b) => b.size)) setTimeout(() => void this.flush(), 0);
       }
     });
     return this.chain;

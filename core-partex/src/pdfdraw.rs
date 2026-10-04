@@ -504,6 +504,49 @@ fn r2(x: f64) -> f64 {
 /// parses only fonts it has not seen.
 pub type Fonts = HashMap<u64, Option<std::rc::Rc<crate::type1::Type1>>>;
 
+/// A page's hash, with where its content lies in the PDF (the streams'
+/// byte ranges) and its size: what [`hashes_since`] needs to keep it.
+#[derive(Clone, Debug, Default)]
+pub struct PageSum {
+    ranges: Vec<std::ops::Range<usize>>,
+    wh: (i64, i64),
+    pub hash: u64,
+}
+
+/// Each page's hash, the PDF's bytes before `first` unchanged since `prev`
+/// was made of it: a page whose size is the same and whose content streams
+/// lie where they did, all before `first`, keeps its hash (its bytes are
+/// the same); the others are hashed again. `first` None: every page.
+pub fn hashes_since(pdf: &[u8], prev: &[PageSum], first: Option<usize>) -> Vec<PageSum> {
+    let Some(p) = Pdf::open(pdf) else { return Vec::new() };
+    p.pages()
+        .iter()
+        .enumerate()
+        .map(|(k, page)| {
+            let refs: Vec<O> = match page.get("Contents") {
+                Some(O::Arr(a)) => a.clone(),
+                Some(c) => vec![c.clone()],
+                None => Vec::new(),
+            };
+            let ranges: Vec<std::ops::Range<usize>> =
+                refs.iter().filter_map(|c| if let O::Ref(r) = c { p.obj(*r).and_then(|(_, s)| s) } else { None }).collect();
+            let media = match page.get("MediaBox") {
+                Some(O::Arr(a)) if a.len() == 4 => a.iter().map(|o| o.num().unwrap_or(0.0)).collect::<Vec<_>>(),
+                _ => vec![0.0, 0.0, 612.0, 792.0],
+            };
+            let wh = ((media[2] - media[0]) as i64, (media[3] - media[1]) as i64);
+            if let (Some(f), Some(old)) = (first, prev.get(k))
+                && old.wh == wh
+                && old.ranges == ranges
+                && ranges.iter().all(|r| r.end <= f)
+            {
+                return old.clone();
+            }
+            PageSum { hash: page_content(&p, page).1, ranges, wh }
+        })
+        .collect()
+}
+
 /// Each page's hash (its content and size): cheap, no drawing.
 pub fn hashes(pdf: &[u8]) -> Vec<u64> {
     let Some(p) = Pdf::open(pdf) else { return Vec::new() };

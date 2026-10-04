@@ -368,6 +368,12 @@ pub struct Session {
     pub builds: u32,
     /// Each build: what changed before it and what it cost (the debug log).
     history_log: Vec<String>,
+    /// Each page's hash with where its content lies, for the next hashing.
+    page_sums: Vec<pdfdraw::PageSum>,
+    /// The PDF's first byte the last link changed (None: unknown, hash all).
+    pdf_first: Option<usize>,
+    /// The incremental link's state for the tracked job.
+    lk: LinkState,
     /// What Shelf packs gave (wasm): every file of every pack fetched, for every later build.
     shelf: shelf::Cache,
     /// The last cold build's time (ms): a rebuild's deadline.
@@ -492,6 +498,22 @@ impl Status {
     }
 }
 
+/// The incremental link's state, per tracked job (a cold build starts anew).
+#[derive(Default)]
+struct LinkState {
+    splice: partex_core::effects::Splice,
+    virt: partex_core::effects::Resolver,
+    /// `ssa::keys_renumbered` at the last link.
+    renumbered: u32,
+    /// The numbering can't be followed: every link full.
+    dead: bool,
+    /// Deflate's output by its input's hash, with the link that last used it.
+    deflated: HashMap<u128, (Arc<[u8]>, u64)>,
+    links: u64,
+    /// Each file as last written, by name: the engine's id of it, its length.
+    written: BTreeMap<Vec<u8>, (u32, u64)>,
+}
+
 /// BibTeX and makeindex, as nodes of the build (they run inside its trips,
 /// again only where what they read changed).
 fn native_tools() -> ssa::NativeTools {
@@ -535,6 +557,9 @@ impl Session {
             build_ms: 0.0,
             builds: 0,
             history_log: Vec::new(),
+            page_sums: Vec::new(),
+            pdf_first: None,
+            lk: LinkState::default(),
             shelf: shelf::Cache::default(),
             cold_ms: 0.0,
             trigger: Vec::new(),
@@ -818,6 +843,8 @@ impl Session {
             }
             self.prepared = false;
             self.tex = Some(tex);
+            // (a new job: its first link lays out from cold)
+            self.lk = LinkState::default();
         }
         let t_run = ms(t.elapsed());
         self.link();
@@ -864,6 +891,7 @@ impl Session {
         self.history = h;
         self.term = host.term.clone();
         self.pdf_hashes = None;
+        self.pdf_first = None;
         self.pdf_draws.clear();
         self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
         self.missing.sort();
@@ -884,18 +912,36 @@ impl Session {
         self.how = format!("plain: the first paint, {commands} commands, 1 pass");
     }
 
-    /// Link the files from the steps' effects; read the DVI's pages.
+    /// Link the files from the steps' effects; read the DVI's pages. The
+    /// incremental link (`effects::Splice`, with `effects::Resolver` for
+    /// virtual object numbers): a keystroke resolves only its steps'
+    /// chunks, and each file is written from its first changed byte; else
+    /// (a cold build's first link, a numbering it cannot follow) the full
+    /// link, every file whole. As the CLI's `SsaLinker::link`.
     fn link(&mut self) {
         let tex = self.tex.as_mut().unwrap();
-        // (the steps' chunks rendered first: with the log's columns resolved
-        // at link time, a step's text exists only once its flow is resolved,
-        // which taking the changes does; the link below takes every chunk)
-        let _ = ssa::take_step_changes(&mut tex.tracker().rec.borrow_mut());
-        let chunks = ssa::step_effects(&tex.tracker().rec.borrow());
-        let slices: Vec<&[partex_core::effects::Effect]> = chunks.iter().map(|(_, e)| &e.1[..]).collect();
-        let linked = partex_core::effects::link(&slices, &partex_core::Sequential, &mut |level, data| {
-            Some(miniz_oxide::deflate::compress_to_vec_zlib(data, u8::try_from(level.clamp(0, 9)).unwrap_or(6)))
-        });
+        // (exactly once per link: the steps' chunks changed since the last)
+        let changes = ssa::take_step_changes(&mut tex.tracker().rec.borrow_mut());
+        let full = std::env::var("PHITEX_LINK_FULL").is_ok() || !self.link_spliced(changes);
+        // (traced: each incremental link checked against a full one)
+        if !full && self.trace {
+            let (pdf, dvi) = (self.pdf.clone(), self.dvi.clone());
+            let (first, hashes) = (self.pdf_first, self.pdf_hashes.clone());
+            let t = Instant::now();
+            self.link_full();
+            // (the check leaves the incremental state as the spliced link made it)
+            (self.pdf_first, self.pdf_hashes) = (first, hashes);
+            let same = self.pdf == pdf && self.dvi == dvi;
+            self.history_log.push(format!("link check: spliced {} full ({:.1} ms for the full link)", if same { "==" } else { "!=" }, ms(t.elapsed())));
+        }
+        if full {
+            self.link_full();
+            let st = &mut self.lk;
+            st.splice.reset();
+            st.virt.reset();
+            st.written.clear();
+        }
+        let tex = self.tex.as_mut().unwrap();
         // (the build's tools' outputs: .bbl, .blg, .ind, .ilg)
         let produced = ssa::produced_streams(tex);
         let h = tex.host_mut();
@@ -907,24 +953,149 @@ impl Session {
             h.linked.insert(n);
         }
         self.missing = h.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
+        let files = &h.files;
+        let (pages, fonts) = dvi::pages(&self.dvi, &|n| files.get(format!("{n}.tfm").as_bytes()).cloned());
+        self.pages = pages;
+        self.fonts = fonts;
+        self.missing.retain(|n| !self.files.contains_key(n) && !self.bytes.contains_key(n));
+        self.missing.sort();
+        self.missing.dedup();
+    }
+
+    /// The incremental link of `changes`; false: the full link is to be made.
+    fn link_spliced(&mut self, changes: Vec<partex_core::effects::StepChunks>) -> bool {
+        let tex = self.tex.as_mut().unwrap();
+        let st = &mut self.lk;
+        st.links += 1;
+        let virt_on = tex.virtual_objects();
+        if virt_on && st.dead {
+            return false;
+        }
+        let links = st.links;
+        let LinkState { splice, virt, deflated, renumbered, dead, written, .. } = st;
+        // (deflate memoized by content; what the last 8 links used is kept:
+        // an edit undone finds its streams)
+        let mut was = std::mem::take(deflated);
+        let mut now: HashMap<u128, (Arc<[u8]>, u64)> = HashMap::new();
+        let res = {
+            let mut deflate = |level: i32, data: &[u8]| -> Option<Vec<u8>> {
+                let key = partex_core::StableHasher::of(&(b"deflate", level, data));
+                if let Some((z, _)) = now.get(&key) {
+                    return Some(z.to_vec());
+                }
+                let z: Arc<[u8]> = match was.remove(&key) {
+                    Some((z, _)) => z,
+                    None => Arc::from(miniz_oxide::deflate::compress_to_vec_zlib(data, u8::try_from(level.clamp(0, 9)).unwrap_or(6))),
+                };
+                now.insert(key, (z.clone(), links));
+                Some(z.to_vec())
+            };
+            let rec = tex.tracker().rec.borrow();
+            let r = ssa::keys_renumbered(&rec);
+            let key_of = |s: u32| ssa::step_key(&rec, s);
+            let keys: Option<&dyn Fn(u32) -> u64> = (r != *renumbered).then_some(&key_of);
+            *renumbered = r;
+            let c = if !virt_on {
+                Some(changes)
+            } else if let Some(c) = virt.changes(&changes, &mut deflate) {
+                Some(c)
+            } else {
+                let f = virt.full(&ssa::all_step_chunks(&rec), &mut deflate);
+                if f.as_ref().is_none_or(|x| x.1) {
+                    splice.reset();
+                }
+                f.map(|x| x.0)
+            };
+            match c {
+                Some(c) => splice.link(c, keys, &mut deflate, &|| clock_ns()),
+                None => Ok(None),
+            }
+        };
+        was.retain(|_, (_, at)| *at + 8 > links);
+        now.extend(was);
+        *deflated = now;
+        let out = match res {
+            Ok(Some(out)) => out,
+            Ok(None) => {
+                *dead |= virt_on;
+                return false;
+            }
+            Err(_) => return false,
+        };
+        // (each file by the name it was opened with, the last open winning;
+        // one as last written, written from its first changed byte, else whole)
+        let h = tex.host_mut();
+        let mut last: BTreeMap<Vec<u8>, u32> = BTreeMap::new();
+        for (id, n, _) in &out.opened {
+            last.insert(n.clone(), id.0);
+        }
+        let mut wrote = Vec::new();
+        for (name, id) in last {
+            let (len, first) = out.files.get(&id).copied().unwrap_or((0, None));
+            let old: &[u8] = if name.ends_with(b".pdf") {
+                &self.pdf
+            } else if name.ends_with(b".dvi") {
+                &self.dvi
+            } else {
+                h.files.get(&name).map_or(&[][..], |a| &a[..])
+            };
+            let as_written = written.get(&name) == Some(&(id, old.len() as u64));
+            let from = match (as_written, first) {
+                (true, None) => continue,
+                (true, Some(x)) => x,
+                (false, _) => 0,
+            };
+            let from_us = usize::try_from(from).unwrap_or(0).min(old.len());
+            let mut buf = old[..from_us].to_vec();
+            splice.write_from(id, from, &mut |b| buf.extend_from_slice(b));
+            buf.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+            written.insert(name.clone(), (id, len));
+            wrote.push(format!("{} from {from}", String::from_utf8_lossy(&name)));
+            if name.ends_with(b".pdf") {
+                self.pdf = buf;
+                // (several patches before a hashing: the earliest counts;
+                // a whole write, every page)
+                self.pdf_first = if self.pdf_hashes.is_some() || self.pdf_first.is_some() {
+                    Some(self.pdf_first.map_or(from_us, |f| f.min(from_us)))
+                } else {
+                    None
+                };
+                self.pdf_hashes = None;
+                self.pdf_draws.clear();
+            } else if name.ends_with(b".dvi") {
+                self.dvi = buf;
+            } else {
+                h.files.insert(name.clone(), Arc::from(buf));
+                h.linked.insert(name);
+            }
+        }
+        if self.trace {
+            self.history_log.push(format!("link spliced: {}", wrote.join(", ")));
+        }
+        let mut term = h.term.clone();
+        term.extend_from_slice(&out.term);
+        self.term = term;
+        self.shipped = splice.pages().len();
+        true
+    }
+
+    /// The full link: every step's chunks, every file written whole.
+    fn link_full(&mut self) {
+        let tex = self.tex.as_mut().unwrap();
+        let chunks = ssa::step_effects(&tex.tracker().rec.borrow());
+        let slices: Vec<&[partex_core::effects::Effect]> = chunks.iter().map(|(_, e)| &e.1[..]).collect();
+        let linked = partex_core::effects::link(&slices, &partex_core::Sequential, &mut |level, data| {
+            Some(miniz_oxide::deflate::compress_to_vec_zlib(data, u8::try_from(level.clamp(0, 9)).unwrap_or(6)))
+        });
+        let h = tex.host_mut();
         match linked {
             Ok(l) => {
-                if std::env::var("PHITEX_LINK_DEBUG").is_ok() {
-                    for (id, n, k) in &l.opened {
-                        eprintln!("link: opened {} {} {:?}: {} bytes", id.0, String::from_utf8_lossy(n), k, l.files.get(&id.0).map_or(0, Vec::len));
-                    }
-                    for (id, b) in &l.files {
-                        eprintln!("link: file {id}: {} bytes", b.len());
-                    }
-                }
                 let dvi = l.opened.iter().rev().find(|(_, n, _)| n.ends_with(b".dvi")).and_then(|(id, ..)| l.files.get(&id.0));
                 self.dvi = dvi.cloned().unwrap_or_default();
                 let pdf = l.opened.iter().rev().find(|(_, n, _)| n.ends_with(b".pdf")).and_then(|(id, ..)| l.files.get(&id.0));
                 self.pdf = pdf.cloned().unwrap_or_default();
-                // (each file the link made, written back by the name it was
-                // opened with, the last open winning, as the CLI's linker:
-                // a rerun step's \openout left the host's copy truncated,
-                // and the next rebuild would read that as an edit)
+                // (each file the link made, by the name it was opened with,
+                // the last open winning)
                 let mut last: BTreeMap<&[u8], u32> = BTreeMap::new();
                 for (id, n, _) in &l.opened {
                     last.insert(&n[..], id.0);
@@ -933,29 +1104,20 @@ impl Session {
                     if n.ends_with(b".pdf") || n.ends_with(b".dvi") {
                         continue;
                     }
-                    let was = h.files.get(n).map_or(0, |o| o.len());
                     if let Some(b) = l.files.get(&id)
                         && h.files.get(n).is_none_or(|o| o[..] != b[..])
                     {
-                        if self.trace {
-                            self.history_log.push(format!("link wrote back {}: {} -> {} bytes", String::from_utf8_lossy(n), was, b.len()));
-                        }
                         h.files.insert(n.to_vec(), Arc::from(&b[..]));
                     }
                     h.linked.insert(n.to_vec());
                 }
                 if self.trace {
-                    let names: Vec<String> = l.opened.iter().map(|(_, n, _)| String::from_utf8_lossy(n).into_owned()).collect();
-                    self.history_log.push(format!("link opened: {}", names.join(" ")));
-                    for (n, b) in &h.files {
-                        if n.ends_with(b".aux") {
-                            self.history_log.push(format!("host has {}: {} bytes", String::from_utf8_lossy(n), b.len()));
-                        }
-                    }
+                    self.history_log.push(format!("link full: {} files", l.opened.len()));
                 }
                 self.shipped = l.pages.len();
                 self.pdf_hashes = None;
-        self.pdf_draws.clear();
+                self.pdf_first = None;
+                self.pdf_draws.clear();
                 let mut term = h.term.clone();
                 term.extend_from_slice(&l.term);
                 self.term = term;
@@ -965,13 +1127,6 @@ impl Session {
                 self.term = format!("partex: the link failed: {e:?}").into_bytes();
             }
         }
-        let files = &h.files;
-        let (pages, fonts) = dvi::pages(&self.dvi, &|n| files.get(format!("{n}.tfm").as_bytes()).cloned());
-        self.pages = pages;
-        self.fonts = fonts;
-        self.missing.retain(|n| !self.files.contains_key(n) && !self.bytes.contains_key(n));
-        self.missing.sort();
-        self.missing.dedup();
     }
 
     fn valid(&self, name: &str, range: &Range<usize>) -> Result<(), String> {
@@ -1058,7 +1213,19 @@ impl Session {
     /// The PDF's pages' hashes (cheap: no drawing).
     fn pdf_hashes(&mut self) -> &[u64] {
         if self.pdf_hashes.is_none() {
-            self.pdf_hashes = Some(pdfdraw::hashes(&self.pdf));
+            // (the pages after the link's first changed byte hashed again,
+            // the others kept)
+            let first = self.pdf_first.take();
+            let sums = pdfdraw::hashes_since(&self.pdf, &self.page_sums, first);
+            let hs: Vec<u64> = sums.iter().map(|s| s.hash).collect();
+            // (traced: checked against every page hashed again)
+            if self.trace {
+                let kept = sums.iter().zip(&self.page_sums).filter(|(a, b)| a.hash == b.hash).count();
+                let same = pdfdraw::hashes(&self.pdf) == hs;
+                self.history_log.push(format!("pages: first changed byte {first:?}, {kept} of {} kept, {}", hs.len(), if same { "== all hashed" } else { "!= all hashed" }));
+            }
+            self.pdf_hashes = Some(hs);
+            self.page_sums = sums;
         }
         self.pdf_hashes.as_deref().unwrap_or(&[])
     }

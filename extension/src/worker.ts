@@ -64,6 +64,8 @@ interface Core {
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
   ph_trace?(h: number, on: number): void;
+  ph_panic_ptr?(): number;
+  ph_panic_len?(): number;
   ph_draw_set?(slot: number, p: number, n: number): number;
   ph_draw_page?(slot: number, k: number): number;
   ph_draw_hash?(slot: number, k: number): void;
@@ -515,9 +517,36 @@ function handleDraw(r: Req): Res {
   return { id: r.id, ok: false, error: `the draw worker does not do ${r.op}` };
 }
 
+/** The panic the core kept before its trap (`: message`), or "". */
+function panicText(): string {
+  try {
+    const n = core.ph_panic_len?.() ?? 0;
+    return n ? `: ${new TextDecoder().decode(new Uint8Array(core.memory.buffer, core.ph_panic_ptr!() >>> 0, n))}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A trap in the idle work (readying a rebuild), which no request waits on:
+ * the instance is unusable from there (a RefCell it held stays borrowed), so
+ * the next request gets this trap, and a new instance, not a second panic.
+ */
+let idleTrap: string | undefined;
+
 self.onmessage = async (ev: MessageEvent<Req>) => {
   const r = ev.data;
   let res: Res;
+  if (!DRAW && idleTrap) {
+    await ready;
+    const why = idleTrap;
+    idleTrap = undefined;
+    sessions.clear();
+    shipped.clear();
+    await load().catch(() => undefined);
+    (self as unknown as Worker).postMessage({ id: r.id, ok: false, error: `core trapped: ${why}` } as Res);
+    return;
+  }
   if (DRAW) {
     await ready;
     try {
@@ -546,7 +575,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     // A trap (a PhiTeX panic, with panic = "abort") leaves the instance
     // unusable: start a new one; every client must open again.
     // (and a core that fails to load at all says so: the reply always goes)
-    res = { id: r.id, ok: false, error: `core trapped: ${e}` };
+    res = { id: r.id, ok: false, error: `core trapped: ${e}${panicText()}` };
     sessions.clear();
     await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }
@@ -561,8 +590,10 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
       (self as unknown as Worker).postMessage({ preparing: true });
       core?.ph_idle?.();
       (self as unknown as Worker).postMessage({ preparing: false });
-    } catch {
-      /* a trap here shows on the next request */
+    } catch (e) {
+      (self as unknown as Worker).postMessage({ preparing: false });
+      // (told to the next request: see idleTrap)
+      idleTrap = `${e} (readying the rebuilds)${panicText()}`;
     }
   }, 50);
 };

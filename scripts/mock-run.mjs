@@ -5,6 +5,8 @@
 //   target/mock-run/<name>/trace.txt   every core request and reply, package
 //                                      fetches, layouts, console errors, by ms
 //   target/mock-run/<name>/<shot>.png  screenshots the steps ask for
+//   target/mock-run/<name>/worker-console.txt  the workers' console (a core panic's message)
+//   target/mock-run/<name>/core-log.txt  the core's build log (with rebuild traces: a "trace" step)
 // and prints the timeline and a summary (builds, worst build, final status).
 //
 //   node scripts/mock-run.mjs SCENARIO.json [--fresh] [--keep]
@@ -95,6 +97,34 @@ const shot = async (name) => {
 };
 const pos = (s) => `(() => { const t = mockEditor.text(); ${s.after !== undefined ? `const i = t.${s.last ? "lastIndexOf" : "indexOf"}(${JSON.stringify(s.after)}); return i < 0 ? -1 : i + ${JSON.stringify(s.after)}.length;` : s.before !== undefined ? `return t.indexOf(${JSON.stringify(s.before)});` : "return t.length;"} })()`;
 
+// the workers' console (the core's stderr: a panic's message, before its trap),
+// through the offscreen document's target and the workers attached to it
+const workerLog = [];
+try {
+  const off = (await (await fetch(`http://localhost:${PORT}/json`)).json()).find((t) => t.url.endsWith("/offscreen.html"));
+  if (off) {
+    const ow = new WebSocket(off.webSocketDebuggerUrl);
+    await new Promise((r) => ow.addEventListener("open", r));
+    let oid = 0;
+    const osend = (method, params = {}, sessionId) => ow.send(JSON.stringify({ id: ++oid, method, params, ...(sessionId ? { sessionId } : {}) }));
+    ow.addEventListener("message", (m) => {
+      const d = JSON.parse(m.data);
+      if (d.method === "Target.attachedToTarget") {
+        osend("Runtime.enable", {}, d.params.sessionId);
+        osend("Runtime.runIfWaitingForDebugger", {}, d.params.sessionId);
+      }
+      if (d.method === "Runtime.consoleAPICalled") {
+        const text = d.params.args.map((a) => a.value ?? a.description).join(" ");
+        workerLog.push(`${Date.now() - T0} ms ${d.params.type}: ${text}`);
+      }
+    });
+    osend("Runtime.enable");
+    osend("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  }
+} catch (e) {
+  console.log("worker console: not attached:", String(e));
+}
+
 // the first page
 for (let i = 0; i < 100 && !(await state())?.pages; i++) await sleep(300);
 // ("noidle": the steps start at the first page, while the core readies its rebuilds)
@@ -168,6 +198,7 @@ fs.writeFileSync(path.join(out, "trace.txt"), lines.join("\n") + "\n");
 // (the core's own account: each build's how, then the terminal and the job's log)
 const log = await evalIn(`(async () => (await globalThis.__phitexSession.core.request({ op: "log" })).json?.log ?? "")()`, true);
 fs.writeFileSync(path.join(out, "core-log.txt"), log ?? "");
+fs.writeFileSync(path.join(out, "worker-console.txt"), workerLog.join("\n") + "\n");
 fs.writeFileSync(path.join(out, "trace.json"), JSON.stringify({ steps, events, ...sess }, null, 1));
 const builds = sess.trace.filter((e) => e.k.startsWith("←") && e.d?.build_ms !== undefined);
 const worst = builds.reduce((a, b) => (b.d.build_ms > (a?.d.build_ms ?? -1) ? b : a), undefined);

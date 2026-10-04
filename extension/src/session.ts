@@ -296,12 +296,16 @@ export class PreviewSession {
         });
         this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
         const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
+        // (a build that came back whole: a trap after it is a new one)
+        if (res.ok && (r.op === "edit" || r.op === "status")) this.traps = 0;
         if (lost && this.opened && r.op !== "open") {
           this.opened = false;
-          const t = this.now();
-          this.traps = this.traps.filter((x) => t - x < 60_000).concat(t);
+          // (a trap again with no good build between is the same trap, the
+          // same input to the same engine: reopened once, then stopped, however
+          // long each takes; counted by time, a slow one would loop forever)
+          this.traps++;
           const why = res.error ?? "the core restarted";
-          if (this.traps.length <= 3) {
+          if (this.traps <= 1) {
             this.sink.error(`${why}; reopening`);
             this.chain = this.chain.then(() => this.reopen());
           } else this.sink.error(`${why}, again: the preview stops here (reload the page to retry)`);
@@ -421,7 +425,8 @@ export class PreviewSession {
 
   private lastWarned = 0;
   /** When the core trapped, in the last minute. */
-  private traps: number[] = [];
+  /** Traps since the last build that came back whole. */
+  private traps = 0;
   /** The core runs LaTeX (the open reply's `engine`; until it says, as partex's, the default build). */
   private latex = true;
   private diags: Diagnostic[] = [];

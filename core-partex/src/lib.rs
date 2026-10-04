@@ -1121,10 +1121,44 @@ mod abi {
         OUT.with_borrow(Vec::len)
     }
 
+    /// A panic's message and place, kept where the host can read it after
+    /// the trap (`panic = "abort"`: the instance stops, its memory stays):
+    /// the address and length of the leaked text, 0 if none.
+    static PANIC_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static PANIC_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// Keep each panic's message (`ph_panic_ptr`, `ph_panic_len`) as well as printing it.
+    fn keep_panics() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let print = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // (the first: a later one is what the trap left behind, a
+            // RefCell still borrowed by the call that panicked)
+            if PANIC_PTR.load(SeqCst) == 0 {
+                let text: &'static str = Box::leak(info.to_string().into_boxed_str());
+                PANIC_PTR.store(text.as_ptr() as usize, SeqCst);
+                PANIC_LEN.store(text.len(), SeqCst);
+            }
+            print(info);
+        }));
+    }
+
+    /// The last panic's text (see `keep_panics`): its address, 0 if none.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_panic_ptr() -> usize {
+        PANIC_PTR.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_panic_len() -> usize {
+        PANIC_LEN.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The format and fonts ([`parse_assets`]' framing), once per
     /// instance, before the first `ph_open`. Returns how many files.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ph_assets(ptr: *const u8, len: usize) -> u32 {
+        keep_panics();
         let Some(m) = parse_assets(unsafe { input(ptr, len) }) else { return 0 };
         let n = u32::try_from(m.len()).unwrap_or(0);
         add_assets(m);

@@ -63,10 +63,18 @@ pub fn tools(memo: Memo) -> impl FnMut(&mut MemHost, &[(Vec<u8>, Arc<[u8]>)]) ->
             memo.borrow_mut().insert(name.clone(), contents.clone());
             let base = name.strip_suffix(b".aux").unwrap_or(name).to_vec();
             let out = partex_bibtex::run(&base, &partex_bibtex::Options::default(), &mut HostFiles { host, auxes: &auxes });
-            for f in [&out.bbl, &out.blg].into_iter().flatten() {
-                host.files.insert(f.name.clone(), Arc::from(&f.contents[..]));
+            // (a .bbl the same as the one the job has is not a write: the
+            // next trip would read the same bytes, and the trips must see it
+            // as unchanged to settle; as the CLI's memo)
+            if let Some(b) = &out.bbl
+                && host.files.get(&b.name).is_none_or(|old| old[..] != b.contents[..])
+            {
+                host.files.insert(b.name.clone(), Arc::from(&b.contents[..]));
+                wrote = true;
             }
-            wrote |= out.bbl.is_some();
+            if let Some(b) = &out.blg {
+                host.files.insert(b.name.clone(), Arc::from(&b.contents[..]));
+            }
             // (its errors and warnings, from the .blg: what it couldn't find)
             let blg = out.blg.as_ref().map(|b| String::from_utf8_lossy(&b.contents).into_owned()).unwrap_or_default();
             let said: Vec<&str> = blg.lines().filter(|l| l.contains("I couldn't") || l.contains("I found no") || l.starts_with("Warning") || l.contains("error message")).take(6).collect();

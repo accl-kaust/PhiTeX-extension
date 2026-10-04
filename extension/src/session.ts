@@ -632,7 +632,7 @@ export class PreviewSession {
     if (this.hashes.length) this.sink.layout(this.hashes);
     // (the glyphs' sources of the pages around the one read, asked now, after
     // the build, so a double-click or a selection finds them ready)
-    if (this.sink.goto) for (const k of [this.page, this.page + 1, this.page - 1]) if (k >= 0 && k < this.hashes.length) void this.glyphsOf(k);
+    if (this.sink.goto && !this.noOriginsPrefetch) for (const k of [this.page, this.page + 1, this.page - 1]) if (k >= 0 && k < this.hashes.length) void this.glyphsOf(k);
   }
 
   /** Everything again, for a view that just joined (a detached PDF tab). */
@@ -659,6 +659,8 @@ export class PreviewSession {
     this.sink.page(image(r), this.page, this.pages);
   }
 
+  /** (debugging: no glyph-origin requests after layouts) */
+  noOriginsPrefetch = false;
   /** The errors replies carried (traps, panics), the last 20. */
   private errorsSeen: string[] = [];
 

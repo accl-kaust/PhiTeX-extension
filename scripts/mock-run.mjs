@@ -198,6 +198,9 @@ for (const s of sc.steps ?? []) {
     const text = await evalIn(`document.querySelector("phitex-preview").shadowRoot.getElementById("reporttext").value`, true);
     fs.writeFileSync(path.join(out, "report.txt"), text ?? "");
     console.log(`report → ${text?.length ?? 0} chars, ${path.join(out, "report.txt")}`);
+  } else if (s.noorigins) {
+    // (no glyph-origin requests after layouts: isolates their effect on rebuilds)
+    await evalIn(`globalThis.__phitexSession.noOriginsPrefetch = true`, true);
   } else if (s.trace !== undefined) {
     // (the core's rebuilds traced into its log: core-log.txt)
     await evalIn(`globalThis.__phitexSession.core.request({ op: "trace", on: ${!!s.trace} })`, true);

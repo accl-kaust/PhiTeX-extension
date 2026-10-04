@@ -16,7 +16,7 @@
 //!   next query builds. (Cold for now; partex's SSA rebuild comes next.)
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -59,6 +59,12 @@ pub struct MemHost {
     pub fallback: Option<Box<dyn FnMut(&[u8]) -> Option<Vec<u8>>>>,
     /// `PARTEX_HOST_TRACE`: each file served (name, length, from), for debugging.
     pub served: Vec<(String, usize, &'static str)>,
+    /// Handles an SSA build writes on (`open_write_later`): its bytes are
+    /// the build's, a link writes the file; writes on them are dropped.
+    later: BTreeSet<u32>,
+    /// The outputs the link last wrote (by name): the build's own, not
+    /// edited (`output_edited`).
+    pub linked: BTreeSet<Vec<u8>>,
 }
 
 fn suffix(kind: FileKind) -> &'static [u8] {
@@ -66,6 +72,9 @@ fn suffix(kind: FileKind) -> &'static [u8] {
         FileKind::Tex => b".tex",
         FileKind::Tfm => b".tfm",
         FileKind::Fmt => b".fmt",
+        FileKind::Bst => b".bst",
+        FileKind::Bib => b".bib",
+        FileKind::Ist => b".ist",
         _ => b"",
     }
 }
@@ -173,7 +182,33 @@ impl Host for MemHost {
         self.written.insert(n.clone(), Vec::new());
         Some((id, n))
     }
+    /// An SSA build's output: a handle, the file not touched (the build
+    /// keeps the bytes; the link writes the file). Before this, the file
+    /// was emptied mid-build by a step run again, and the next rebuild read
+    /// the cut file as an edit.
+    fn open_write_later(&mut self, name: &[u8], kind: FileKind, again: Option<WriteId>) -> Option<(WriteId, Vec<u8>)> {
+        let n = with_suffix(name, kind);
+        let id = match again {
+            Some(id) if self.given.get(&id.0) == Some(&n) => id.0,
+            _ => {
+                self.next += 1;
+                self.next
+            }
+        };
+        self.given.insert(id, n.clone());
+        self.later.insert(id);
+        Some((WriteId(id), n))
+    }
+    fn output_edited(&mut self, name: &[u8]) -> bool {
+        // (outputs are the build's: no one edits a .aux in the editor; one
+        // the link never wrote is read as an edit, as the default)
+        let base = name.strip_prefix(b"./").unwrap_or(name);
+        !self.linked.contains(base)
+    }
     fn write(&mut self, file: WriteId, bytes: &[u8]) {
+        if self.later.contains(&file.0) {
+            return;
+        }
         if let Some(n) = self.open.get(&file.0) {
             self.written.get_mut(n).unwrap().extend_from_slice(bytes);
         }
@@ -446,6 +481,16 @@ impl Status {
     }
 }
 
+/// BibTeX and makeindex, as nodes of the build (they run inside its trips,
+/// again only where what they read changed).
+fn native_tools() -> ssa::NativeTools {
+    ssa::NativeTools {
+        bibtex: Some(partex_bibtex::Options::default()),
+        makeindex: Some(b"version 2.18 [TeX Live 2026] (kpathsea + Thai support)".to_vec()),
+        calls: true,
+    }
+}
+
 fn no_tools(_: &mut MemHost, _: &[(Vec<u8>, Arc<[u8]>)]) -> (bool, Vec<String>) {
     (false, Vec::new())
 }
@@ -601,8 +646,8 @@ impl Session {
         self.unsettled = false;
         let t = Instant::now();
         // (until settled, as the cold build)
-        let mut bibtex = bib::tools(self.bib_memo.clone());
-        let mut trips = ssa::Trips { max: 12, tools: &mut bibtex, clock: None };
+        let native = native_tools();
+        let mut trips = ssa::Trips { max: 12, tools: &mut no_tools, native: Some(&native), clock: None };
         let s = ssa::settle(tex, false, true, &mut trips, 0, 0);
         self.history_log.extend(s.tools.iter().map(|l| format!("tool: {l}")));
         if !s.settled {
@@ -649,8 +694,8 @@ impl Session {
         // can take more than four)
         let max = std::env::var("PHITEX_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
         // (BibTeX between trips, as latexmk: the engine's own, in process)
-        let mut bibtex = bib::tools(self.bib_memo.clone());
-        let mut trips = ssa::Trips { max, tools: &mut bibtex, clock: None };
+        let native = native_tools();
+        let mut trips = ssa::Trips { max, tools: &mut no_tools, native: Some(&native), clock: None };
         // (a job that ended fatally, an unclosed brace's runaway argument, is
         // rebuilt too: the fix runs on past the old end; PHITEX_COLD_AFTER_FATAL
         // goes cold instead)
@@ -691,7 +736,8 @@ impl Session {
             // (a keystroke: one trip, as one pdflatex run; references and the
             // TOC settle on idle (`settle_idle`), not on each keystroke;
             // PHITEX_KEY_TRIPS overrides)
-            let mut key_trips = ssa::Trips { max: std::env::var("PHITEX_KEY_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(1), tools: &mut no_tools, clock: None };
+            let native = native_tools();
+            let mut key_trips = ssa::Trips { max: std::env::var("PHITEX_KEY_TRIPS").ok().and_then(|v| v.parse().ok()).unwrap_or(1), tools: &mut no_tools, native: Some(&native), clock: None };
             let r = ssa::rebuild_trips(tex, trace, true, &mut key_trips);
             let _ = &mut trips;
             if trace {
@@ -838,7 +884,16 @@ impl Session {
         let linked = partex_core::effects::link(&slices, &partex_core::Sequential, &mut |level, data| {
             Some(miniz_oxide::deflate::compress_to_vec_zlib(data, u8::try_from(level.clamp(0, 9)).unwrap_or(6)))
         });
+        // (the build's tools' outputs: .bbl, .blg, .ind, .ilg)
+        let produced = ssa::produced_streams(tex);
         let h = tex.host_mut();
+        for (n, b) in produced {
+            let Some(b) = b else { continue };
+            if h.files.get(&n).is_none_or(|o| o[..] != b[..]) {
+                h.files.insert(n.clone(), b);
+            }
+            h.linked.insert(n);
+        }
         self.missing = h.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
         match linked {
             Ok(l) => {
@@ -875,6 +930,7 @@ impl Session {
                         }
                         h.files.insert(n.to_vec(), Arc::from(&b[..]));
                     }
+                    h.linked.insert(n.to_vec());
                 }
                 if self.trace {
                     let names: Vec<String> = l.opened.iter().map(|(_, n, _)| String::from_utf8_lossy(n).into_owned()).collect();

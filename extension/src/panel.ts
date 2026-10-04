@@ -373,7 +373,8 @@ footer .msg.err { color: var(--danger); }
    viewer min-height 100% with the first page's margin collapsing through it (so it scrolls by 12 px, as native) */
 .win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
-.slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); }
+.stage { overscroll-behavior: contain; will-change: scroll-position; }
+.slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); contain: layout paint; content-visibility: auto; }
 .load .btns { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
 .load .btns .btn { cursor: pointer; padding: 4px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
 .report { display: none; position: absolute; inset: 12px; z-index: 6; padding: 12px; flex-direction: column; gap: 6px; background: var(--bg, #fff); color: var(--fg, #1b222c); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.35); font-size: 12px; }
@@ -383,9 +384,12 @@ footer .msg.err { color: var(--danger); }
 .report .btns { display: flex; gap: 8px; justify-content: flex-end; }
 .report .btn, .diags .reportbtn { cursor: pointer; padding: 3px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
 .diags .reportbtn { margin: 6px 8px; }
-.slot .mark { position: absolute; background: rgba(255, 213, 0, .45); outline: 1px solid rgba(214, 160, 0, .7); border-radius: 2px; pointer-events: none; transition: opacity 1.2s; }
-.slot .mark.fade { opacity: 0; }
-.slot .mark.sel { background: rgba(80, 140, 255, .28); outline: none; transition: none; }
+.slot .mark { position: absolute; background: rgba(255, 221, 0, .55); mix-blend-mode: multiply; border-radius: 3px; pointer-events: none;
+  box-shadow: 0 0 0 1.5px rgba(232, 172, 0, .9), 0 0 10px 1px rgba(255, 200, 0, .55);
+  transition: opacity .25s, left .12s ease-out, top .12s ease-out, width .12s ease-out, height .12s ease-out; animation: phitex-mark-in .18s ease-out; }
+@keyframes phitex-mark-in { from { opacity: 0; transform: scale(1.15); } }
+.slot .mark.fade { opacity: 0; transition: opacity 1.2s; }
+.slot .mark.sel { background: rgba(80, 140, 255, .28); outline: none; transition: none; box-shadow: none; animation: none; }
 .slot svg.page, .slot img { display: block; width: 100%; height: 100%; margin: 0; box-shadow: none !important; border-radius: 0 !important; }
 .win.docked .slot { box-shadow: rgba(35,40,47,.05) 0 5px 5px, rgba(35,40,47,.03) 0 3px 14px, rgba(35,40,47,.08) 0 8px 10px; }
 .win.docked.pdf-dark .slot { filter: invert(95%) hue-rotate(180deg) brightness(90%) contrast(90%); box-shadow: none; }
@@ -1192,8 +1196,8 @@ export class Panel {
   }
 
   /** Highlight `boxes` on page `k` (the source the editor is at). */
-  mark(k: number, boxes: [number, number, number, number][]): void {
-    this.viewer.mark(k, boxes);
+  mark(k: number, boxes: [number, number, number, number][], scroll = true): void {
+    this.viewer.mark(k, boxes, scroll);
   }
 
   page(img: PageImage | null, k: number, n: number, hash?: string | null): void {

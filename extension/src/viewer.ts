@@ -115,29 +115,40 @@ export class Viewer {
   }
 
   /** Highlight `boxes` ([x, y top, w, h], PDF points) on page `k`, scrolled into view, for a moment. */
-  mark(k: number, boxes: [number, number, number, number][]): void {
+  mark(k: number, boxes: [number, number, number, number][], scroll = true): void {
     const s = this.slots[k];
     if (!s || !boxes.length) return;
-    for (const m of this.root.querySelectorAll(".mark:not(.sel)")) m.remove();
+    for (const m of this.root.querySelectorAll(".mark:not(.sel)")) if (m.parentElement !== s.el) m.remove();
     // (the page it jumps to, drawn now: not when the observer next sees it)
     if (s.drawn !== s.hash && !this.asked.has(`${k}:${s.hash}`)) {
       this.asked.add(`${k}:${s.hash}`);
       this.host.need(k);
     }
+    // (the boxes already there move to the new place: the highlight glides
+    // from word to word, as the cursor goes)
     const { w, h } = this.size;
-    for (const [x, y, bw, bh] of boxes) {
-      const m = document.createElement("div");
-      m.className = "mark";
+    const have = [...s.el.querySelectorAll<HTMLElement>(".mark:not(.sel)")];
+    boxes.forEach(([x, y, bw, bh], i) => {
+      let m = have[i];
+      if (!m) {
+        m = document.createElement("div");
+        m.className = "mark";
+        s.el.append(m);
+      }
+      m.classList.remove("fade");
       Object.assign(m.style, { left: `${(x / w) * 100}%`, top: `${(y / h) * 100}%`, width: `${(bw / w) * 100}%`, height: `${(bh / h) * 100}%` });
-      s.el.append(m);
-    }
+    });
+    for (const m of have.slice(boxes.length)) m.remove();
     // (the first box in the middle of the view, unless it is in view already)
     const top = s.el.offsetTop + (boxes[0][1] / h) * s.el.offsetHeight;
     const v = this.scroller;
-    if (top < v.scrollTop + 20 || top > v.scrollTop + v.clientHeight - 40) v.scrollTo({ top: top - v.clientHeight / 2, behavior: "auto" });
-    setTimeout(() => s.el.querySelectorAll(".mark:not(.sel)").forEach((m) => m.classList.add("fade")), 1200);
-    setTimeout(() => s.el.querySelectorAll(".mark.fade").forEach((m) => m.remove()), 2400);
+    if (scroll && (top < v.scrollTop + 20 || top > v.scrollTop + v.clientHeight - 40)) v.scrollTo({ top: top - v.clientHeight / 2, behavior: "smooth" });
+    // (it fades once the cursor rests: each new mark restarts the clock)
+    clearTimeout(this.fadeTimer);
+    this.fadeTimer = setTimeout(() => this.root.querySelectorAll(".mark:not(.sel)").forEach((m) => m.classList.add("fade")), 1800);
   }
+
+  private fadeTimer: ReturnType<typeof setTimeout> | undefined;
 
   get pages(): number {
     return this.slots.length;
@@ -183,7 +194,25 @@ export class Viewer {
     else if ("w" in img && img.w && img.h) this.size = { w: img.w, h: img.h };
     s.img = img;
     s.drawn = hash ?? s.hash;
-    this.paint(s);
+    // (painted at the next frame, a few a frame, those on screen first: a
+    // burst of pages never stalls a scroll)
+    this.toPaint.add(s);
+    if (!this.paintFrame) this.paintFrame = requestAnimationFrame(() => this.paintSome());
+  }
+
+  private toPaint = new Set<Slot>();
+  private paintFrame = 0;
+  private paintSome(): void {
+    this.paintFrame = 0;
+    const t0 = performance.now();
+    const order = [...this.toPaint].sort((a, b) => Number(this.visible.has(Number(b.el.dataset.k))) - Number(this.visible.has(Number(a.el.dataset.k))));
+    for (const s of order) {
+      // (8 ms a frame at most, at least one page)
+      if (performance.now() - t0 > 8) break;
+      this.toPaint.delete(s);
+      this.paint(s);
+    }
+    if (this.toPaint.size) this.paintFrame = requestAnimationFrame(() => this.paintSome());
   }
 
   /** The format changed: every page is to be drawn again (as it comes into view). */

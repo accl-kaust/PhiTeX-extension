@@ -903,6 +903,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   window.addEventListener("message", (e) => {
     if (e.source !== window || e.data?.src !== "phitex-hook") return;
     if (e.data.type === "sync") void session?.toPage(e.data.file, e.data.pos);
+    // (the editor's cursor as it moves: the word it is in, on the page)
+    if (e.data.type === "cursor") session?.follow(e.data.file, e.data.pos);
     // (the editor's selection: its text highlighted on the pages)
     if (e.data.type === "select") void session?.selectSource(e.data.file, e.data.from, e.data.to);
   });

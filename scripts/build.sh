@@ -2,7 +2,7 @@
 # Build the extension into extension/ (load that directory unpacked).
 #
 #   scripts/build.sh          # release
-#   scripts/build.sh --dev    # also match the local mock (http://localhost:8123/project/*)
+#   scripts/build.sh --dev    # also match the local mock (http://localhost:<any port>/project/*)
 #   scripts/build.sh --phitex # PhiTeX's core instead of partex's
 #
 # The wasm core: cargo for wasm32-wasip1, in the sandbox (PhiTeX read-only),
@@ -65,8 +65,8 @@ scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
   m.version_name = `${m.version} (engine ${process.argv[2]})`;
   if (process.argv[1] === "true") {
-    for (const c of m.content_scripts) c.matches.push("http://localhost:8123/project/*");
-    m.web_accessible_resources[0].matches.push("http://localhost:8123/*");
+    for (const c of m.content_scripts) c.matches.push("http://localhost/project/*");
+    m.web_accessible_resources[0].matches.push("http://localhost/*");
   }
   fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
 # (--dev: Shelf from a local server, ../shelf.PhiTeX.org/serve.py)

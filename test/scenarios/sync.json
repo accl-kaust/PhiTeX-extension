@@ -8,5 +8,7 @@
     { "idle": 1500 },
     { "dbltext": "Hello world" },
     { "dblpage": [0, 0.5, 0.6] },
+    { "cursor": "Hello world" },
+    { "cursor": "See Section" },
     { "shot": "sync" }
   ] }

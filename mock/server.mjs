@@ -110,7 +110,7 @@ http.createServer((req, res) => {
   if ((m = u.pathname.match(/^\/project\/mock\/doc\/(\w+)\/download$/)) && docs.has(m[1]))
     return send(200, "text/plain; charset=utf-8", docs.get(m[1]).text);
   if ((m = u.pathname.match(/^\/project\/mock\/doc\/(\w+)$/)) && req.method === "POST") {
-    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { docs.get(m[1]).text = b; send(204, "text/plain", ""); });
+    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { const d = docs.get(m[1]); if (!d) return send(404, "text/plain", "no such doc"); d.text = b; send(204, "text/plain", ""); });
     return;
   }
   if (u.pathname === "/project/mock/download/zip")

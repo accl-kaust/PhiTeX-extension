@@ -10,7 +10,7 @@
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
 import { ENGINES, type Engine } from "./engines.ts";
 import { report } from "./report.ts";
-import { boxes, from, glyphs, lineAt, nearest, type Glyph } from "./sync.ts";
+import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
 
@@ -146,7 +146,7 @@ export interface PreviewSink {
   /** The editor's selection, highlighted on its pages until it changes ([] clears). */
   marks?(marks: { k: number; boxes: [number, number, number, number][] }[]): void;
   /** Highlight boxes on page `k` ([x, y top, w, h], PDF points), scrolled into view. */
-  mark?(k: number, boxes: [number, number, number, number][]): void;
+  mark?(k: number, boxes: [number, number, number, number][], scroll?: boolean): void;
   /**
    * The engine the project runs with: `ready` false, ⚡ Instant can't run it
    * (yet); `needed` the engine a build error asked for, if any.
@@ -632,7 +632,7 @@ export class PreviewSession {
     if (this.hashes.length) this.sink.layout(this.hashes);
     // (the glyphs' sources of the pages around the one read, asked now, after
     // the build, so a double-click or a selection finds them ready)
-    if (this.sink.goto && !this.noOriginsPrefetch) for (const k of [this.page, this.page + 1, this.page - 1]) if (k >= 0 && k < this.hashes.length) void this.glyphsOf(k);
+    if (this.sink.goto && !this.noOriginsPrefetch) this.glyphsAll();
   }
 
   /** Everything again, for a view that just joined (a detached PDF tab). */
@@ -697,6 +697,25 @@ export class PreviewSession {
       }
   }
 
+  /** Page `k`'s glyphs if they are here, at once (no request, no waiting on a build). */
+  private cached(k: number): Glyph[] | undefined {
+    return this.glyphCache.get(`${k}:${this.hashes[k] ?? ""}`);
+  }
+
+  /** Every page's glyphs asked for, the one read first, one at a time: after each build, so lookups are local. */
+  private glyphsAll(): void {
+    const gen = ++this.glyphGen;
+    const n = this.hashes.length;
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    void (async () => {
+      for (const k of order) {
+        if (gen !== this.glyphGen) return;
+        if (k >= 0 && k < n && !this.cached(k)) await this.glyphsOf(k);
+      }
+    })();
+  }
+  private glyphGen = 0;
+
   private async glyphsOf(k: number): Promise<Glyph[]> {
     // (by the page's hash: an unchanged page keeps its glyphs, mapped through edits)
     const key = `${k}:${this.hashes[k] ?? ""}`;
@@ -711,7 +730,7 @@ export class PreviewSession {
     };
     const gs = glyphs(r.json, path);
     // (old hashes' entries: dropped past a few hundred pages' worth)
-    if (this.glyphCache.size > 300) this.glyphCache.clear();
+    if (this.glyphCache.size > 4 * Math.max(this.hashes.length, 100)) this.glyphCache.clear();
     this.glyphCache.set(key, gs);
     return gs;
   }
@@ -719,9 +738,7 @@ export class PreviewSession {
   /** A double-click at (x, y) on page `k` (PDF points from its top left): the editor to its source. */
   async toSource(k: number, x: number, y: number): Promise<void> {
     if (!this.opened) return;
-    this.flush();
-    await this.chain;
-    const g = nearest(await this.glyphsOf(k), x, y);
+    const g = nearest(this.cached(k) ?? (await this.glyphsOf(k)), x, y);
     this.tr("sync→source", { k, x, y, g });
     if (!g?.file) return;
     const t = this.files[g.file];
@@ -735,13 +752,11 @@ export class PreviewSession {
   async selectSource(file: string, from: number, to: number): Promise<void> {
     if (!this.opened || !(file in this.files)) return;
     if (from === to) return this.sink.marks?.([]);
-    this.flush();
-    await this.chain;
     const t = this.files[file];
     const [a, b] = [byteOffset(t, from), byteOffset(t, to)];
     const out: { k: number; boxes: [number, number, number, number][] }[] = [];
     for (let k = 0; k < Math.max(this.hashes.length, this.pages); k++) {
-      const all = await this.glyphsOf(k);
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
       const hit = all.filter((g) => g.file === file && !g.synth && g.start < b && g.end > a);
       if (hit.length) out.push({ k, boxes: boxes(hit, all) });
     }
@@ -756,11 +771,9 @@ export class PreviewSession {
    */
   async selectPage(sel: { k: number; rects: [number, number, number, number][] }[]): Promise<void> {
     if (!this.opened || !sel.length) return;
-    this.flush();
-    await this.chain;
     const by = new Map<string, { lo: number; hi: number; n: number }>();
     for (const { k, rects } of sel) {
-      for (const g of await this.glyphsOf(k)) {
+      for (const g of this.cached(k) ?? (await this.glyphsOf(k))) {
         if (!g.file || g.synth) continue;
         // (a glyph's body: just right of and above its origin)
         const [gx, gy] = [g.x + 1, g.y - 2];
@@ -777,18 +790,48 @@ export class PreviewSession {
     this.sink.goto?.(file, charOffset(t, lo), charOffset(t, hi), false);
   }
 
+  /**
+   * The editor's cursor at `pos` (UTF-16) in `file`, as it moves: the word it
+   * is in highlighted on the page, at once, from the glyphs already here
+   * (none asked for: a page not yet here is skipped); scrolled to only when
+   * the cursor changed line.
+   */
+  follow(file: string, pos: number): void {
+    if (!this.opened || !(file in this.files) || !this.sink.mark) return;
+    const t = this.files[file];
+    const bytes = new TextEncoder().encode(t);
+    const at = byteOffset(t, pos);
+    const lo = t.lastIndexOf("\n", pos - 1) + 1, hiC = t.indexOf("\n", pos);
+    const [a, b] = [byteOffset(t, lo), byteOffset(t, hiC < 0 ? t.length : hiC)];
+    const line = `${file}:${lo}`;
+    const scroll = line !== this.followLine;
+    this.followLine = line;
+    const w = wordBytes(bytes, at);
+    const n = Math.max(this.hashes.length, this.pages, 1);
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    for (const k of order) {
+      const all = this.cached(k);
+      if (!all) continue;
+      const onLine = from(all, file, a, b);
+      if (!onLine.length) continue;
+      const word = w ? from(onLine, file, w[0], w[1]) : [];
+      const hit = word.length ? word : lineAt(onLine, at);
+      this.sink.mark(k, boxes(hit, all), scroll);
+      return;
+    }
+  }
+  private followLine = "";
+
   /** The place `pos` (UTF-16) in `file`: its line's glyphs highlighted on the page (the page in view first). */
   async toPage(file: string, pos: number): Promise<void> {
     if (!this.opened || !(file in this.files)) return;
-    this.flush();
-    await this.chain;
     const t = this.files[file];
     const lo = t.lastIndexOf("\n", pos - 1) + 1, hiC = t.indexOf("\n", pos);
     const [a, b] = [byteOffset(t, lo), byteOffset(t, hiC < 0 ? t.length : hiC)];
     const n = Math.max(this.hashes.length, this.pages, 1);
     const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
     for (const k of order) {
-      const all = await this.glyphsOf(k);
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
       const hit = lineAt(from(all, file, a, b), byteOffset(t, pos));
       if (hit.length) {
         this.tr("sync→page", { file, pos, k, glyphs: hit.length });

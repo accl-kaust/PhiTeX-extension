@@ -854,6 +854,24 @@ impl Session {
                 self.dvi = dvi.cloned().unwrap_or_default();
                 let pdf = l.opened.iter().rev().find(|(_, n, _)| n.ends_with(b".pdf")).and_then(|(id, ..)| l.files.get(&id.0));
                 self.pdf = pdf.cloned().unwrap_or_default();
+                // (each file the link made, written back by the name it was
+                // opened with, the last open winning, as the CLI's linker:
+                // a rerun step's \openout left the host's copy truncated,
+                // and the next rebuild would read that as an edit)
+                let mut last: BTreeMap<&[u8], u32> = BTreeMap::new();
+                for (id, n, _) in &l.opened {
+                    last.insert(&n[..], id.0);
+                }
+                for (n, id) in last {
+                    if n.ends_with(b".pdf") || n.ends_with(b".dvi") {
+                        continue;
+                    }
+                    if let Some(b) = l.files.get(&id)
+                        && h.files.get(n).is_none_or(|o| o[..] != b[..])
+                    {
+                        h.files.insert(n.to_vec(), Arc::from(&b[..]));
+                    }
+                }
                 self.shipped = l.pages.len();
                 self.pdf_hashes = None;
         self.pdf_draws.clear();

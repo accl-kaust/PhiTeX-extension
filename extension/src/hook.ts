@@ -138,7 +138,16 @@
   /** The editor's selection, posted a moment after it settles (a drag makes many). */
   let selTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSel = "";
+  let selFrame = 0;
   function selectionSoon(): void {
+    // (the cursor alone, posted once a frame: the page follows it at once)
+    if (!selFrame)
+      selFrame = requestAnimationFrame(() => {
+        selFrame = 0;
+        const m = view?.state.selection?.main;
+        if (!m || file === null || m.anchor !== m.head) return;
+        post({ type: "cursor", file, pos: m.head });
+      });
     clearTimeout(selTimer);
     selTimer = setTimeout(() => {
       if (!view || file === null) return;
@@ -149,7 +158,7 @@
       if (key === lastSel) return;
       lastSel = key;
       post({ type: "select", file, from, to });
-    }, 120);
+    }, 30);
   }
 
   // A double-click in the editor, or on Overleaf's file outline (whose click

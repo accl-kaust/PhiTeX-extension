@@ -62,3 +62,12 @@ export function lineAt(hits: Glyph[], at: number): Glyph[] {
   for (const g of hits) if (!best || Math.abs(g.start - at) < Math.abs(best.start - at)) best = g;
   return best ? hits.filter((g) => Math.abs(g.y - best!.y) < 0.5) : [];
 }
+
+/** The source word around byte `at` of `text` ([lo, hi) in bytes): letters, digits, a command's name; null in spaces. */
+export function wordBytes(text: Uint8Array, at: number): [number, number] | null {
+  const w = (c: number) => c >= 0x80 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 39 || c === 45;
+  let lo = at, hi = at;
+  while (lo > 0 && w(text[lo - 1])) lo--;
+  while (hi < text.length && w(text[hi])) hi++;
+  return lo < hi ? [lo, hi] : null;
+}

@@ -24,6 +24,7 @@
 //       { "scroll": 5 },             // the ⚡ view scrolled to page 6
 //       { "recompile": true },       // Overleaf's Recompile (the local pdflatex)
 //       { "dblpage": [0, 0.3, 0.4] }, // double-click page 0 at 30% across, 40% down: the editor's selection after
+//       { "cursor": "Every writer" },  // the cursor put in that text: the word's highlight boxes 150 ms after
 //       { "dbltext": "Every writer" }, // double-click the editor at that text: the page's highlight boxes after
 //       { "dbloutline": "Section 3" } // double-click that heading in the file outline
 //     ] }
@@ -37,19 +38,20 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const args = process.argv.slice(2);
 const sc = JSON.parse(fs.readFileSync(args.find((a) => !a.startsWith("--")), "utf8"));
 const fresh = args.includes("--fresh"), keep = args.includes("--keep");
-const PORT = 9223, PROFILE = ".chrome-profile-3";
+// (its own mock port, apart from a mock the user has open on 8123)
+const PORT = 9223, PROFILE = ".chrome-profile-3", MOCK = 8133;
 const out = path.join(root, "target/mock-run", sc.name ?? "run");
 fs.mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // the mock, on the scenario's project
-try { execFileSync("pkill", ["-f", "^node mock/server.mjs"]); } catch {}
+try { execFileSync("pkill", ["-f", `^node mock/server.mjs ${MOCK}`]); } catch {}
 await sleep(500);
-const mock = spawn("node", ["mock/server.mjs"], { cwd: root, env: { ...process.env, MOCK_PROJECT: path.resolve(sc.project) }, stdio: ["ignore", "pipe", "inherit"], detached: true });
+const mock = spawn("node", ["mock/server.mjs", String(MOCK)], { cwd: root, env: { ...process.env, MOCK_PROJECT: path.resolve(sc.project) }, stdio: ["ignore", "pipe", "inherit"], detached: true });
 await new Promise((r) => mock.stdout.once("data", r));
 // Chromium with the extension
 if (fresh) fs.rmSync(path.join(root, PROFILE, "Default/IndexedDB"), { recursive: true, force: true });
-execFileSync("bash", ["scripts/chrome.sh"], { cwd: root, env: { ...process.env, PHITEX_CDP_PORT: String(PORT), PHITEX_PROFILE: PROFILE } });
+execFileSync("bash", ["scripts/chrome.sh", `http://localhost:${MOCK}/project/mock`], { cwd: root, env: { ...process.env, PHITEX_CDP_PORT: String(PORT), PHITEX_PROFILE: PROFILE, PHITEX_HEADLESS: "1" } });
 
 // the tab, over the DevTools protocol: page world (the editor) and the content script's
 let tab;
@@ -213,6 +215,12 @@ for (const s of sc.steps ?? []) {
     await sleep(900);
     s.result = await evalIn(`(() => [...document.querySelector("phitex-preview").shadowRoot.querySelectorAll(".mark")].map((m) => [m.parentElement.dataset.k, m.style.top]))()`, true);
     console.log("dbloutline →", JSON.stringify(s.result));
+  } else if (s.cursor !== undefined) {
+    // (the cursor put inside that text, as a click: the page follows it, no double-click)
+    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.cursor)}) + 2; const ta = document.querySelector(".cm-content"); ta.focus(); ta.setSelectionRange(i, i); ta.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); })()`);
+    await sleep(150);
+    s.result = await evalIn(`(() => { const ms = [...(document.querySelector('phitex-preview')?.shadowRoot ?? document).querySelectorAll(".mark:not(.sel)")]; return ms.map((m) => [m.parentElement.dataset.k, m.style.left, m.style.top, m.style.width]); })()`, true);
+    console.log("cursor →", JSON.stringify(s.result));
   } else if (s.dbltext !== undefined) {
     await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.dbltext)}); const ta = document.querySelector(".cm-content"); ta.focus(); ta.setSelectionRange(i, i + 3); ta.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
     await sleep(700);

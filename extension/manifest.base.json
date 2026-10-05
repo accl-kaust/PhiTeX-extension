@@ -57,7 +57,8 @@
         "dist/pdfjs/pdf.min.mjs",
         "dist/pdfjs/pdf.worker.min.mjs",
         "dist/page2.js",
-        "fonts/*"
+        "fonts/*",
+        "shims/*"
       ],
       "matches": [
         "https://www.overleaf.com/*"

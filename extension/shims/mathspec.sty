@@ -1,0 +1,14 @@
+% PhiTeX Instant: mathspec stood in for, under pdfLaTeX (no XeTeX yet).
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{mathspec}[2026/10/05 PhiTeX stand-in (fonts ignored)]
+\DeclareOption*{}\ProcessOptions\relax
+\RequirePackage{fontspec}
+% ((Digits,Latin)[opts]{font}: the character sets too)
+\def\phitex@paren{\@ifnextchar(\phitex@dropparen\phitex@ignore}
+\def\phitex@dropparen(#1){\phitex@ignore}
+\newcommand\setmathsfont{\phitex@paren}
+\newcommand\setmathrmfont{\phitex@paren}
+\newcommand\setallmainfonts{\phitex@ignore}
+\newcommand\setallsansfonts{\phitex@ignore}
+\newcommand\setallmonofonts{\phitex@ignore}
+\endinput

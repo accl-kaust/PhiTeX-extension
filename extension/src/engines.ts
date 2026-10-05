@@ -35,3 +35,18 @@ export function errorNeeds(message: string): Engine | null {
 export function resolve(setting: EngineChoice, project: Engine | undefined, main: string | undefined): Engine {
   return project ?? (setting !== "auto" ? setting : (needs(main) ?? "pdflatex"));
 }
+
+/** The stand-ins (extension/shims/) a XeLaTeX project is approximated with under pdfLaTeX. */
+export const SHIMS = ["fontspec.sty", "unicode-math.sty", "polyglossia.sty", "xltxtra.sty", "mathspec.sty"];
+
+/**
+ * Whether a project that needs XeLaTeX can be approximated with pdfLaTeX and
+ * the stand-ins: fonts substituted, Latin scripts only. Not CJK, Chinese
+ * classes, or anything LuaTeX's (pdfTeX's fonts have no glyphs for them).
+ */
+export function approximable(main: string | undefined): boolean {
+  if (needs(main) !== "xelatex" || !main) return false;
+  const end = main.indexOf("\\begin{document}");
+  const pre = (end < 0 ? main : main.slice(0, end)).replace(/(^|[^\\])%.*$/gm, "$1");
+  return !/\\usepackage(\[[^\]]*\])?\{[^}]*\b(xeCJK|ctex|xepersian|bidi|arabxetex|xgreek|xunicode)\b|\\documentclass(\[[^\]]*\])?\{ctex/.test(pre);
+}

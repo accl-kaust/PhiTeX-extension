@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\usepackage{polyglossia}
+\setdefaultlanguage{english}
+\setotherlanguage{french}
+\setotherlanguage{arabic}
+\setmainfont{TeX Gyre Pagella}[Ligatures=TeX]
+\setmathfont{Latin Modern Math}
+\newfontfamily\headingfont[Scale=1.1]{Inter}
+\defaultfontfeatures{Ligatures=TeX}
+\begin{document}
+\section{Héllo}
+{\headingfont Titre} café $\symbf{x} + \symbb{R}$ \textlang{french}{bonjour}
+\end{document}

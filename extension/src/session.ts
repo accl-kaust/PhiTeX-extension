@@ -154,7 +154,7 @@ export interface PreviewSink {
    * The engine the project runs with: `ready` false, ⚡ Instant can't run it
    * (yet); `needed` the engine a build error asked for, if any.
    */
-  engine?(e: { engine: Engine; ready: boolean; needed?: Engine | null }): void;
+  engine?(e: { engine: Engine; ready: boolean; needed?: Engine | null; approx?: boolean }): void;
   error(e: string): void;
   check?(r: { ok: boolean; ms: number; mismatch?: string }): void;
   mains?(names: string[], main: string | null): void;
@@ -170,6 +170,12 @@ export interface Options {
   packages?: PackageSource;
   /** The engine to run the project with, given its main file's text (default: pdfLaTeX). */
   engine?: (main: string | undefined) => Engine;
+  /**
+   * A XeLaTeX project pdfLaTeX can approximate (engines.ts `approximable`),
+   * run with these stand-ins (extension/shims/: fonts ignored) instead of
+   * not at all; absent, such a project isn't built.
+   */
+  shims?: (main: string | undefined) => Promise<Record<string, string> | null>;
   /** Schedules a flush (default: the next task). */
   schedule?: (f: () => void) => void;
   now?: () => number;
@@ -412,8 +418,11 @@ export class PreviewSession {
     // build: a cold build costs the format's load, ~0.7 s in wasm, and stops
     // at the first file it lacks)
     // (pdftex.map: every PDF-mode build reads it first)
-    const engine = this.o.engine?.(this.files[this.main]) ?? "pdflatex";
-    this.sink.engine?.({ engine, ready: ENGINES[engine].ready });
+    const want = this.o.engine?.(this.files[this.main]) ?? "pdflatex";
+    // (XeLaTeX approximated: pdfLaTeX with stand-ins for fontspec & co.)
+    const shims = !ENGINES[want].ready && want === "xelatex" ? await this.o.shims?.(this.files[this.main]) : null;
+    const engine: Engine = shims ? "pdflatex" : want;
+    this.sink.engine?.({ engine: want, ready: ENGINES[engine].ready, approx: !!shims });
     // (an engine ⚡ Instant doesn't run yet: nothing is built; the view says so and offers another)
     if (!ENGINES[engine].ready) {
       this.opened = false;
@@ -423,7 +432,7 @@ export class PreviewSession {
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
     // (an open with minted in the sources loads the worker's \write18 runner, Pyodide)
     this.minted = Object.values(this.files).some(usesMinted);
-    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel, engine });
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
     const latex = r.json.engine === "partex";

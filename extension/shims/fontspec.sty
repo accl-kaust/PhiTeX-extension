@@ -1,0 +1,34 @@
+% PhiTeX Instant: fontspec stood in for, under pdfLaTeX (no XeTeX yet).
+% Its commands are accepted and ignored; the text is in Latin Modern.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{fontspec}[2026/10/05 PhiTeX stand-in (fonts ignored)]
+\DeclareOption*{}\ProcessOptions\relax
+\RequirePackage[T1]{fontenc}
+\RequirePackage{lmodern}
+\RequirePackage{textcomp}
+% ([opts]{font}[opts]: both option lists, fontspec's old and new places)
+\newcommand\phitex@ignore[2][]{\phitex@opt}
+\def\phitex@opt{\@ifnextchar[\phitex@drop\relax}
+\def\phitex@drop[#1]{}
+\newcommand\setmainfont{\phitex@ignore}
+\newcommand\setsansfont{\phitex@ignore}
+\newcommand\setmonofont{\phitex@ignore}
+\newcommand\setmathrm{\phitex@ignore}
+\newcommand\setboldmathrm{\phitex@ignore}
+\newcommand\setmathsf{\phitex@ignore}
+\newcommand\setmathtt{\phitex@ignore}
+\newcommand\defaultfontfeatures[2][]{}
+\newcommand\addfontfeatures[1]{}
+\let\addfontfeature\addfontfeatures
+\newcommand\newfontfamily[1]{\def#1{\normalfont}\phitex@ignore}
+\let\setfontfamily\newfontfamily
+\let\renewfontfamily\newfontfamily
+\let\providefontfamily\newfontfamily
+\newcommand\newfontface[1]{\def#1{\normalfont}\phitex@ignore}
+\let\setfontface\newfontface
+\let\renewfontface\newfontface
+\newcommand\fontspec{\phitex@ignore}
+\newcommand\newfontlanguage[2]{}
+\newcommand\newfontscript[2]{}
+\newcommand\IfFontExistsTF[3]{#3}
+\endinput

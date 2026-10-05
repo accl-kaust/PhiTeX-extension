@@ -1,0 +1,21 @@
+% PhiTeX Instant: polyglossia stood in for by babel, under pdfLaTeX (no
+% XeTeX yet): Latin-script languages through babel's own .ini files; others
+% are ignored (pdfTeX's fonts have no glyphs for them).
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{polyglossia}[2026/10/05 PhiTeX stand-in (babel)]
+\DeclareOption*{}\ProcessOptions\relax
+\RequirePackage{fontspec}
+\RequirePackage[english]{babel}
+\def\phitex@langs{,english,british,american,french,german,ngerman,spanish,italian,portuguese,brazilian,dutch,swedish,danish,norsk,nynorsk,finnish,polish,czech,slovak,slovene,croatian,hungarian,romanian,turkish,catalan,basque,galician,irish,welsh,latin,estonian,latvian,lithuanian,icelandic,indonesian,malay,}
+\newcommand\phitex@lang[2]{\@expandtwoargs\in@{,#2,}{\phitex@langs}%
+  \ifin@\@ifundefined{phitex@has@#2}{\expandafter\let\csname phitex@has@#2\endcsname\relax
+    \expandafter\newcommand\csname text#2\endcsname[2][]{\foreignlanguage{#2}{##2}}}{}%
+    \babelprovide[import#1]{#2}\fi}
+\newcommand\setdefaultlanguage[2][]{\phitex@lang{,main}{#2}}
+\let\setmainlanguage\setdefaultlanguage
+\newcommand\setotherlanguage[2][]{\phitex@lang{}{#2}}
+\newcommand\setotherlanguages[1]{\@for\phitex@l:=#1\do{\expandafter\setotherlanguage\expandafter{\phitex@l}}}
+\newcommand\setlanguagealias[3][]{}
+\newcommand\textlang[3][]{\@expandtwoargs\in@{,#2,}{\phitex@langs}\ifin@\foreignlanguage{#2}{#3}\else#3\fi}
+\newenvironment{lang}[2][]{}{}
+\endinput

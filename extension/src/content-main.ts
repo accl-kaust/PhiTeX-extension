@@ -9,7 +9,7 @@ import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
-import { resolve, type Engine, type EngineChoice } from "./engines.ts";
+import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
 import { cached, DELIVERED } from "./packages.ts";
 import { drawPage } from "./tabrender.ts";
 
@@ -871,10 +871,12 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
         panel.msg("No complete PDF yet: the build stopped before the end of the document (see ⓘ diagnostics). Fix that, or download Overleaf's compiled PDF from the ▾ menu.", true);
         return;
       }
+      // (a XeLaTeX project approximated: asked again, the file named so)
+      if (panel.approx && !confirm("This PDF is an approximation: the project needs XeLaTeX, and ⚡ Instant made it with pdfLaTeX, its fonts substituted and its layout possibly different from Overleaf's.\n\nFor the real PDF, use Overleaf's (the PDF tab).\n\nDownload the approximation anyway?")) return;
       const url = URL.createObjectURL(new Blob([pdf as BlobPart], { type: "application/pdf" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${(session.main ?? "phitex").replace(/\.tex$/, "").replace(/.*\//, "")}-instant.pdf`;
+      a.download = `${(session.main ?? "phitex").replace(/\.tex$/, "").replace(/.*\//, "")}${panel.approx ? "-approx" : ""}-instant.pdf`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },
@@ -1008,6 +1010,13 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     });
     session = new PreviewSession(new OverleafHost(panel), transport, tee(panel, ch, () => mirrored), {
       engine: (main) => resolve(engineSetting, projectEngine, main),
+      // (a XeLaTeX project: approximated with pdfLaTeX, unless chosen for it)
+      shims: async (main) => {
+        if (projectEngine || !approximable(main)) return null;
+        const out: Record<string, string> = {};
+        for (const n of SHIMS) out[n] = await (await fetch(chrome.runtime.getURL("shims/" + n))).text();
+        return out;
+      },
       format: (saved as PanelPrefs | undefined)?.format ?? "vector",
       packages: cached({
         label: "TeX Live 2026",

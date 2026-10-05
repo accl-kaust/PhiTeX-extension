@@ -1,0 +1,24 @@
+% PhiTeX Instant: unicode-math stood in for, under pdfLaTeX (no XeTeX yet).
+% amsmath and amssymb; \setmathfont ignored; the common \sym... commands.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{unicode-math}[2026/10/05 PhiTeX stand-in (fonts ignored)]
+\DeclareOption*{}\ProcessOptions\relax
+\RequirePackage{fontspec}
+\RequirePackage{amsmath,amssymb,bm}
+\newcommand\setmathfont[2][]{}
+\newcommand\unimathsetup[1]{}
+\providecommand\symbf[1]{\bm{#1}}
+\providecommand\symit[1]{\mathit{#1}}
+\providecommand\symrm[1]{\mathrm{#1}}
+\providecommand\symup[1]{\mathrm{#1}}
+\providecommand\symsf[1]{\mathsf{#1}}
+\providecommand\symtt[1]{\mathtt{#1}}
+\providecommand\symcal[1]{\mathcal{#1}}
+\providecommand\symscr[1]{\mathcal{#1}}
+\providecommand\symbb[1]{\mathbb{#1}}
+\providecommand\symfrak[1]{\mathfrak{#1}}
+\providecommand\symbfit[1]{\bm{#1}}
+\providecommand\symbfup[1]{\mathbf{#1}}
+\providecommand\mathbfit[1]{\bm{#1}}
+\providecommand\mathscr[1]{\mathcal{#1}}
+\endinput

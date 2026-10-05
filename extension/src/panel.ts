@@ -271,6 +271,8 @@ button.btn:hover { background: var(--accent2); }
 .banner { position: sticky; top: -12px; z-index: 1; display: none; margin: -12px -12px 10px; padding: 6px 10px; text-align: left; font-size: 12px;
   background: var(--bg-warning-03, #fcf1e3); color: var(--warn); border-bottom: 1px solid var(--divider); }
 .stage.stale .banner { display: block; }
+.approx { position: sticky; top: -12px; z-index: 1; display: none; margin: -12px -12px 10px; padding: 6px 10px; text-align: left; font-size: 12px; background: #fff4d6; color: #5c4400; border-bottom: 1px solid #e8c766; }
+.win.docked .approx { margin: 0; top: 0; }
 .stage.fit { overflow-x: hidden; }
 .empty { color: var(--fg2); padding: 40px 12px; font-size: 13px; }
 footer { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: var(--light2); border-top: 1px solid var(--divider);
@@ -477,7 +479,7 @@ export class Panel {
       <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
       To turn it off: <code>chrome://extensions</code>.</div>
     </div>
-    <div class="stage" id="stage"><div class="banner" id="banner"></div><div class="empty" id="empty"><div class="load"><div class="steps"><span class="now">Project read</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div><h3>Reading the project…</h3><div class="bar busy"><i></i></div></div></div><div class="viewer" id="viewer"></div></div>
+    <div class="stage" id="stage"><div class="approx" id="approx"></div><div class="banner" id="banner"></div><div class="empty" id="empty"><div class="load"><div class="steps"><span class="now">Project read</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div><h3>Reading the project…</h3><div class="bar busy"><i></i></div></div></div><div class="viewer" id="viewer"></div></div>
   </div>
   <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
 </div>`).replace(/<span class="icon"(?: aria-hidden="true")?>(\w+)<\/span>/g, (_, n) => icon(n, n === "download" ? 16 : 18));
@@ -756,9 +758,15 @@ export class Panel {
 
   /** The engine the session runs, as it last said. */
   private engineNow?: { engine: Engine; ready: boolean };
+  /** A XeLaTeX project shown approximated with pdfLaTeX (fonts substituted). */
+  approx = false;
 
-  engine(e: { engine: Engine; ready: boolean }): void {
+  engine(e: { engine: Engine; ready: boolean; approx?: boolean }): void {
     this.engineNow = e;
+    this.approx = !!e.approx;
+    const a = this.$("#approx");
+    a.style.display = this.approx ? "block" : "none";
+    a.textContent = `Approximate: needs ${ENGINES[e.engine].label}, shown with pdfLaTeX (fonts substituted, breaks may differ). Overleaf's PDF is the real one.`;
     if (!e.ready) this.stopped();
     else if (this.$("#empty").querySelector(".engine")) this.$("#empty").style.display = "none";
   }

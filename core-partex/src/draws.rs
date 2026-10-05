@@ -30,12 +30,14 @@ struct Walk<'a> {
 }
 
 /// What a page draws, in scaled points from the page's top left.
+#[derive(Clone)]
 pub enum Draw {
     Char { x: i64, y: i64, font: i32, ch: i32, width: i64 },
     Rule { x: i64, y: i64, w: i64, h: i64 },
 }
 
 /// A TeX font: its name (`cmr10`) and size, in scaled points.
+#[derive(Clone)]
 pub struct Font {
     pub name: String,
     pub size: i64,

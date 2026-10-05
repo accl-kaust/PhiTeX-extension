@@ -29,6 +29,7 @@ fn tfm_widths(tfm: &[u8], size: i64) -> Option<BTreeMap<i32, i64>> {
 }
 
 /// One page: its draws, the fonts they name, its specials' text.
+#[derive(Clone)]
 pub struct DviPage {
     pub draws: Vec<Draw>,
     pub specials: String,

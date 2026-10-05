@@ -13,8 +13,9 @@ export interface Draws2 {
   h: number;
   f: string[];
   /** [font, size, y, "x x ...", text, 1 if its glyphs are drawn from outlines];
-   * or [-1, size, y, "x x ...", "", outline font, codes]: the glyphs. */
-  t: (([number, number, number, string, string] | [number, number, number, string, string, 1]) | [-1, number, number, string, "", number, number[]])[];
+   * or [-1, size, y, "x x ...", "", outline font, codes]: the glyphs; either
+   * with a colour last when not black (a text run's sixth field then 0 or 1). */
+  t: (([number, number, number, string, string] | [number, number, number, string, string, 0 | 1, string?]) | [-1, number, number, string, "", number, number[], string?])[];
   /** The outline fonts' names (ids), by the glyph runs' font. */
   F?: string[];
   /** Outlines by "font:code": SVG path data in 1/1000 em, y up. */
@@ -68,14 +69,14 @@ export function elements(d: Draws2): string[] {
   const gid = (fr: number, c: number) => `g${d.F?.[fr] ?? fr}_${c}`;
   for (const r of d.t) {
     if (r[0] === -1) {
-      const [, size, y, xs, , fr, codes] = r as [-1, number, number, string, "", number, number[]];
+      const [, size, y, xs, , fr, codes, colour] = r as [-1, number, number, string, "", number, number[], string?];
       const k = size / 1000;
       const x = xs.split(" ");
-      out.push(`<g transform="translate(0 ${y}) scale(${k} ${-k})">${codes.map((c, i) => `<use href="#${gid(fr, c)}" x="${(+x[i] / k).toFixed(1)}"/>`).join("")}</g>`);
+      out.push(`<g transform="translate(0 ${y}) scale(${k} ${-k})"${colour ? ` fill="${esc(colour)}"` : ""}>${codes.map((c, i) => `<use href="#${gid(fr, c)}" x="${(+x[i] / k).toFixed(1)}"/>`).join("")}</g>`);
       continue;
     }
-    const [f, size, y, xs, text, outlined] = r as [number, number, number, string, string, 1?];
-    out.push(`<text x="${xs}" y="${y}" font-size="${size}" font-family="${esc(FAMILY[d.f[f]] ?? FAMILY.roman)}"${outlined ? ' fill-opacity="0"' : ""}>${esc(text)}</text>`);
+    const [f, size, y, xs, text, outlined, colour] = r as [number, number, number, string, string, (0 | 1)?, string?];
+    out.push(`<text x="${xs}" y="${y}" font-size="${size}" font-family="${esc(FAMILY[d.f[f]] ?? FAMILY.roman)}"${outlined ? ' fill-opacity="0"' : colour ? ` style="fill:${esc(colour)}"` : ""}>${esc(text)}</text>`);
   }
   return out;
 }

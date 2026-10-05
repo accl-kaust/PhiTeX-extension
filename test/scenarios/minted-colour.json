@@ -1,0 +1,4 @@
+{ "project": "test/scenarios/minted", "name": "minted-colour",
+  "steps": [ { "idle": 6000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; const s = new Set(); for (const e of r?.querySelectorAll('svg.page g[fill], svg.page text[style]') ?? []) s.add(e.getAttribute('fill') ?? e.getAttribute('style')); return [...s].sort().join(' '); })()", "page": true },
+    { "shot": "minted-colour" } ] }

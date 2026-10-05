@@ -411,6 +411,8 @@ pub struct Session {
     page_sums: Vec<pdfdraw::PageSum>,
     /// The PDF's first byte the last link changed (None: unknown, hash all).
     pdf_first: Option<usize>,
+    /// The next link is a full one (the last kept the pages of the trip before).
+    relink: bool,
     /// The incremental link's state for the tracked job.
     lk: LinkState,
     /// What Shelf packs gave (wasm): every file of every pack fetched, for every later build.
@@ -603,6 +605,7 @@ impl Session {
             history_log: Vec::new(),
             page_sums: Vec::new(),
             pdf_first: None,
+            relink: false,
             lk: LinkState::default(),
             shelf: shelf::Cache::default(),
             cold_ms: 0.0,
@@ -856,7 +859,12 @@ impl Session {
             self.changed.clear();
             let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
             host.fallback = self.fallback();
-            let mut tex = Tex::new(host, SsaTracker::new(Recorder::new()), texlive_params(false));
+            let tracker = SsaTracker::new(Recorder::new());
+            // (a keystroke whose job ends fatally, no legal \end: its cut
+            // .aux is not the next keystroke's, the last complete trip's
+            // streams stay, and it leaves no PDF: the last good pages stay)
+            tracker.keep_complete.set(true);
+            let mut tex = Tex::new(host, tracker, texlive_params(false));
             // (windows: steps cut inside long runs, a tikzpicture's say, at
             // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
             tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
@@ -976,7 +984,12 @@ impl Session {
         let tex = self.tex.as_mut().unwrap();
         // (exactly once per link: the steps' chunks changed since the last)
         let changes = ssa::take_step_changes(&mut tex.tracker().rec.borrow_mut());
-        let full = std::env::var("PHITEX_LINK_FULL").is_ok() || !self.link_spliced(changes);
+        // (a job that ended fatally leaves no PDF, as pdfTeX's
+        // remove_pdffile: the last good pages stay, and the next link is a
+        // full one, its splice state having followed this trip's)
+        let fatal = tex.fatal_pdf().is_some();
+        let kept = fatal.then(|| (self.pdf.clone(), self.dvi.clone(), self.pdf_first, self.pdf_hashes.clone(), self.pages.clone(), self.fonts.clone()));
+        let full = std::mem::take(&mut self.relink) || std::env::var("PHITEX_LINK_FULL").is_ok() || !self.link_spliced(changes);
         // (traced: each incremental link checked against a full one)
         if !full && self.trace {
             let (pdf, dvi) = (self.pdf.clone(), self.dvi.clone());
@@ -998,7 +1011,17 @@ impl Session {
         let tex = self.tex.as_mut().unwrap();
         // (the build's tools' outputs: .bbl, .blg, .ind, .ilg)
         let produced = ssa::produced_streams(tex);
+        // (a trip that ended fatally: the streams it cut, .aux say, put
+        // back as the last complete trip wrote them, as the CLI's
+        // SsaLinker::write_produced)
+        let withheld = ssa::withheld_streams(tex);
         let h = tex.host_mut();
+        for (n, b) in withheld {
+            match b {
+                Some(b) => _ = h.files.insert(n, b),
+                None => _ = h.files.remove(&n),
+            }
+        }
         for (n, b) in produced {
             let Some(b) = b else { continue };
             if h.files.get(&n).is_none_or(|o| o[..] != b[..]) {
@@ -1014,6 +1037,10 @@ impl Session {
         self.missing.retain(|n| !self.files.contains_key(n) && !self.bytes.contains_key(n));
         self.missing.sort();
         self.missing.dedup();
+        if let Some((pdf, dvi, first, hashes, pages, fonts)) = kept {
+            (self.pdf, self.dvi, self.pdf_first, self.pdf_hashes, self.pages, self.fonts) = (pdf, dvi, first, hashes, pages, fonts);
+            self.relink = true;
+        }
     }
 
     /// The incremental link of `changes`; false: the full link is to be made.

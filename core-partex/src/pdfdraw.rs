@@ -780,12 +780,16 @@ fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64, used: &mut st
         }
         // (a run whose glyphs are drawn from outlines is text for selection
         // only: a sixth field, 1)
+        // (a colour other than black: one more field, after the sixth, 0 or 1)
+        let black = g.fill == "#000000";
         for (size, y, xs, txt) in runs {
-            let _ = write!(text, "{}[{},{},{},{},{}{}]", if text.is_empty() { "" } else { "," }, font.key, r2(size), r2(page_h - y), esc(&xs), esc(&txt), if outl { ",1" } else { "" });
+            let tail = if !black { format!(",{},{}", u8::from(outl), esc(&g.fill)) } else if outl { ",1".into() } else { String::new() };
+            let _ = write!(text, "{}[{},{},{},{},{}{tail}]", if text.is_empty() { "" } else { "," }, font.key, r2(size), r2(page_h - y), esc(&xs), esc(&txt));
         }
-        // (the glyphs from outlines: [-1, size, y, xs, "", font ref, codes])
+        // (the glyphs from outlines: [-1, size, y, xs, "", font ref, codes, colour?])
         if !codes.is_empty() {
-            let _ = write!(text, "{}[-1,{},{},{},\"\",{},[{codes}]]", if text.is_empty() { "" } else { "," }, r2(scale), r2(page_h - y0), esc(&gxs), font.fref);
+            let colour = if black { String::new() } else { format!(",{}", esc(&g.fill)) };
+            let _ = write!(text, "{}[-1,{},{},{},\"\",{},[{codes}]{colour}]", if text.is_empty() { "" } else { "," }, r2(scale), r2(page_h - y0), esc(&gxs), font.fref);
         }
     };
     while let Some(o) = l.value() {

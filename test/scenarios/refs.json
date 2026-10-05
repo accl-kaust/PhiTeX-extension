@@ -1,0 +1,7 @@
+{ "project": "test/scenarios/refs", "name": "refs",
+  "steps": [ { "idle": 4000 },
+    { "replace": "\\newcommand\\petals{5}", "with": "\\newcommand\\petals{}" }, { "wait": 600 }, { "pdfsave": "a-petals-empty" },
+    { "replace": "\\newcommand\\petals{}", "with": "\\newcommand\\petals{7}" }, { "wait": 600 }, { "pdfsave": "b-petals-7" },
+    { "replace": "\\[ x = 1 \\]", "with": "\\[ \\frac{\\p} \\]" }, { "wait": 600 }, { "pdfsave": "c-frac-p" },
+    { "replace": "\\[ \\frac{\\p} \\]", "with": "\\[ \\frac{\\pi} \\]" }, { "wait": 600 }, { "pdfsave": "d-frac-pi" },
+    { "idle": 3000 }, { "pdfsave": "e-settled" } ] }

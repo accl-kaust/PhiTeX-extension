@@ -1,0 +1,32 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{tikz}
+\begin{document}
+\section{Introduction}\label{sec:intro}
+Every writer knows the rhythm.
+
+\begin{figure}[h!]
+\centering
+\newcommand\petals{5}
+\begin{tikzpicture}[scale=.6]
+  \foreach \i in {1,...,\petals}
+    \draw[fill=red!15, rotate=\i*360/\petals] (0,0) .. controls (.7,.45) and (1.7,.35) .. (2,0) .. controls (1.7,-.35) and (.7,-.45) .. (0,0);
+\end{tikzpicture}
+\caption{A figure.}\label{fig:live}
+\end{figure}
+
+Section~\ref{sec:method} describes the method and Section~\ref{sec:results} the results~\cite{knuth84}.
+
+\newpage
+\section{Method}\label{sec:method}
+A document is a program.
+\[ x = 1 \]
+
+\newpage
+\section{Results}\label{sec:results}
+It works.
+
+\begin{thebibliography}{9}
+\bibitem{knuth84} D.~E. Knuth. \emph{The \TeX book}. 1984.
+\end{thebibliography}
+\end{document}

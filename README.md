@@ -183,6 +183,7 @@ unpacked*, and pick `extension/`.
 Development:
 
     scripts/build.sh --dev                          # also runs on the local mock
+    scripts/sandbox scripts/mock-editor.sh          # the mock's editor (once): CodeMirror 6 + Overleaf's LaTeX grammar → mock/build/
     scripts/sandbox --net node mock/server.mjs      # mock Overleaf at http://localhost:8123/project/mock
     scripts/chrome.sh [url]                         # Chromium with the extension, DevTools on :9222
     scripts/sandbox node --test test/               # TypeScript and wasm tests

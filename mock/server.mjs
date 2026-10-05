@@ -1,5 +1,5 @@
 // A local stand-in for Overleaf: the editor page (overleaf.html, a mock of
-// its DOM and of CodeMirror 6's EditorView surface) at /project/mock, and
+// its DOM, with CodeMirror 6 itself: mock/editor/, scripts/mock-editor.sh) at /project/mock, and
 // the endpoints the extension reads: /entities, /doc/:id/download,
 // /download/zip. Edits made in the mock are kept in memory (as a server).
 //   node mock/server.mjs [port]
@@ -103,6 +103,12 @@ http.createServer((req, res) => {
   let m;
   if (u.pathname === "/project/mock" || u.pathname === "/project/mock/")
     return send(200, "text/html; charset=utf-8", fs.readFileSync(path.join(dir, "overleaf.html")));
+  // (the editor: CodeMirror 6 and Overleaf's grammar, scripts/mock-editor.sh)
+  if (u.pathname === "/project/mock/editor.js") {
+    const f = path.join(dir, "build/editor.js");
+    if (!fs.existsSync(f)) return send(404, "text/plain", "mock/build/editor.js: run scripts/sandbox scripts/mock-editor.sh");
+    return send(200, "text/javascript; charset=utf-8", fs.readFileSync(f));
+  }
   if (u.pathname === "/project/mock/entities")
     return send(200, "application/json", JSON.stringify({ project_id: "mock", entities: [...docs.values()].map((d) => ({ path: "/" + d.path, type: "doc" })).concat([...files.keys()].map((p) => ({ path: "/" + p, type: "file" }))) }));
   if (u.pathname === "/project/mock/docs")

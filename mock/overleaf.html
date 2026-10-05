@@ -31,22 +31,20 @@
   .file-tree-list { list-style: none; padding: 0; }
   [role=treeitem] { padding: 3px 6px; cursor: pointer; border-radius: 3px; }
   [role=treeitem][aria-selected=true] { background: #138a07; color: #fff; }
-  main { display: flex; flex-direction: column; }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .bar { padding: 6px; border-bottom: 1px solid #ddd; display: flex; gap: 6px; }
-  .cm-editor { flex: 1; display: flex; }
   /* Overleaf's PDF pane, as far as the extension docks into it: .pdf, its .toolbar-pdf (left: compile group; right), .pdf-viewer */
   .pdf { position: relative; display: flex; flex-direction: column; border-left: 1px solid #ddd; background: #3c4b5c; min-width: 0; }
   .toolbar-pdf { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 6px; background: #1b222c; color: #fff; }
   .toolbar-pdf-left { display: flex; align-items: center; gap: 6px; }
   .compile-button-group button { background: #138a07; color: #fff; border: 0; border-radius: 9999px; padding: 4px 12px; font-weight: 600; }
   .pdf-viewer { flex: 1; display: grid; place-items: center; color: #c9d1d9; font-size: 13px; }
-  .cm-content { flex: 1; font: 13px/1.5 ui-monospace, monospace; border: 0; padding: 8px; resize: none; }
 </style>
 </head>
 <body>
 <nav>
   <b>Mock Overleaf</b>
-  <p style="color:#666;font-size:12px">The DOM surface the extension reads: the file tree, <code>.cm-content.cmView.view</code>, and the project endpoints.</p>
+  <p style="color:#666;font-size:12px">The DOM surface the extension reads: the file tree, CodeMirror 6 (<code>.cm-content</code>), and the project endpoints.</p>
   <ul class="list-unstyled file-tree-folder-list file-tree-list" role="tree" id="tree"></ul>
   <div class="outline-container"><b style="font-size:12px">File outline</b><ul class="outline-item-list" id="outline" style="list-style:none;padding:0 0 0 4px;font-size:12px"></ul></div>
 </nav>
@@ -55,78 +53,19 @@
     <button id="collab" title="A remote transaction: two changes at once, non-ASCII">Collaborator edit</button>
     <span id="info" style="color:#666"></span>
   </div>
-  <div class="cm-editor"><textarea class="cm-content" spellcheck="false"></textarea></div>
+  <div id="editor" style="flex:1;display:flex;min-height:0"></div>
 </main>
 <div class="pdf full-size">
   <div class="toolbar-pdf"><div class="toolbar-pdf-left"><div class="compile-button-group"><button type="button" id="recompile" title="Compile with the local pdflatex, as Overleaf compiles">Recompile</button></div></div><div class="toolbar-pdf-right"></div></div>
   <div class="pdf-viewer" id="olpdf">Overleaf's PDF: press Recompile (the local pdflatex)</div>
 </div>
 <script type="module">
-// A mock of CodeMirror 6's EditorView, as far as the extension uses it:
-// state.doc, update(transactions) with changes.iterChanges, setState.
-class Text {
-  constructor(s) { this.s = s; }
-  get length() { return this.s.length; }
-  toString() { return this.s; }
-  sliceString(a, b) { return this.s.slice(a, b); }
-  get lines() { return this.s.split("\n").length; }
-  line(n) {
-    let from = 0;
-    for (let k = 1; k < n; k++) from = this.s.indexOf("\n", from) + 1;
-    const to = this.s.indexOf("\n", from);
-    return { number: n, from, to: to < 0 ? this.s.length : to };
-  }
-}
-/** Changes in the start doc's positions, sorted, not overlapping (as CM's). */
-class ChangeSet {
-  constructor(changes) { this.changes = changes; }
-  get length() { return this.changes.length; }
-  iterChanges(f) {
-    let shift = 0;
-    for (const c of this.changes) {
-      const fromB = c.from + shift;
-      f(c.from, c.to, fromB, fromB + c.insert.length, new Text(c.insert));
-      shift += c.insert.length - (c.to - c.from);
-    }
-  }
-  apply(s) {
-    let out = "", at = 0;
-    for (const c of this.changes) { out += s.slice(at, c.from) + c.insert; at = c.to; }
-    return out + s.slice(at);
-  }
-}
-class EditorView {
-  constructor(el, doc) { this.el = el; this.state = { doc: new Text(doc) }; }
-  update(trs) {
-    for (const tr of trs) this.state = tr.state;
-    if (this.el.value !== this.state.doc.toString()) this.el.value = this.state.doc.toString();
-  }
-  setState(s) { this.state = s; this.el.value = s.doc.toString(); }
-  /** (the textarea's selection, as CM's state has it) */
-  // (a selection change is a transaction, as in CM6: the extension's hook sees it in update)
-  syncSelection() {
-    const m = this.state.selection?.main;
-    if (m && m.anchor === this.el.selectionStart && m.head === this.el.selectionEnd) return;
-    this.update([{ selection: true, changes: { length: 0 }, state: { ...this.state, selection: { main: { anchor: this.el.selectionStart, head: this.el.selectionEnd } } } }]);
-  }
-  focus() { this.el.focus(); }
-  dispatch(spec) {
-    if (spec.selection) {
-      const { anchor, head = anchor } = spec.selection;
-      this.update([{ selection: true, changes: { length: 0 }, state: { ...this.state, selection: { main: { anchor, head } } } }]);
-      // (as CM6: a dispatch doesn't take focus; view.focus() does)
-      this.el.setSelectionRange(Math.min(anchor, head), Math.max(anchor, head));
-      if (!spec.changes) return;
-    }
-    const cs = new ChangeSet([].concat(spec.changes ?? []).sort((a, b) => a.from - b.from).map((c) => ({ from: c.from, to: c.to ?? c.from, insert: c.insert ?? "" })));
-    const tr = { changes: cs, docChanged: cs.length > 0, state: { doc: new Text(cs.apply(this.state.doc.toString())) } };
-    this.update([tr]);
-  }
-}
-
-const ta = document.querySelector(".cm-content");
-const view = new EditorView(ta, "");
-ta.cmView = { view };
+// CodeMirror 6, as Overleaf runs it (mock/editor/editor.mjs, bundled by
+// scripts/mock-editor.sh): the extension's hook finds its EditorView from
+// `.cm-editor .cm-content`, as on overleaf.com.
+import { EditorState, EditorView, extensions } from "/project/mock/editor.js";
+const ext = extensions(() => {});
+const view = new EditorView({ state: EditorState.create({ doc: "", extensions: ext }), parent: document.getElementById("editor") });
 let docs = await (await fetch("/project/mock/docs")).json();
 let current = null;
 
@@ -153,8 +92,7 @@ async function openDoc(d) {
   await save();
   current = d;
   const fresh = await (await fetch(`/project/mock/doc/${d.id}/download`)).text();
-  view.setState({ doc: new Text(fresh) });
-  prev = fresh;
+  view.setState(EditorState.create({ doc: fresh, extensions: ext }));
   renderTree();
   renderOutline();
 }
@@ -178,17 +116,6 @@ function renderOutline() {
     ul.append(li);
   }
 }
-for (const ev of ["select", "keyup", "mouseup", "dblclick"]) ta.addEventListener(ev, () => view.syncSelection());
-
-// Typing: the textarea's change as one transaction (as CM would make).
-let prev = "";
-ta.addEventListener("input", () => {
-  const s = ta.value;
-  let a = 0; while (a < prev.length && a < s.length && prev[a] === s[a]) a++;
-  let z = 0; while (z < prev.length - a && z < s.length - a && prev[prev.length - 1 - z] === s[s.length - 1 - z]) z++;
-  view.dispatch({ changes: { from: a, to: prev.length - z, insert: s.slice(a, s.length - z) } });
-  prev = s;
-});
 setInterval(save, 2000);
 
 // Recompile: the local pdflatex, as Overleaf's compile; its PDF in the pane,
@@ -215,15 +142,16 @@ document.getElementById("recompile").addEventListener("click", async () => {
 document.getElementById("collab").onclick = () => {
   const n = view.state.doc.length;
   view.dispatch({ changes: [{ from: 0, insert: "% ✎ collaborator 😀\n" }, { from: Math.floor(n / 2), to: Math.floor(n / 2), insert: " (ünïcode) " }] });
-  prev = view.state.doc.toString();
 };
 
 // For tests driving the page: type as a user would, at a UTF-16 position.
 window.mockEditor = {
   view,
-  type(at, text) { view.dispatch({ changes: { from: at, insert: text } }); prev = view.state.doc.toString(); },
-  replace(from, to, text) { view.dispatch({ changes: { from, to, insert: text } }); prev = view.state.doc.toString(); },
-  multi(changes) { view.dispatch({ changes }); prev = view.state.doc.toString(); },
+  type(at, text) { view.dispatch({ changes: { from: at, insert: text }, userEvent: "input.type" }); },
+  replace(from, to, text) { view.dispatch({ changes: { from, to, insert: text }, userEvent: "input" }); },
+  multi(changes) { view.dispatch({ changes }); },
+  /** The selection, as a click or drag makes it (then focus, as a click). */
+  select(anchor, head = anchor) { view.dispatch({ selection: { anchor, head }, userEvent: "select.pointer" }); view.focus(); },
   open: (path) => openDoc(docs.find((d) => d.path === path)),
   text: () => view.state.doc.toString(),
 };

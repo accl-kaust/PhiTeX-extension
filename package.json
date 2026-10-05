@@ -9,7 +9,15 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {
+    "@codemirror/commands": "^6.10.1",
+    "@codemirror/language": "^6.12.1",
+    "@codemirror/state": "^6.5.4",
+    "@codemirror/view": "^6.38.6",
+    "@lezer/generator": "^1.8.0",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/lr": "^1.4.7",
     "@types/chrome": "^0.1.0",
+    "esbuild": "^0.28.2",
     "typescript": "^6.0.0"
   },
   "license": "AGPL-3.0-only",

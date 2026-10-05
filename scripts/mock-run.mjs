@@ -132,6 +132,15 @@ try {
 
 // the first page
 for (let i = 0; i < 100 && !(await state())?.pages; i++) await sleep(300);
+// (none: why, from the page, not after the idle's 15 minutes)
+if (!(await state())?.pages) {
+  console.log("no first page in 30 s; the session:", JSON.stringify(await state()));
+  console.log("editor:", await evalIn(`(() => { const c = document.querySelector(".cm-editor .cm-content"); return c ? "cm-content" + (c.cmView || c.cmTile ? ", with its view" : ", no view") : typeof mockEditor; })()`));
+  for (const e of events) console.log(`  ${e.t} ms  ${e.k}  ${String(e.d).slice(0, 400)}`);
+  for (const l of workerLog.slice(-20)) console.log("  worker:", l.slice(0, 400));
+  try { process.kill(-mock.pid); } catch {}
+  process.exit(1);
+}
 // ("noidle": the steps start at the first page, while the core readies its rebuilds)
 if (!sc.noidle) await idle();
 const steps = [];
@@ -224,12 +233,12 @@ for (const s of sc.steps ?? []) {
     console.log("dbloutline →", JSON.stringify(s.result));
   } else if (s.cursor !== undefined) {
     // (the cursor put inside that text, as a click: the page follows it, no double-click)
-    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.cursor)}) + 2; const ta = document.querySelector(".cm-content"); ta.focus(); ta.setSelectionRange(i, i); ta.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); })()`);
+    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.cursor)}) + 2; mockEditor.select(i); document.querySelector(".cm-content").dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); })()`);
     await sleep(150);
     s.result = await evalIn(`(() => { const ms = [...(document.querySelector('phitex-preview')?.shadowRoot ?? document).querySelectorAll(".mark:not(.sel)")]; return ms.map((m) => [m.parentElement.dataset.k, m.style.left, m.style.top, m.style.width]); })()`, true);
     console.log("cursor →", JSON.stringify(s.result));
   } else if (s.dbltext !== undefined) {
-    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.dbltext)}); const ta = document.querySelector(".cm-content"); ta.focus(); ta.setSelectionRange(i, i + 3); ta.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
+    await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.dbltext)}); mockEditor.select(i, i + 3); document.querySelector(".cm-content").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); })()`);
     await sleep(700);
     s.result = await evalIn(`(() => { const ms = [...(document.querySelector('phitex-preview')?.shadowRoot ?? document).querySelectorAll(".mark")]; return ms.map((m) => [m.parentElement.dataset.k, m.style.left, m.style.top, m.style.width]); })()`, true);
     console.log("dbltext →", JSON.stringify(s.result));

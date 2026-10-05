@@ -1,4 +1,4 @@
-.chrome-profile/
+.chrome-profile*/
 target/
 extension/dist/
 node_modules/
@@ -7,6 +7,5 @@ extension/LICENSE.txt
 extension/NOTICE.txt
 store/*.zip
 extension/texmf/
-.chrome-profile-2/
-.chrome-profile-3/
 extension/packs/
+extension/minted/

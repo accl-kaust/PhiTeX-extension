@@ -3,6 +3,7 @@
 // port to the offscreen document's worker for the core, and the panel.
 
 import type { Edit } from "./edits.ts";
+import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
 import { unseen, type News } from "./news.ts";
@@ -916,6 +917,27 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     if (e.data.type === "select" && (highlightMode !== "dblclick" || e.data.from === e.data.to)) void session?.selectSource(e.data.file, e.data.from, e.data.to);
   });
   const transport = new ChromeTransport();
+  // (Shelf's release, release.ts: an extension older than it needs asks for
+  // an update, and its notice shows; both once per page, and it keeps working)
+  let releaseShown = false;
+  transport.onEvent((e) => {
+    if (e.event !== "release" || !e.release || releaseShown) return;
+    const min = e.release.min_extension;
+    const lines: string[] = [];
+    if (min && older(chrome.runtime.getManifest().version, min))
+      lines.push(`A newer PhiTeX Instant is out (${min}): this one keeps working, but update it for the latest packages and fixes. In Chrome: chrome://extensions → <b>Update</b>.`);
+    if (e.release.notice) lines.push(escapeHtml(e.release.notice));
+    if (!lines.length) return;
+    releaseShown = true;
+    if (lines.length && min && older(chrome.runtime.getManifest().version, min)) void chrome.runtime.sendMessage({ type: "update-check" }).catch(() => undefined);
+    const t = document.createElement("div");
+    t.className = "popover bs-popover-top show phitex-toast";
+    t.setAttribute("role", "status");
+    t.innerHTML = `<div class="popover-body">⚡ ${lines.join("<br>")}</div>`;
+    Object.assign(t.style, { position: "fixed", right: "16px", bottom: "16px", maxWidth: "340px", zIndex: "1060" });
+    document.body.append(t);
+    t.onclick = () => t.remove();
+  });
   try {
     await transport.connect();
     giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);
@@ -973,4 +995,8 @@ function b64of(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
   return btoa(s);
+}
+
+function escapeHtml(t: string): string {
+  return t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }

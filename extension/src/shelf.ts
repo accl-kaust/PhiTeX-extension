@@ -9,12 +9,15 @@
 //      the .def, .cfg and .fd files it reads, and every file of the pack is
 //      kept in IndexedDB.
 //
-// Which pack holds a name is in the extension (shelf-index.tsv.gz, made by
-// Shelf's build): no request to learn it, and a name the index lacks (a
-// project's own file it doesn't have) never leaves the browser.
+// Which pack holds a name is in an index the extension holds (shipped, and
+// newer releases of it fetched daily, release.ts): no request to learn it,
+// and a name the index lacks (a project's own file it doesn't have) never
+// leaves the browser.
 
 // (Cloudflare Pages' own address until there is a domain: shelf.phitex.org)
 export const SHELF = "https://shelf-phitex.pages.dev/tl2026/";
+
+import { indexBytes, packUrl } from "./release.ts";
 
 const once = <T>(f: () => Promise<T>) => {
   let p: Promise<T> | undefined;
@@ -28,12 +31,12 @@ const bundled = once(async () => names(await (await fetch(chrome.runtime.getURL(
 /** What the core's assets hold (the format, fonts, the popular packages): never fetched. */
 const inCore = once(async () => names(await (await fetch(chrome.runtime.getURL("dist/assets-names.txt"))).text()));
 
-/** Name → pack, from the extension's copy of Shelf's index. */
+/** Name → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
 const index = once(async () => {
-  const r = await fetch(chrome.runtime.getURL("shelf-index.tsv.gz"));
-  if (!r.ok) throw new Error(`shelf index: ${r.status}`);
+  const { gz } = await indexBytes(() => fetch(chrome.runtime.getURL("shelf-index.tsv.gz")));
   const m = new Map<string, Row>();
-  for (const line of new TextDecoder().decode(await gunzip(r)).split("\n")) {
+  const text = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
+  for (const line of text.split("\n")) {
     const [name, pack, deps] = line.split("\t");
     if (name && pack) m.set(name, { pack, deps: deps ? deps.split(",") : [] });
   }
@@ -104,7 +107,7 @@ function pack(id: string): Promise<Map<string, Uint8Array>> {
   let p = packs.get(id);
   if (!p) {
     p = (async () => {
-      const url = (await shipped()).has(id) ? chrome.runtime.getURL(`packs/${id}.pack`) : SHELF + "p/" + encodeURIComponent(id) + ".pack";
+      const url = (await shipped()).has(id) ? chrome.runtime.getURL(`packs/${id}.pack`) : packUrl(id);
       const get = async (cache: RequestCache) => {
         const r = await fetch(url, { cache });
         return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();

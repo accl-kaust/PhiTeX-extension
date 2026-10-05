@@ -55,9 +55,18 @@
     return out.length ? out : null;
   }
 
+  let identifyTries = 0;
   function identify(): void {
     const name = openFile();
     if (!view) return;
+    // (the file's name not on the page yet: Overleaf draws its breadcrumbs
+    // after the editor; looked for again, else a double-click on the page
+    // went nowhere until the first keystroke)
+    if (name === null) {
+      if (identifyTries++ < 50) setTimeout(identify, 200);
+      return;
+    }
+    identifyTries = 0;
     file = name;
     post({ type: "open", file: name, text: view.state.doc.toString() });
     if (held.length) post({ type: "changes", file: name, edits: held.flat() });

@@ -56,6 +56,16 @@ rm -rf extension/fonts && mkdir -p extension/fonts
 cp $lm/lm/lmroman10-{regular,bold,italic,bolditalic}.otf $lm/lm/lmmono10-regular.otf $lm/lm-math/latinmodern-math.otf extension/fonts/
 # pdf.js (Apache-2.0), the PDF-mode page renderer (pdfrender.ts)
 mkdir -p extension/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs node_modules/pdfjs-dist/build/pdf.worker.min.mjs node_modules/pdfjs-dist/LICENSE extension/dist/pdfjs/
+# minted: Pyodide (Python in wasm), the engine's latexminted runner, and TeX
+# Live's four wheels (latexminted, latexrestricted, latex2pydata, Pygments);
+# bundled, loaded by the worker only for a project that uses minted
+mkdir -p extension/dist/pyodide extension/dist/minted extension/minted
+cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,python_stdlib.zip,pyodide-lock.json,package.json} extension/dist/pyodide/
+partex_dir=$(sed -n 's|^partex-core = { path = "\(.*\)/crates/partex-core" }|\1|p' core-partex/Cargo.toml)
+cp "core-partex/$partex_dir/tools/minted-pyodide/runner.mjs" extension/dist/minted/
+: > extension/minted/wheels.txt
+for w in /usr/share/texmf-dist/scripts/minted/*.whl; do cp "$w" extension/minted/; basename "$w" >> extension/minted/wheels.txt; done
+echo "minted: $(du -sh extension/dist/pyodide | cut -f1) Pyodide, $(wc -l < extension/minted/wheels.txt) wheels"
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
 dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done

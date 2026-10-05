@@ -32,6 +32,7 @@ pub mod dvi;
 pub mod pdfdraw;
 mod bib;
 mod shelf;
+pub mod system;
 pub mod type1;
 
 pub use draws::draws_json;
@@ -210,6 +211,30 @@ impl Host for MemHost {
         self.later.insert(id);
         Some((WriteId(id), n))
     }
+    /// `\write18`: the worker's runner (latexminted in Pyodide, system.rs),
+    /// over the project's files, what the job wrote and the build's own
+    /// version of the job's files, the last winning.
+    fn system(&mut self, command: &[u8], inputs: &[(Vec<u8>, Arc<[u8]>)]) -> Option<partex_core::host::Ran> {
+        if !system::on() {
+            return None;
+        }
+        let mut files: BTreeMap<&[u8], &[u8]> = BTreeMap::new();
+        files.extend(self.files.iter().map(|(n, c)| (&n[..], &c[..])));
+        files.extend(self.written.iter().map(|(n, c)| (&n[..], &c[..])));
+        files.extend(inputs.iter().map(|(n, c)| (&n[..], &c[..])));
+        let (status, wrote, removed) = system::run(command, &files)?;
+        // (read back by the job as files: the next \input of them finds them)
+        for (n, c) in &wrote {
+            self.files.insert(n.clone(), c.clone());
+        }
+        for n in &removed {
+            self.files.remove(n);
+        }
+        Some(partex_core::host::Ran { status, wrote, removed, stdout: Vec::new() })
+    }
+    fn runs_commands(&self) -> bool {
+        system::on()
+    }
     fn output_edited(&mut self, name: &[u8]) -> bool {
         // (outputs are the build's: no one edits a .aux in the editor; one
         // the link never wrote is read as an edit, as the default)
@@ -277,6 +302,13 @@ pub fn texlive_params(ini: bool) -> Params {
         max_print_line: 79,
         hash_extra: 600_000,
         expand_depth: 10_000,
+        // (pdflatex's default: restricted shell escape, TeX Live's list;
+        // a command runs only where the worker has a runner, system.rs)
+        shell_escape: true,
+        restricted_shell: true,
+        shell_escape_commands: partex_core::shell::command_list(
+            b"bibtex,bibtex8,extractbb,gregorio,kpsewhich,l3sys-query,latexminted,makeindex,memoize-extract.pl,memoize-extract.py,repstopdf,r-mpost,texosquery-jre8,",
+        ),
         ..Params::default()
     }
 }
@@ -1744,6 +1776,12 @@ mod abi {
             t
         })
         .unwrap_or_default());
+    }
+
+    /// The worker has (`on` 1) a `\write18` runner loaded (system.rs).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_set_system(on: u32) {
+        super::system::ON.store(on != 0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Trace session `h`'s rebuilds (`on` 1) into its build log (`ph_log`).

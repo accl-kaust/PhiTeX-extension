@@ -14,6 +14,7 @@
   },
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "pdfjs-dist": "5.7.284"
+    "pdfjs-dist": "5.7.284",
+    "pyodide": "314.0.7"
   }
 }

@@ -6,14 +6,19 @@
 # checkout's public/ (SHELF_DIR) if there, else downloaded (needs --net).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-src="${SHELF_DIR:-$HOME/code/flinner/shelf.PhiTeX.org/public}/tl2026/p"
+# (by the names the shipped index gives them: content-named, under h/)
+src="${SHELF_DIR:-$HOME/code/flinner/shelf.PhiTeX.org/releases}/tl2026/h"
+rm -rf extension/packs
 mkdir -p extension/packs
 : > extension/packs/list.txt
+named=$(gzip -dc shelf-index.tsv.gz | cut -f2 | sort -u)
 while read -r id; do
   [ -z "$id" ] && continue
-  if [ -f "$src/$id.pack" ]; then cp "$src/$id.pack" "extension/packs/$id.pack"
-  elif [ ! -f "extension/packs/$id.pack" ]; then curl -fsS -o "extension/packs/$id.pack" "https://shelf-phitex.pages.dev/tl2026/p/$id.pack"
+  h=$(grep -E "^${id//./\.}-[0-9a-f]{12}$" <<<"$named" | head -1 || true)
+  [ -z "$h" ] && { echo "bundled pack $id: not in the shipped index" >&2; exit 1; }
+  if [ -f "$src/$h.pack" ]; then cp "$src/$h.pack" "extension/packs/$h.pack"
+  else curl -fsS -o "extension/packs/$h.pack" "https://shelf-phitex.pages.dev/tl2026/h/$h.pack"
   fi
-  echo "$id" >> extension/packs/list.txt
+  echo "$h" >> extension/packs/list.txt
 done < data/bundled-packs.txt
 echo "extension/packs: $(wc -l < extension/packs/list.txt) packs, $(du -sh extension/packs | cut -f1)"

@@ -161,7 +161,7 @@ for (const s of sc.steps ?? []) {
   } else if (s.recompile) await evalIn(`document.getElementById("recompile").click()`);
   else if (s.eval !== undefined) {
     // (an expression in the content script's world, for debugging)
-    s.result = await evalIn(s.eval, true);
+    s.result = await evalIn(s.eval, !s.page);
     console.log("eval →", JSON.stringify(s.result));
   } else if (s.dblpage) {
     const [k, fx, fy] = s.dblpage;

@@ -1,0 +1,5 @@
+{ "project": "test/scenarios/minted", "name": "minted",
+  "steps": [ { "idle": 4000 }, { "shot": "minted" },
+    { "replace": "range(n)", "with": "range(n + 1)" }, { "idle": 3000 },
+    { "type": " Edited.", "after": "More prose after it." }, { "idle": 3000 },
+    { "shot": "minted-edited" } ] }

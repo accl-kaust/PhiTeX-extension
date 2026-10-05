@@ -5,6 +5,17 @@
 
 import type { Req, Res } from "./worker.ts";
 import { resolve } from "./shelf.ts";
+import { refresh, type Release } from "./release.ts";
+
+/** Shelf's release as last read (release.ts): each tab is told on connecting. */
+let release: Release | undefined;
+const told = (r: Release | undefined) => {
+  release = r;
+  for (const p of ports) p.postMessage({ event: "release", release: r });
+};
+// (at most once a day; a newer index is used by the next worker)
+void refresh().then(told, () => undefined);
+setInterval(() => void refresh().then(told, () => undefined), 3600 * 1000);
 
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
 /**
@@ -55,6 +66,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "phitex") return;
   ports.add(port);
   port.onDisconnect.addListener(() => ports.delete(port));
+  if (release) port.postMessage({ event: "release", release });
   const client = `tab${port.sender?.tab?.id}:${port.sender?.frameId ?? 0}:${Math.random()}`;
   // (binary files, font metrics: given to this client's core session here,
   // since the port carries JSON; again after each open, a new session)

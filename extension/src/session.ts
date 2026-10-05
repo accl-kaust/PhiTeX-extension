@@ -103,7 +103,7 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean } | { event: "settled" };
+export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -280,7 +280,7 @@ export class PreviewSession {
         if (this.opened && !this.busy) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
         return;
       }
-      this.onFetching(e);
+      if (e.event === "fetching") this.onFetching(e);
     });
     this.core = {
       request: async (r) => {
@@ -688,13 +688,21 @@ export class PreviewSession {
    */
   private mapGlyphs(file: string, start: number, end: number, len: number): void {
     const map = (p: number) => (p < start ? p : p >= end ? p + len - (end - start) : start + len);
-    for (const gs of this.glyphCache.values())
+    for (const [key, gs] of this.glyphCache) {
+      // (a page with a glyph whose source the edit replaced: its glyphs
+      // asked again, not mapped: all of them would land at the edit's end;
+      // a whole document replaced did that to every page)
+      if (end > start && gs.some((g) => g.file === file && g.start < end && g.end > start)) {
+        this.glyphCache.delete(key);
+        continue;
+      }
       for (const g of gs) {
         if (g.file !== file) continue;
         const [a, b] = [map(g.start), map(g.end)];
         g.start = a;
         g.end = Math.max(a, b);
       }
+    }
   }
 
   /** Page `k`'s glyphs if they are here, at once (no request, no waiting on a build). */

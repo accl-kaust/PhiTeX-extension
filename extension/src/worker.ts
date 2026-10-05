@@ -1,4 +1,4 @@
-import { SHELF } from "./shelf.ts";
+import { indexBytes, packUrl } from "./release.ts";
 // The PhiTeX core in a dedicated worker: the wasm (wasm32-wasip1) on a
 // minimal WASI shim, one session per client (an Overleaf tab).
 //
@@ -50,6 +50,8 @@ interface Core {
   ph_out_ptr(): number;
   ph_out_len(): number;
   ph_open(p: number, n: number): number;
+  /** The worker has a \\write18 runner (minted). */
+  ph_set_system?(on: number): void;
   ph_close(h: number): void;
   ph_edit(h: number, p: number, n: number, page: number, dpi: number): number;
   ph_png_last(): void;
@@ -91,12 +93,12 @@ let bundledNames: Set<string> | undefined;
 /** Shelf packs the extension ships (packs/: the ones most documents load), read from it, not Shelf. */
 let bundledPacks = new Set<string>();
 let fetched: Uint8Array | undefined;
-const SHELF_P = SHELF + "p/";
 
 async function loadShelf(): Promise<void> {
   if (shelfIndex) return;
-  const gz = await fetch(new URL("../shelf-index.tsv.gz", import.meta.url));
-  const tsv = await new Response(gz.body!.pipeThrough(new DecompressionStream("gzip"))).text();
+  // (Shelf's newest release this extension has, else its own copy: release.ts)
+  const { gz } = await indexBytes(() => fetch(new URL("../shelf-index.tsv.gz", import.meta.url)));
+  const tsv = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
   const m = new Map<string, string[]>();
   for (const l of tsv.split("\n")) {
     const [name, pack, deps] = l.split("\t");
@@ -135,6 +137,82 @@ function framed(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/**
+ * `\write18` (core-partex system.rs): latexminted with Pygments in Pyodide,
+ * the engine's tools/minted-pyodide runner, loaded (and bundled: no code
+ * from the network) only for a project that uses minted; the core runs
+ * commands only once it is (`ph_set_system`).
+ */
+type Runner = { system(command: string, files: [string, Uint8Array][]): { status: number; wrote: Map<string, Uint8Array>; removed: string[] } };
+let minted: Runner | undefined;
+let mintedLoading: Promise<void> | undefined;
+
+/** Whether a project's sources load minted. */
+export function usesMinted(files: Record<string, string>): boolean {
+  return Object.values(files).some((t) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t));
+}
+
+function loadMinted(): Promise<void> {
+  mintedLoading ??= (async () => {
+    const t0 = performance.now();
+    const at = (p: string) => new URL(p, import.meta.url).href;
+    const { loadPyodide } = await import(/* @vite-ignore */ at("pyodide/pyodide.mjs"));
+    const { createMintedRunner } = await import(/* @vite-ignore */ at("minted/runner.mjs"));
+    const names = (await (await fetch(at("../minted/wheels.txt"))).text()).split("\n").filter(Boolean);
+    const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await fetch(at("../minted/" + n))).arrayBuffer())]));
+    minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("pyodide/") }, wheels });
+    core.ph_set_system?.(1);
+    console.log(`minted: Pyodide and latexminted loaded in ${Math.round(performance.now() - t0)} ms`);
+  })();
+  return mintedLoading;
+}
+
+function systemImports(mem: () => WebAssembly.Memory) {
+  const dec = new TextDecoder(), enc = new TextEncoder();
+  let pending = new Uint8Array(0);
+  const bytes = (p: number, n: number) => new Uint8Array(mem().buffer, p >>> 0, n >>> 0);
+  const unframe = (b: Uint8Array): [string, Uint8Array][] => {
+    const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    let at = 0;
+    const out: [string, Uint8Array][] = [];
+    for (let n = v.getUint32(0, true), i = (at = 4, 0); i < n; i++) {
+      const k = v.getUint32(at, true);
+      const name = dec.decode(b.subarray(at + 4, at + 4 + k));
+      at += 4 + k;
+      const l = v.getUint32(at, true);
+      out.push([name, b.slice(at + 4, at + 4 + l)]);
+      at += 4 + l;
+    }
+    return out;
+  };
+  // (u32 n, (u32 len, name, u32 len, bytes) × n: n files, not parts)
+  const frame = (files: [string, Uint8Array][]) => {
+    const f = framed(files.flatMap(([n, b]) => [enc.encode(n), b]));
+    new DataView(f.buffer).setUint32(0, files.length, true);
+    return f;
+  };
+  return {
+    system_run(cmdPtr: number, cmdLen: number, filesPtr: number, filesLen: number): number {
+      const command = dec.decode(bytes(cmdPtr, cmdLen).slice());
+      let status = 127 << 8, wrote: [string, Uint8Array][] = [], removed: string[] = [];
+      if (minted) {
+        const r = minted.system(command, unframe(bytes(filesPtr, filesLen).slice()));
+        (status = r.status), (wrote = [...r.wrote]), (removed = r.removed);
+      }
+      const a = frame(wrote), b = frame(removed.map((n) => [n, new Uint8Array(0)]));
+      pending = new Uint8Array(4 + a.length + b.length);
+      new DataView(pending.buffer).setInt32(0, status, true);
+      pending.set(a, 4);
+      pending.set(b, 4 + a.length);
+      return pending.length;
+    },
+    system_copy(dst: number): void {
+      bytes(dst, pending.length).set(pending);
+      pending = new Uint8Array(0);
+    },
+  };
+}
+
 function shelfImports(mem: () => WebAssembly.Memory) {
   return {
     fetch(ptr: number, len: number): number {
@@ -152,7 +230,7 @@ function shelfImports(mem: () => WebAssembly.Memory) {
         for (const id of shelfIndex?.get(name) ?? []) {
           const here = bundledPacks.has(id);
           if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
-          const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : SHELF_P + encodeURIComponent(id) + ".pack");
+          const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));
           if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
         }
       }
@@ -270,7 +348,10 @@ async function load(): Promise<void> {
   module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
   let memory: WebAssembly.Memory | undefined;
   if (!DRAW) await loadShelf().catch(() => undefined);
-  const inst = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi(() => memory!), phitex: shelfImports(() => memory!) });
+  const inst = await WebAssembly.instantiate(module, {
+    wasi_snapshot_preview1: wasi(() => memory!),
+    phitex: { ...shelfImports(() => memory!), ...systemImports(() => memory!) },
+  });
   core = inst.exports as unknown as Core;
   memory = core.memory;
   core._initialize?.();
@@ -578,6 +659,9 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
   }
   try {
     await ready;
+    // (a project that uses minted: Pyodide loaded before its first build,
+    // as \\write18 runs synchronously inside it)
+    if (r.op === "open" && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
     res = handle(r);
     shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)

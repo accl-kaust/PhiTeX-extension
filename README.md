@@ -27,7 +27,12 @@ looking at is repainted first.
   Ctrl+F, and it stays sharp at any zoom.
 - **Source ↔ page**: double-click the page to jump to that word in the
   editor (opening its file). Double-click in the editor, or on a heading in
-  Overleaf's file outline, to highlight that line on the page.
+  Overleaf's file outline, to highlight it on the page. A setting makes the
+  yellow highlight follow your cursor or your selection instead.
+- **Bibliographies, indexes and minted**: BibTeX and makeindex run inside
+  the build, and re-run only for what changed. `minted` works too:
+  latexminted and Pygments run as Python in WebAssembly, loaded only for a
+  project that uses minted.
 - **Diagnostics**: a badge counts errors and warnings. Click an entry to
   jump to its line. When an edit breaks the document (an unclosed `{`, say),
   the last good page stays on screen, dimmed, with the reason.
@@ -38,8 +43,9 @@ looking at is repainted first.
 
 ## Install
 
-From the Chrome Web Store: *(link coming with the public release)*.
-It works in Chrome, Edge, Brave and other Chromium browsers.
+From the Chrome Web Store, Microsoft Edge Add-ons or Firefox Add-ons
+*(links coming with the public release)*. It works in Chrome, Edge, Brave
+and other Chromium browsers, and in Firefox 128 or later.
 
 Open any project on `https://www.overleaf.com/project/…`, switch the PDF
 pane to **⚡ Instant**, and accept the short terms (unofficial,
@@ -64,6 +70,8 @@ Click the extension's ⚡ icon in the browser toolbar:
 | Enable on Overleaf | Off: Overleaf exactly as it is, immediately. |
 | Opens with | Which view a project opens in: Overleaf's PDF or ⚡ Instant. |
 | Page | Vector (selectable text) or PNG. |
+| PDF highlight | When the yellow highlight shows on the page: following the cursor, the selection, or only on a double-click. |
+| Engine | pdfLaTeX (XeLaTeX and LuaLaTeX: not yet). |
 | Show the ⚡ ms chip | The small timer at the bottom of the pane that shows how fast each keystroke reached the page. |
 | Package cache | How many TeX Live files are kept in this browser and their size. **Clear** removes them; they are downloaded again when next needed. |
 | Tips / What's new | The welcome tip and release notes, on or off. |
@@ -73,16 +81,19 @@ Click the extension's ⚡ icon in the browser toolbar:
 
 **Your documents never leave your browser.**
 
-- The typesetter runs locally, as WebAssembly inside the extension. No code
-  is downloaded at run time.
+- The typesetter runs locally, as WebAssembly inside the extension, and so
+  does Python for `minted`. No code is downloaded at run time.
 - The extension reads your project from overleaf.com as you, the same way
   Overleaf's editor does. It never writes to Overleaf and never changes your
   documents.
 - For a TeX package it doesn't bundle, it downloads that package from
   **Shelf** (`shelf-phitex.pages.dev`, static files on Cloudflare Pages)
-  with a plain GET request such as `…/tl2026/p/tikz.pack`. Which file holds
-  which package is listed inside the extension, so only package names are
-  requested. No document text, file name of yours, or identifier is sent.
+  with a plain GET request such as `…/tl2026/h/pgf-3f9a2c41b0de.pack`. Which
+  file holds which package is listed in an index inside the extension, so
+  only package names are requested. At most once a day the extension also
+  reads `…/tl2026/release.json` to learn of a newer index (new packages,
+  fixes), which it then downloads. No document text, file name of yours, or
+  identifier is sent.
   Cloudflare sees the request and your IP address, as with any website.
   Shelf keeps no logs of its own.
 - No analytics, no accounts, no tracking. Settings are kept in the
@@ -92,7 +103,8 @@ Click the extension's ⚡ icon in the browser toolbar:
 The full policy is in [PRIVACY.md](PRIVACY.md).
 
 Permissions:
-- `offscreen`: runs the typesetter in a background worker;
+- `offscreen` (Chrome, Edge): runs the typesetter in a background worker
+  (in Firefox, the extension's background page does);
 - `storage`: keeps the settings;
 - `activeTab`: lets the settings popup start the tour in the open tab;
 - access to `https://www.overleaf.com/project/*` only.
@@ -106,17 +118,24 @@ Overleaf's is right.
   (`fontspec`, `unicode-math`, `polyglossia`, …) can't be previewed yet. The
   card says so and offers pdfLaTeX anyway; Settings → Engine chooses for
   every project, the card for one.
-- **Images**: PDF and JPEG figures work. PNG figures don't yet; the
-  diagnostics say so.
+- **Images**: PDF, PNG and JPEG figures work.
+- **Shell escape** is restricted, as in TeX Live's `pdflatex`, and only
+  `minted`'s command runs: packages that run other programs (`gnuplottex`,
+  `svg`, `epstopdf` conversions) take their no-shell path. A minted code
+  block takes a second or two to update; prose around it stays instant.
 - **Some packages and fonts aren't fully supported yet.** One example is
   `microtype`'s font expansion (used by `acmart` and other classes). When the
   engine stops on something it can't do, the diagnostics name it.
 - **Speed varies with what you edit.** Ordinary text and headings update in
   a few milliseconds. Editing a macro that a big TikZ picture uses on every
   point can take a second or more.
-- **Bibliographies and cross-references** use the `.aux`/`.bbl` from the
-  last run, as a single `pdflatex` run would. Unresolved `\ref`s show as
-  `??` until Overleaf has compiled.
+- **Bibliographies and cross-references** settle in the background, as
+  `latexmk` would: BibTeX runs inside the build, and references update a
+  moment after you stop typing. Only BibTeX and makeindex run (no biber or
+  xindy).
+- **Large documents** need memory and time on first open: a 64-page thesis
+  shows its pages in about half a minute, and is ready for instant edits
+  after a minute or two.
 - **Source ↔ page** works for text. Figures and lines that come only from
   a macro (a section number, say) map to the macro's call.
 - It depends on Overleaf's page structure, which is not a public API. If
@@ -147,9 +166,8 @@ flinner@nand.sh. Nothing is sent unless you send it.
 
 ## Building from source
 
-> The PhiTeX engine this extension embeds is not public yet. It will be
-> published separately. Until then the extension can't be built from this
-> repository alone.
+> The PhiTeX engine this extension embeds (accl-kaust/PhiTeX) is not public
+> yet. Until it is, the extension can't be built from this repository alone.
 
 With the engine checked out, you need the Rust toolchain pinned in
 `rust-toolchain.toml` with the `wasm32-wasip1` target, Node ≥ 22, and
@@ -209,11 +227,18 @@ Overleaf page                                            extension
 - `session.ts` knows neither Overleaf nor Chrome (`EditorHost`,
   `CoreTransport`, `PreviewSink`), so other editors could reuse it.
 
-Store kit: `scripts/package.sh` builds the upload zip, `STORE.md` has the
-listing text, and `store/` has the screenshots and icons.
+Store kit: `scripts/package.sh` builds the upload zips (Chrome Web Store
+and Edge; Firefox: a background page instead of the offscreen document),
+`STORE.md` has the listing text, and `store/` has the screenshots and icons.
 
 ## License
 
 GNU Affero General Public License, **version 3 only** (`AGPL-3.0-only`); see
-[LICENSE](LICENSE) and [NOTICE](NOTICE). Provided as is, without any
-warranty.
+[LICENSE](LICENSE) and [NOTICE](NOTICE). This applies to every revision of
+this repository, including any with earlier or placeholder license
+metadata. Provided as is, without any warranty.
+
+Bundled third-party components keep their own licenses: TeX Live's files
+(mostly LPPL), Pyodide (MPL-2.0), Pygments (BSD-2-Clause), latexminted and
+latexrestricted (LPPL-1.3c), latex2pydata (BSD-3-Clause), pdf.js
+(Apache-2.0).

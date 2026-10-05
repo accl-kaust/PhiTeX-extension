@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{minted}
+\begin{document}
+\section{Code}
+Some prose before the listing.
+
+\begin{minted}{python}
+def petals(n):
+    return [360 / n * i for i in range(n)]
+
+print(petals(5))
+\end{minted}
+
+More prose after it.
+\end{document}

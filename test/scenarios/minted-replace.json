@@ -1,0 +1,19 @@
+{
+ "project": "test/scenarios/refs",
+ "name": "minted-replace",
+ "steps": [
+  {
+   "idle": 4000
+  },
+  {
+   "eval": "(() => { const t = mockEditor.text(); mockEditor.replace(0, t.length, \"\\\\documentclass{article}\\n\\\\usepackage{minted}\\n\\\\begin{document}\\n\\\\section{Code}\\nSome prose before the listing.\\n\\n\\\\begin{minted}{python}\\ndef petals(n):\\n    return [360 / n * i for i in range(n)]\\n\\nprint(petals(5))\\n\\\\end{minted}\\n\\nMore prose after it.\\n\\\\end{document}\\n\"); return 1; })()",
+   "page": true
+  },
+  {
+   "idle": 4000
+  },
+  {
+   "pdfsave": "colored"
+  }
+ ]
+}

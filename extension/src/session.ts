@@ -10,6 +10,9 @@
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
 import { ENGINES, type Engine } from "./engines.ts";
 import { report } from "./report.ts";
+
+/** Whether a source loads minted (as the worker's own test, worker.ts). */
+const usesMinted = (t: string) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t);
 import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
@@ -396,6 +399,9 @@ export class PreviewSession {
     return this.reopen();
   }
 
+  /** Whether the open's sources used minted (the worker then has its runner). */
+  private minted = false;
+
   /** A fresh core session from the texts with every queued edit in. */
   async reopen(): Promise<void> {
     if (!this.main) return this.sink.error("no main .tex file found");
@@ -415,6 +421,8 @@ export class PreviewSession {
       return;
     }
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
+    // (an open with minted in the sources loads the worker's \write18 runner, Pyodide)
+    this.minted = Object.values(this.files).some(usesMinted);
     const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...this.files }, fuel: this.o.fuel, engine });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
@@ -984,6 +992,14 @@ export class PreviewSession {
     const tSend = this.now();
     const edits = b.take();
     this.files[file] = b.text;
+    // (minted appearing in a project opened without it, by a paste or a
+    // whole replace: opened again, so the worker loads its runner first;
+    // an edit would have run minted's command with none, and kept that)
+    if (!this.minted && usesMinted(b.text)) {
+      this.tr("minted: open again, with its runner", {});
+      await this.reopen();
+      return false;
+    }
     for (const [i, e] of edits.entries()) {
       const last = i === edits.length - 1;
       this.builds++;

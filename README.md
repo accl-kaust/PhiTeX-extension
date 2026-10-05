@@ -45,7 +45,7 @@ looking at is repainted first.
 
 From the Chrome Web Store, Microsoft Edge Add-ons or Firefox Add-ons
 *(links coming with the public release)*. It works in Chrome, Edge, Brave
-and other Chromium browsers, and in Firefox 128 or later.
+and other Chromium browsers, and in Firefox 142 or later.
 
 Open any project on `https://www.overleaf.com/project/…`, switch the PDF
 pane to **⚡ Instant**, and accept the short terms (unofficial,

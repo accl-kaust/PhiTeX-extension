@@ -3,7 +3,7 @@
 // into a paragraph, each drawing the page it is on. Prints JSON:
 // { open_ms, first_ms, edits: [ms…], median, p90 }.
 //   node scripts/wasm-bench.mjs CORE.wasm DIST_DIR MAIN.tex [--edits N] [--at TEXT] [--packs DIR]
-// DIST_DIR: the built extension (extension/dist/..: assets.bin.gz, texmf/,
+// DIST_DIR: the built extension (extension/dist/..: assets.bin.gzdata, texmf/,
 // packs/, shelf-index.tsv.gz). Shelf packs not bundled are read from --packs
 // DIR (default target/bench-packs); with --net, a missing one is fetched from
 // Shelf into it, so a run elsewhere needs no network once that has run here.
@@ -77,7 +77,7 @@ x._initialize?.();
 const call = (buf, g) => { const p = x.ph_alloc(buf.length); new Uint8Array(mem.buffer, p >>> 0, buf.length).set(buf); try { return g(p, buf.length); } finally { x.ph_free(p, buf.length); } };
 const str = (s) => { const b = enc.encode(s); return [u32(b.length), b]; };
 const out = () => dec.decode(new Uint8Array(mem.buffer, x.ph_out_ptr() >>> 0, x.ph_out_len() >>> 0));
-call(gunzipSync(fs.readFileSync(path.join(dist, "assets.bin.gz"))), (p, n) => x.ph_assets(p, n));
+call(gunzipSync(fs.readFileSync(path.join(dist, "assets.bin.gzdata"))), (p, n) => x.ph_assets(p, n));
 
 const main = fs.readFileSync(mainPath, "utf8"), name = path.basename(mainPath);
 let t = performance.now();

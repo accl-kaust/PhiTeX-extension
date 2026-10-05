@@ -43,7 +43,7 @@ export interface Res {
 
 interface Core {
   memory: WebAssembly.Memory;
-  /** The partex core: the LaTeX format and fonts (assets.bin.gz, gunzipped). */
+  /** The partex core: the LaTeX format and fonts (assets.bin.gzdata: gzip, gunzipped). */
   ph_assets?(p: number, n: number): number;
   ph_alloc(n: number): number;
   ph_free(p: number, n: number): void;
@@ -97,7 +97,7 @@ let fetched: Uint8Array | undefined;
 async function loadShelf(): Promise<void> {
   if (shelfIndex) return;
   // (Shelf's newest release this extension has, else its own copy: release.ts)
-  const { gz } = await indexBytes(() => fetch(new URL("../shelf-index.tsv.gz", import.meta.url)));
+  const { gz } = await indexBytes(() => fetch(new URL("../shelf-index.tsv.gzdata", import.meta.url)));
   const tsv = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
   const m = new Map<string, string[]>();
   for (const l of tsv.split("\n")) {
@@ -161,8 +161,9 @@ function loadMinted(): Promise<void> {
     const { loadPyodide } = await import(/* @vite-ignore */ at("pyodide/pyodide.mjs"));
     const { createMintedRunner } = await import(/* @vite-ignore */ at("minted/runner.mjs"));
     const names = (await (await fetch(at("../minted/wheels.txt"))).text()).split("\n").filter(Boolean);
-    const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await fetch(at("../minted/" + n))).arrayBuffer())]));
-    minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("pyodide/") }, wheels });
+    const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await fetch(at("../minted/" + n + ".data"))).arrayBuffer())]));
+    // (stdlib and wheels named .data: Edge's store refuses archives in a package)
+    minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("pyodide/"), stdLibURL: at("pyodide/python_stdlib.data") }, wheels });
     core.ph_set_system?.(1);
     mintedStats.load_ms = Math.round(performance.now() - t0);
   })();
@@ -338,7 +339,7 @@ let assets: Promise<Uint8Array> | undefined;
 
 /** The partex core's assets (the format, the fonts' metrics), fetched and gunzipped once. */
 const loadAssets = () =>
-  (assets ??= fetch(new URL("assets.bin.gz", import.meta.url)).then(async (r) => {
+  (assets ??= fetch(new URL("assets.bin.gzdata", import.meta.url)).then(async (r) => {
     if (!r.ok) throw new Error(`assets: ${r.status}`);
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));

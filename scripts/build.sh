@@ -33,7 +33,7 @@ if [ $engine = partex ]; then
     (cd core-partex && CARGO_TARGET_DIR="$PWD/../target/partex" ../scripts/sandbox cargo build --release --bin mkfmt)
     (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
   fi
-  scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gz
+  scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gzdata
 else
   (cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
     cargo build --release --target wasm32-wasip1)
@@ -48,7 +48,8 @@ cp NOTICE extension/NOTICE.txt
 # them before asking Shelf.
 rm -rf extension/texmf && cp -r texmf extension/texmf
 # Shelf's index (name -> pack), made by Shelf's build: scripts/shelf-index.sh
-cp shelf-index.tsv.gz extension/shelf-index.tsv.gz
+# (named .gzdata: Edge's store refuses archives inside a package)
+cp shelf-index.tsv.gz extension/shelf-index.tsv.gzdata
 scripts/sandbox npx tsc -p .
 # Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
 lm=/usr/share/texmf-dist/fonts/opentype/public
@@ -60,11 +61,14 @@ mkdir -p extension/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs no
 # Live's four wheels (latexminted, latexrestricted, latex2pydata, Pygments);
 # bundled, loaded by the worker only for a project that uses minted
 mkdir -p extension/dist/pyodide extension/dist/minted extension/minted
-cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,python_stdlib.zip,pyodide-lock.json,package.json} extension/dist/pyodide/
+cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,pyodide-lock.json,package.json} extension/dist/pyodide/
+# (.data, not .zip or .whl: Edge's store refuses archives inside a package)
+cp node_modules/pyodide/python_stdlib.zip extension/dist/pyodide/python_stdlib.data
+rm -f extension/minted/*.whl
 partex_dir=$(sed -n 's|^partex-core = { path = "\(.*\)/crates/partex-core" }|\1|p' core-partex/Cargo.toml)
 cp "core-partex/$partex_dir/tools/minted-pyodide/runner.mjs" extension/dist/minted/
 : > extension/minted/wheels.txt
-for w in /usr/share/texmf-dist/scripts/minted/*.whl; do cp "$w" extension/minted/; basename "$w" >> extension/minted/wheels.txt; done
+for w in /usr/share/texmf-dist/scripts/minted/*.whl; do cp "$w" "extension/minted/$(basename "$w").data"; basename "$w" >> extension/minted/wheels.txt; done
 echo "minted: $(du -sh extension/dist/pyodide | cut -f1) Pyodide, $(wc -l < extension/minted/wheels.txt) wheels"
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.

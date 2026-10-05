@@ -13,11 +13,13 @@ mkdir -p store
 rm -f "$out"
 
 if grep -q localhost extension/manifest.json; then echo "manifest has localhost: not a release build" >&2; exit 1; fi
-files=(manifest.json popup.html offscreen.html LICENSE.txt NOTICE.txt icons fonts dist texmf packs minted shelf-index.tsv.gz)
+files=(manifest.json popup.html offscreen.html LICENSE.txt NOTICE.txt icons fonts dist texmf packs minted shelf-index.tsv.gzdata)
 for f in "${files[@]}"; do [ -e "extension/$f" ] || { echo "missing extension/$f" >&2; exit 1; }; done
 [ -s extension/dist/core.wasm ] || { echo "no core.wasm" >&2; exit 1; }
 [ -s extension/texmf/names.txt ] || { echo "no texmf/ (scripts/fetch-texmf.sh)" >&2; exit 1; }
-[ -s extension/shelf-index.tsv.gz ] || { echo "no shelf-index.tsv.gz (scripts/shelf-index.sh)" >&2; exit 1; }
+[ -s extension/shelf-index.tsv.gzdata ] || { echo "no shelf-index.tsv.gzdata (scripts/shelf-index.sh, then build.sh)" >&2; exit 1; }
+# (Edge refuses a package that holds archives)
+if find extension/dist extension/minted extension/packs extension/texmf -name "*.zip" -o -name "*.gz" -o -name "*.whl" -o -name "*.tgz" | grep -q .; then echo "an archive in the package (Edge refuses it)" >&2; exit 1; fi
 if grep -q localhost extension/dist/shelf.js; then echo "shelf.js points at localhost: not a release build" >&2; exit 1; fi
 if find extension/dist -name '*.map' | grep -q .; then echo "source maps in dist" >&2; exit 1; fi
 
@@ -35,7 +37,7 @@ p = sys.argv[1]; m = json.load(open(p))
 m["permissions"] = [x for x in m["permissions"] if x != "offscreen"]
 m.pop("minimum_chrome_version", None)
 m["background"] = {"page": "firefox-bg.html"}
-m["browser_specific_settings"] = {"gecko": {"id": "phitex-instant@phitex.org", "strict_min_version": "128.0",
+m["browser_specific_settings"] = {"gecko": {"id": "phitex-instant@phitex.org", "strict_min_version": "142.0",
     "data_collection_permissions": {"required": ["none"]}}}
 json.dump(m, open(p, "w"), indent=2)
 PY

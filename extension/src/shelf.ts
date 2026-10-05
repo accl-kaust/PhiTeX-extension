@@ -33,7 +33,7 @@ const inCore = once(async () => names(await (await fetch(chrome.runtime.getURL("
 
 /** Name → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
 const index = once(async () => {
-  const { gz } = await indexBytes(() => fetch(chrome.runtime.getURL("shelf-index.tsv.gz")));
+  const { gz } = await indexBytes(() => fetch(chrome.runtime.getURL("shelf-index.tsv.gzdata")));
   const m = new Map<string, Row>();
   const text = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
   for (const line of text.split("\n")) {

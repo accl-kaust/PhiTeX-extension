@@ -9,3 +9,4 @@ store/*.zip
 extension/texmf/
 extension/packs/
 extension/minted/
+extension/shelf-index.tsv.gzdata

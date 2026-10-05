@@ -131,10 +131,17 @@ try {
 }
 
 // the first page
-for (let i = 0; i < 100 && !(await state())?.pages; i++) await sleep(300);
+// (a long project's first build may take a minute or more: waited for
+// while the session is building, up to 10 minutes; given up after 30 s
+// only when it builds nothing)
+for (let i = 0; i < 2000; i++) {
+  const st = await state();
+  if (st?.pages || (i >= 100 && !st?.building && !st?.inflight && !st?.loading)) break;
+  await sleep(300);
+}
 // (none: why, from the page, not after the idle's 15 minutes)
 if (!(await state())?.pages) {
-  console.log("no first page in 30 s; the session:", JSON.stringify(await state()));
+  console.log("no first page; the session:", JSON.stringify(await state()));
   console.log("editor:", await evalIn(`(() => { const c = document.querySelector(".cm-editor .cm-content"); return c ? "cm-content" + (c.cmView || c.cmTile ? ", with its view" : ", no view") : typeof mockEditor; })()`));
   for (const e of events) console.log(`  ${e.t} ms  ${e.k}  ${String(e.d).slice(0, 400)}`);
   for (const l of workerLog.slice(-20)) console.log("  worker:", l.slice(0, 400));

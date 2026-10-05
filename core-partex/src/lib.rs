@@ -69,6 +69,9 @@ pub struct MemHost {
     /// The outputs the link last wrote (by name): the build's own, not
     /// edited (`output_edited`).
     pub linked: BTreeSet<Vec<u8>>,
+    /// The project's own files, by name: what a command (`system`) is
+    /// handed, with the job's outputs; not TeX Live's (the assets, Shelf's).
+    pub project: BTreeSet<Vec<u8>>,
 }
 
 fn suffix(kind: FileKind) -> &'static [u8] {
@@ -218,14 +221,18 @@ impl Host for MemHost {
         if !system::on() {
             return None;
         }
+        // (the project's files, what the job and earlier commands wrote, and
+        // what the engine hands it; not TeX Live's 2000 files, 65 MB, which
+        // latexminted never reads and which cost a second a call to copy)
         let mut files: BTreeMap<&[u8], &[u8]> = BTreeMap::new();
-        files.extend(self.files.iter().map(|(n, c)| (&n[..], &c[..])));
+        files.extend(self.files.iter().filter(|(n, _)| self.project.contains(*n) || self.linked.contains(*n) || n.ends_with(b".minted")).map(|(n, c)| (&n[..], &c[..])));
         files.extend(self.written.iter().map(|(n, c)| (&n[..], &c[..])));
         files.extend(inputs.iter().map(|(n, c)| (&n[..], &c[..])));
         let (status, wrote, removed) = system::run(command, &files)?;
         // (read back by the job as files: the next \input of them finds them)
         for (n, c) in &wrote {
             self.files.insert(n.clone(), c.clone());
+            self.project.insert(n.clone());
         }
         for n in &removed {
             self.files.remove(n);
@@ -608,6 +615,11 @@ impl Session {
         }
     }
 
+    /// The project's own files' names (`MemHost::project`).
+    fn project_names(&self) -> BTreeSet<Vec<u8>> {
+        self.files.keys().chain(self.bytes.keys()).map(|n| n.clone().into_bytes()).chain(self.carried.keys().cloned()).collect()
+    }
+
     fn host_files(&self) -> BTreeMap<Vec<u8>, Arc<[u8]>> {
         let mut m = ASSETS.with_borrow(Clone::clone);
         // (the project's own files win: an .aux it ships is its own)
@@ -690,7 +702,7 @@ impl Session {
     fn converge_plain(&mut self) {
         for _ in 0..4 {
             let before = self.carried.clone();
-            let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
+            let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
             host.fallback = self.fallback();
             let streams: Vec<(Vec<u8>, Arc<[u8]>)> = self.carried.iter().filter(|(n, _)| n.ends_with(b".aux")).map(|(n, b)| (n.clone(), b.clone())).collect();
             let (_, lines) = bib::tools(self.bib_memo.clone())(&mut host, &streams);
@@ -842,7 +854,7 @@ impl Session {
             );
         } else {
             self.changed.clear();
-            let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
+            let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
             host.fallback = self.fallback();
             let mut tex = Tex::new(host, SsaTracker::new(Recorder::new()), texlive_params(false));
             // (windows: steps cut inside long runs, a tikzpicture's say, at
@@ -923,7 +935,7 @@ impl Session {
         self.tex = None;
         self.plain = true;
         let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
-        let mut host = MemHost { files: self.host_files(), now: Some(self.started.clone()), ..MemHost::default() };
+        let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
         host.fallback = self.fallback();
         // (its command count, beside the tracked build's: the two compared)
         let mut tex = Tex::new(host, Untracked, texlive_params(false));

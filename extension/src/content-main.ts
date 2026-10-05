@@ -21,7 +21,47 @@ const prefs: Prefs = {
 
 const project = () => location.pathname.replace(/\/$/, "").replace(/\/detached$/, "");
 /** Overleaf's "Open PDF in separate tab": this tab mirrors the editor's (mirror.ts). */
+/**
+ * fetch as the page (its cookies, its origin): Firefox's content scripts
+ * have `content.fetch` for that, their plain fetch being the extension's
+ * (no Overleaf session cookie, a cross-origin request); Chrome's fetch is
+ * the page's already.
+ */
+const rawPageFetch: typeof fetch = (globalThis as unknown as { content?: { fetch?: typeof fetch } }).content?.fetch?.bind((globalThis as unknown as { content: object }).content) ?? fetch;
+const pageFetch: typeof fetch = (u, o) => {
+  devMark(`fetch ${String(u).replace(/^.*\/project\/[^/]+/, "")}`);
+  return rawPageFetch(u, o).then(
+    (r) => (devMark(`fetched ${r.status}`), r),
+    (e) => (devMark(`fetch failed: ${e}`), Promise.reject(e)),
+  );
+};
+
 const DETACHED = /^\/project\/[0-9a-f]{24}\/detached\/?$/.test(location.pathname);
+
+// (debug scripts, on the local mock only, never overleaf.com: the storage
+// as after the onboarding, so no run clicks through the terms and the tour;
+// scripts/onboarded.mjs posts it, then reloads)
+// ("trace": the session's last events and this script's errors, for a
+// browser whose automation can't reach content scripts: Firefox)
+const devErrors: string[] = [];
+/** (localhost only: where startup got to, for the "trace" above) */
+function devMark(m: string): void {
+  if (location.hostname === "localhost") devErrors.push(`${Math.round(performance.now())} ${m}`);
+}
+if (location.hostname === "localhost") {
+  addEventListener("error", (e) => devErrors.push(String(e.error?.stack ?? e.message)));
+  addEventListener("unhandledrejection", (e) => devErrors.push(String((e.reason as Error)?.stack ?? e.reason)));
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || e.data?.src !== "phitex-dev") return;
+    if (e.data.type === "onboard") {
+      const o = e.data.storage;
+      if (o && typeof o === "object") void chrome.storage.local.set(o).then(() => window.postMessage({ src: "phitex-dev", type: "onboarded" }, location.origin));
+    } else if (e.data.type === "trace") {
+      const s = (globalThis as unknown as { __phitexSession?: { trace: unknown[] } }).__phitexSession;
+      window.postMessage({ src: "phitex-dev", type: "traced", trace: JSON.stringify({ session: !!s, trace: s?.trace.slice(-30), errors: devErrors.slice(-30) }) }, location.origin);
+    }
+  });
+}
 /** A detached PDF tab follows this editor tab (then no floating window here: the PDF is there). */
 let mirrored = false;
 /** Closed docs are fetched again this often (collaborators' edits), and diffed in. */
@@ -56,9 +96,18 @@ async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promis
     // files, figures, in one request, ~1 s; given to the core before the
     // first build. No waiting on the file tree, whose collapsed folders
     // never show their docs' ids)
-    const z = await fetch(`${project()}/download/zip`, { credentials: "include" });
+    const z = await pageFetch(`${project()}/download/zip`, { credentials: "include" });
     if (!z.ok) throw new Error(`project download failed: ${z.status}`);
-    const { files: zipped, binaries: bin } = await readZip(await z.arrayBuffer());
+    // (copied into this script's own memory: Firefox's content.fetch gives
+    // the page's ArrayBuffer, which this script's streams (DecompressionStream)
+    // never finish reading)
+    const pageBuf = new Uint8Array(await z.arrayBuffer());
+    const own = new Uint8Array(pageBuf.length);
+    own.set(pageBuf);
+    const zbuf = own.buffer;
+    devMark(`zip ${zbuf.byteLength} bytes`);
+    const { files: zipped, binaries: bin } = await readZip(zbuf);
+    devMark(`unzipped ${Object.keys(zipped).length} files`);
     Object.assign(files, zipped);
     if (giveBinary) await Promise.all(Object.entries(bin).map(([p, b]) => giveBinary!(p, b)));
     panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms; ${Object.keys(bin).length} binary files`);
@@ -66,7 +115,7 @@ async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promis
   }
   // (a refresh, of the docs not open: each by its id, those the tree shows;
   // a doc it doesn't show waits for the next refresh or a reload)
-  const r = await fetch(`${project()}/entities`, { credentials: "include" });
+  const r = await pageFetch(`${project()}/entities`, { credentials: "include" });
   if (!r.ok) throw new Error(`project listing failed: ${r.status}`);
   const { entities } = (await r.json()) as { entities: { path: string; type: string }[] };
   const ids = docIds();
@@ -76,7 +125,7 @@ async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promis
       .map((e) => e.path.replace(/^\//, ""))
       .filter((p) => only(p) && ids.has(p))
       .map(async (p) => {
-        const d = await fetch(`${project()}/doc/${ids.get(p)}/download`, { credentials: "include" });
+        const d = await pageFetch(`${project()}/doc/${ids.get(p)}/download`, { credentials: "include" });
         if (d.ok) files[p] = await d.text();
       }),
   );
@@ -939,7 +988,9 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     t.onclick = () => t.remove();
   });
   try {
+    devMark("connect");
     await transport.connect();
+    devMark("connected");
     giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);
     const { panel: saved } = await chrome.storage.local.get("panel");
     let engineSetting: EngineChoice = "auto", projectEngine: Engine | undefined;
@@ -969,7 +1020,9 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       }),
     });
     (globalThis as any).__phitexSession = session; // (tests, devtools)
+    devMark("start");
     await session.start();
+    devMark("started");
     ch.postMessage({ t: "up" });
     // (closed docs: fetched again and diffed in, so collaborators' edits to
     // them arrive as edits; the open one is live through the editor)

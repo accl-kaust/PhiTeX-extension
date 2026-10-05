@@ -187,6 +187,21 @@ Development:
     scripts/chrome.sh [url]                         # Chromium with the extension, DevTools on :9222
     scripts/sandbox node --test test/               # TypeScript and wasm tests
 
+Debug runs, scripted (no clicking through the terms, the tour or "Next":
+both runners write the onboarded state first, `scripts/onboarded.mjs`, via
+a content-script hook that listens on `localhost` only):
+
+    scripts/sandbox --net node scripts/mock-run.mjs test/scenarios/sync.json   # Chromium, headless: steps, trace, screenshots → target/mock-run/<name>/
+    PHITEX_RUN=1 scripts/sandbox --net node scripts/mock-run.mjs ...           # a second run beside the first (own ports and profile)
+    scripts/package.sh && node scripts/fx-run.mjs                              # Firefox: the store package as a temporary add-on, on the mock
+
+`mock-run.mjs` steps (see its header): `type`, `replace`, `idle`, `shot`,
+`dblpage`, `dbltext`, `cursor`, `select`, `pagesel`, `eval` (`"page": true`
+for the page's world), `trace` (the core's rebuild log in `core-log.txt`),
+`pdfsave`, `auxdump`. `fx-run.mjs` prints the content script's trace and
+errors when no page shows (Firefox's automation can't reach content
+scripts).
+
 The mock imitates the parts of Overleaf the extension reads: the CodeMirror
 editor, the file tree, the project endpoints, and the split PDF pane. After
 a change to the core, restart the browser (`scripts/chrome.sh`), because

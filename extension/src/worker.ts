@@ -145,6 +145,8 @@ function framed(parts: Uint8Array[]): Uint8Array {
  */
 type Runner = { system(command: string, files: [string, Uint8Array][]): { status: number; wrote: Map<string, Uint8Array>; removed: string[] } };
 let minted: Runner | undefined;
+/** What minted cost (status): Pyodide's load, then each command (the last 20). */
+const mintedStats: { load_ms?: number; calls: { cmd: string; files: number; bytes: number; ms: number; wrote: number }[] } = { calls: [] };
 let mintedLoading: Promise<void> | undefined;
 
 /** Whether a project's sources load minted. */
@@ -162,7 +164,7 @@ function loadMinted(): Promise<void> {
     const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await fetch(at("../minted/" + n))).arrayBuffer())]));
     minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("pyodide/") }, wheels });
     core.ph_set_system?.(1);
-    console.log(`minted: Pyodide and latexminted loaded in ${Math.round(performance.now() - t0)} ms`);
+    mintedStats.load_ms = Math.round(performance.now() - t0);
   })();
   return mintedLoading;
 }
@@ -196,8 +198,12 @@ function systemImports(mem: () => WebAssembly.Memory) {
       const command = dec.decode(bytes(cmdPtr, cmdLen).slice());
       let status = 127 << 8, wrote: [string, Uint8Array][] = [], removed: string[] = [];
       if (minted) {
-        const r = minted.system(command, unframe(bytes(filesPtr, filesLen).slice()));
+        const t0 = performance.now();
+        const files = unframe(bytes(filesPtr, filesLen).slice());
+        const r = minted.system(command, files);
         (status = r.status), (wrote = [...r.wrote]), (removed = r.removed);
+        mintedStats.calls.push({ cmd: command.slice(0, 60), files: files.length, bytes: filesLen, ms: Math.round(performance.now() - t0), wrote: wrote.length });
+        if (mintedStats.calls.length > 20) mintedStats.calls.shift();
       }
       const a = frame(wrote), b = frame(removed.map((n) => [n, new Uint8Array(0)]));
       pending = new Uint8Array(4 + a.length + b.length);
@@ -463,9 +469,12 @@ function handle(r: Req): Res {
       if (!png.length && core.ph_assets) return { id: r.id, ok: true, ...pdfPage(h, r.page, r.dpi) };
       return { id: r.id, ok: true, png };
     }
-    case "status":
+    case "status": {
       core.ph_status(h);
-      return { id: r.id, ok: true, json: outJson() };
+      const json = outJson();
+      if (mintedStats.load_ms !== undefined) json.minted = mintedStats;
+      return { id: r.id, ok: true, json };
+    }
     case "log":
       // (debugging: the whole terminal and the job's .log)
       if (!core.ph_log) return { id: r.id, ok: false, error: "this core keeps no log" };

@@ -14,6 +14,9 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
 partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-182fb8a}"
+# (Shelf's checkout, read-only: scripts/bundle-packs.sh takes the bundled
+# packs from its releases; keep-packs.txt is written outside the sandbox)
+shelf="${SHELF_REPO:-$HOME/code/flinner/shelf.PhiTeX.org}"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
 
@@ -46,6 +49,7 @@ args=(
   --bind "$repo" "$repo"
   --ro-bind "$phitex" "$phitex"
   --ro-bind-try "$partex" "$partex"
+  --ro-bind-try "$shelf" "$shelf"
   --chdir "$PWD"
   --clearenv
   --setenv HOME "$HOME"

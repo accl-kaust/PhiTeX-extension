@@ -3,8 +3,10 @@
 # the 100 packages and 15 classes arXiv papers use most, with what they load
 # and their fonts; scripts/bundle-packs.py makes the list from the survey in
 # data/arxiv-*.tsv) into extension/packs/, with list.txt. From a Shelf
-# checkout's releases (SHELF_RELEASES) if there, else downloaded (needs
-# --net). Writes Shelf's keep-packs.txt too (SHELF_REPO/keep-packs.txt):
+# checkout's releases (SHELF_RELEASES; default SHELF_REPO/releases, e.g.
+# SHELF_RELEASES=$SHELF_REPO/releases-s3 for a local schema-3 release; the
+# sandbox binds SHELF_REPO read-only), else downloaded from the live Shelf
+# (needs --net). Writes Shelf's keep-packs.txt too (SHELF_REPO/keep-packs.txt):
 # release.py's GC keeps the packs a shipped extension bundles.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,5 +27,6 @@ while read -r id; do
   fi
   echo "$h" >> extension/packs/list.txt
 done < data/bundled-packs.txt
-if [ -d "$repo" ]; then cp extension/packs/list.txt "$repo/keep-packs.txt"; fi
+# (in scripts/sandbox the checkout is read-only: run once outside it to write the list)
+if [ -d "$repo" ]; then cp extension/packs/list.txt "$repo/keep-packs.txt" 2>/dev/null || echo "keep-packs.txt: $repo read-only here, not written" >&2; fi
 echo "extension/packs: $(wc -l < extension/packs/list.txt) packs, $(du -sh extension/packs | cut -f1)"

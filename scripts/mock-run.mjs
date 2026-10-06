@@ -189,6 +189,33 @@ for (const s of sc.steps ?? []) {
   } else if (s.replace !== undefined) {
     await evalIn(`(() => { const t = mockEditor.text(), i = t.indexOf(${JSON.stringify(s.replace)}); if (i >= 0) mockEditor.replace(i, i + ${JSON.stringify(s.replace)}.length, ${JSON.stringify(s.with ?? "")}); })()`);
   } else if (s.idle !== undefined) await idle(s.idle);
+  // ({"cpu": ms}: the tab's main thread over ms with nothing typed: CPU
+  // time by kind (Performance metrics) and the hottest functions (a
+  // sampled CPU profile), page and content script alike)
+  else if (s.cpu !== undefined) {
+    const metrics = async () => Object.fromEntries((await call("Performance.getMetrics")).result.metrics.map((m) => [m.name, m.value]));
+    await call("Performance.enable");
+    await call("Profiler.enable");
+    await call("Profiler.setSamplingInterval", { interval: 1000 });
+    const m0 = await metrics();
+    await call("Profiler.start");
+    await sleep(s.cpu);
+    const prof = (await call("Profiler.stop")).result.profile;
+    const m1 = await metrics();
+    const d = (k) => ((m1[k] ?? 0) - (m0[k] ?? 0)) * 1000;
+    const wall = s.cpu;
+    s.result = { busy: `${((d("TaskDuration") / wall) * 100).toFixed(1)}% of ${wall} ms`, script: Math.round(d("ScriptDuration")), layout: Math.round(d("LayoutDuration")), style: Math.round(d("RecalcStyleDuration")), layouts: (m1.LayoutCount ?? 0) - (m0.LayoutCount ?? 0), styles: (m1.RecalcStyleCount ?? 0) - (m0.RecalcStyleCount ?? 0) };
+    const per = (prof.endTime - prof.startTime) / 1000 / Math.max(1, prof.samples.length);
+    const self = new Map();
+    for (const n of prof.nodes) {
+      const f = n.callFrame;
+      if (!n.hitCount || f.functionName === "(idle)" || f.functionName === "(program)") continue;
+      const k = `${f.functionName || "(anon)"} ${f.url.replace(/^.*\//, "")}:${f.lineNumber + 1}`;
+      self.set(k, (self.get(k) ?? 0) + n.hitCount * per);
+    }
+    s.result.top = [...self].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${Math.round(v)} ms ${k}`);
+    console.log("cpu:", JSON.stringify(s.result, null, 1));
+  }
   else if (s.wait !== undefined) await sleep(s.wait);
   else if (s.shot) await shot(s.shot);
   else if (s.clean) await evalIn(`(() => { document.getElementById("phitex-zoom")?.click(); document.querySelector("[data-act=clean]")?.click(); })()`);

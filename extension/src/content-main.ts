@@ -801,6 +801,8 @@ function dockInOverleaf(panel: Panel): Dock {
   addEventListener("keydown", (e) => e.key === "Escape" && document.getElementById("phitex-tour") && endTour(true));
 
   function tick(): void {
+    // (a hidden tab: nothing to place; the next visible tick does it)
+    if (document.hidden) return;
     const pane = document.querySelector<HTMLElement>(PANE);
     const left = pane?.querySelector(".toolbar-pdf-left");
     let right = pane?.querySelector(".toolbar-pdf-right");

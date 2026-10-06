@@ -1,0 +1,2 @@
+{ "project": "test/scenarios/refs", "name": "idle-cpu",
+  "steps": [ { "idle": 3000 }, { "wait": 20000 }, { "cpu": 20000 } ] }

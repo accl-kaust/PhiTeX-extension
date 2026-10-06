@@ -620,14 +620,17 @@ export class Panel {
   dock(pane: HTMLElement | null, below?: Element | null): void {
     const h = this.host.style;
     if (pane) {
-      // (fill the pane under its toolbar, whatever the pane's own layout)
+      // (fill the pane under its toolbar, whatever the pane's own layout;
+      // called on every content-script tick: only what changed is written,
+      // so an idle tab neither lays out nor repaints)
       const top = below ? Math.max(0, below.getBoundingClientRect().bottom - pane.getBoundingClientRect().top) : 0;
-      if (getComputedStyle(pane).position === "static") pane.style.position = "relative";
+      const cs = getComputedStyle(pane);
+      if (cs.position === "static") pane.style.position = "relative";
       // (the pane's own background, as its PDF viewer shows it)
-      this.win.style.setProperty("--pane", getComputedStyle(pane).backgroundColor);
+      if (this.win.style.getPropertyValue("--pane") !== cs.backgroundColor) this.win.style.setProperty("--pane", cs.backgroundColor);
       this.win.classList.toggle("pdf-dark", pane.classList.contains("pdf-dark-mode"));
       this.win.classList.toggle("light", document.body.dataset.theme === "light");
-      Object.assign(h, { position: "absolute", left: "0", right: "0", bottom: "0", top: `${top}px`, zIndex: "12", flexDirection: "column" });
+      if (h.top !== `${top}px` || h.position !== "absolute") Object.assign(h, { position: "absolute", left: "0", right: "0", bottom: "0", top: `${top}px`, zIndex: "12", flexDirection: "column" });
     }
     if (pane === this.docked && this.host.isConnected) return;
     this.docked = pane;
@@ -648,9 +651,15 @@ export class Panel {
 
   /** Shown or not (docked: the host's own PDF is showing instead). */
   shown(on: boolean): void {
-    this.host.style.display = on ? (this.docked ? "flex" : "") : "none";
-    if (on) this.redraw();
+    const display = on ? (this.docked ? "flex" : "") : "none";
+    // (called on every content-script tick: a redraw only when it was hidden)
+    if (this.host.style.display === display && this.wasShown === on) return;
+    const was = this.wasShown;
+    this.wasShown = on;
+    this.host.style.display = display;
+    if (on && !was) this.redraw();
   }
+  private wasShown?: boolean;
 
   private save(): void {
     this.store?.save(this.prefs);

@@ -12,6 +12,11 @@ import { ENGINES, type Engine } from "./engines.ts";
 import { report } from "./report.ts";
 
 /** Whether a source loads minted (as the worker's own test, worker.ts). */
+/** A main file's preamble: what its engine is read from (engines.ts `needs`). */
+const preambleOf = (t: string | undefined) => {
+  const end = t?.indexOf("\\begin{document}") ?? -1;
+  return end < 0 ? (t ?? "") : t!.slice(0, end);
+};
 const usesMinted = (t: string) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t);
 import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
@@ -44,7 +49,7 @@ export type CoreReq =
   | { op: "auxdump" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
-  | { op: "package"; name: string };
+  | { op: "package"; name: string; engine?: string };
 
 /** A page as PhiTeX draws it, in PDF points from the top left (core's draws_json). */
 export interface Draws {
@@ -430,6 +435,9 @@ export class PreviewSession {
     // (XeLaTeX approximated: pdfLaTeX with stand-ins for fontspec & co.)
     const shims = !ENGINES[want].ready && want === "xelatex" ? await this.o.shims?.(this.files[this.main]) : null;
     const engine: Engine = shims ? "pdflatex" : want;
+    this.engine = engine;
+    this.wanted = want;
+    this.preamble = preambleOf(this.files[this.main]);
     this.sink.engine?.({ engine: want, ready: ENGINES[engine].ready, approx: !!shims });
     // (an engine ⚡ Instant doesn't run yet: nothing is built; the view says so and offers another)
     if (!ENGINES[engine].ready) {
@@ -464,6 +472,11 @@ export class PreviewSession {
   /** When the core trapped, in the last minute. */
   /** Traps since the last build that came back whole. */
   private traps = 0;
+  /** The engine the project runs with (its packages are resolved for it: which tree's file). */
+  private engine: Engine = "pdflatex";
+  /** The engine the main file asked for at the last open (before the shims' choice), and its preamble then. */
+  private wanted?: Engine;
+  private preamble?: string;
   /** The core runs LaTeX (the open reply's `engine`; until it says, as partex's, the default build). */
   private latex = true;
   private diags: Diagnostic[] = [];
@@ -545,7 +558,7 @@ export class PreviewSession {
     const got: (readonly [string, string | null])[] = [];
     this.tr("packages: want", want);
     const fetchOne = async (n: string): Promise<void> => {
-      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
       this.tr(t === null ? "package: none" : "package: got", n);
       got.push([n, t]);
       this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
@@ -607,7 +620,7 @@ export class PreviewSession {
     this.pkg.loading.push(...want);
     tell();
     const one = async (n: string): Promise<void> => {
-      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
       this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
       if (t !== null) this.pkg.done!.push(n);
       if (t !== null && t !== DELIVERED) this.pkgFiles[n] = t;
@@ -1016,6 +1029,21 @@ export class PreviewSession {
       this.tr("minted: open again, with its runner", {});
       await this.reopen();
       return false;
+    }
+    // (the main file's preamble now asks for another engine, \usepackage{fontspec}
+    // added or a whole XeLaTeX paper pasted in, or no longer does: opened
+    // again with it; the engine is looked at only when the preamble changed)
+    if (file === this.main && this.o.engine) {
+      const pre = preambleOf(b.text);
+      if (pre !== this.preamble) {
+        this.preamble = pre;
+        const want = this.o.engine(b.text);
+        if (want !== this.wanted) {
+          this.tr("engine: open again", { from: this.wanted, to: want });
+          await this.reopen();
+          return false;
+        }
+      }
     }
     for (const [i, e] of edits.entries()) {
       const last = i === edits.length - 1;

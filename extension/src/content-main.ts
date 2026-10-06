@@ -1046,8 +1046,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       format: (saved as PanelPrefs | undefined)?.format ?? "vector",
       packages: cached({
         label: "TeX Live 2026",
-        resolve: (name) =>
-          transport.request({ op: "package", name }).then((r) => {
+        resolve: (name, engine) =>
+          transport.request({ op: "package", name, engine }).then((r) => {
             // (a failure is an error, shown with why; null is "not in TeX Live")
             if (!r.ok) throw new Error(r.error ?? "package download failed");
             return r.delivered ? DELIVERED : (r.text ?? null);

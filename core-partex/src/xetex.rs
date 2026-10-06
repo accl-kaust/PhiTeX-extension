@@ -105,37 +105,52 @@ struct DpxFiles {
     shelf: shelf::Cache,
 }
 
-/// `name`'s bytes: the host's files, what was read before, Shelf's.
-pub fn get(files: &BTreeMap<Vec<u8>, Arc<[u8]>>, read: &Read, cache: &shelf::Cache, name: &[u8]) -> Option<Arc<[u8]>> {
+/// `name`'s key and bytes: the host's files, what was read before, or (the
+/// browser) Shelf's, resolved for XeTeX and kpathsea format `format`
+/// (shelf::find; "": a path, or any file of that name).
+pub fn get(files: &BTreeMap<Vec<u8>, Arc<[u8]>>, read: &Read, cache: &shelf::Cache, name: &[u8], format: &str) -> Option<(Vec<u8>, Arc<[u8]>)> {
     for k in keys(name) {
         if let Some(b) = files.get(&k).cloned().or_else(|| read.borrow().get(&k).cloned()) {
-            return Some(b);
+            return Some((k, b));
         }
     }
-    for k in keys(name) {
-        if shelf::available()
-            && let Some(b) = shelf::get(cache, &k)
-        {
-            let b: Arc<[u8]> = Arc::from(b);
-            read.borrow_mut().insert(k, b.clone());
-            return Some(b);
-        }
+    if !shelf::available() {
+        return None;
     }
-    None
+    let (k, b) = shelf::find(cache, name, format, "xetex", &|k| files.get(k).cloned().or_else(|| read.borrow().get(k).cloned()))?;
+    read.borrow_mut().entry(k.clone()).or_insert_with(|| b.clone());
+    Some((k, b))
+}
+
+/// kpathsea's format (as Shelf's `search` names it) of an xdvipdfmx lookup.
+fn dpx_format(f: Format) -> &'static str {
+    match f {
+        Format::Fontmap => "map",
+        Format::Type1 => "type1",
+        Format::TrueType => "truetype",
+        Format::OpenType => "opentype",
+        Format::Cmap => "cmap",
+        Format::Sfd => "sfd",
+        Format::Enc => "enc",
+        Format::Tfm => "tfm",
+        Format::Vf => "vf",
+        Format::Pict | Format::Tex => "tex",
+        _ => "",
+    }
 }
 
 impl DpxFiles {
-    fn get(&mut self, name: &[u8]) -> Option<Arc<[u8]>> {
+    fn get(&mut self, name: &[u8], format: &str) -> Option<(Vec<u8>, Arc<[u8]>)> {
         let t = crate::clock_ns();
-        let b = get(&self.files.borrow(), &self.read, &self.shelf, name);
+        let b = get(&self.files.borrow(), &self.read, &self.shelf, name, format);
         LOOKUPS.with_borrow_mut(|l| {
             l.0 += 1;
             l.1 += u32::from(b.is_none());
             l.2 += (crate::clock_ns() - t) as f64 / 1e6;
         });
-        let b = b?;
+        let (k, b) = b?;
         self.read.borrow_mut().entry(name.to_vec()).or_insert_with(|| b.clone());
-        Some(b)
+        Some((k, b))
     }
 }
 
@@ -158,10 +173,12 @@ impl Files for DpxFiles {
             n.extend_from_slice(ext);
             tries.insert(0, n);
         }
-        tries.into_iter().find(|n| self.get(n).is_some())
+        // (the file's key: its texmf path from Shelf, which `read` then takes as is)
+        let fmt = dpx_format(format);
+        tries.into_iter().find_map(|n| self.get(&n, fmt).map(|(k, _)| k))
     }
     fn read(&mut self, path: &[u8]) -> Option<Arc<[u8]>> {
-        self.get(path)
+        self.get(path, "").map(|(_, b)| b)
     }
 }
 

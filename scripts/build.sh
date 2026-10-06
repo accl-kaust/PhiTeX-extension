@@ -60,10 +60,12 @@ cp NOTICE extension/NOTICE.txt
 # The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
 # them before asking Shelf.
 rm -rf extension/texmf && cp -r texmf extension/texmf
-# Shelf's index (name -> pack), made by Shelf's build: scripts/shelf-index.sh
+# Shelf's index (texmf path -> pack) and its release.json (how names
+# resolve per engine), made by Shelf's release.py: scripts/shelf-index.sh
 # (named .gzdata: Edge's store refuses archives inside a package)
-# (SHELF_INDEX: another index, a local Shelf build's for a --dev build)
+# (SHELF_INDEX, SHELF_RELEASE: another release's, a local Shelf's for a --dev build)
 cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
+cp "${SHELF_RELEASE:-shelf-release.json}" extension/shelf-release.json
 scripts/sandbox npx tsc -p .
 # Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
 lm=/usr/share/texmf-dist/fonts/opentype/public

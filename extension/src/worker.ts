@@ -1,4 +1,5 @@
 import { indexBytes, packUrl } from "./release.ts";
+import { Index } from "./resolve.ts";
 // The PhiTeX core in a dedicated worker: the wasm (wasm32-wasip1) on a
 // minimal WASI shim, one session per client (an Overleaf tab).
 //
@@ -81,34 +82,45 @@ interface Core {
 class Exit extends Error {}
 
 /**
- * Shelf, for the core (its `phitex.fetch` import, shelf.rs): a file TeX asks
- * for and the session lacks, fetched there and then (a synchronous request,
- * as a worker may make), so the job never stops at a file TeX Live has.
- * The name's pack and the packs its loading reads, by the index the
- * extension ships; the browser's cache keeps them (Shelf's packs are
- * immutable). The extension's bundled texmf/ files go as a pack of one.
+ * Shelf, for the core (its `phitex.resolve` and `phitex.fetch` imports,
+ * shelf.rs): a file TeX asks for and the session lacks is resolved here to
+ * its texmf path, per the session's engine and the file's kpathsea format
+ * (resolve.ts, release.json's `search`), then its pack and the packs its
+ * loading reads (the engine's deps column) fetched there and then (a
+ * synchronous request, as a worker may make), so the job never stops at a
+ * file TeX Live has. The core keeps files by path, and each name's path,
+ * so it asks again for neither. The browser's cache keeps the packs
+ * (Shelf's are immutable). The extension's bundled texmf/ files (flat, by
+ * name) go as a pack of one.
  */
-let shelfIndex: Map<string, string[]> | undefined;
+let shelfIndex: Index | undefined;
 let bundledNames: Set<string> | undefined;
 /** Shelf packs the extension ships (packs/: the ones most documents load), read from it, not Shelf. */
 let bundledPacks = new Set<string>();
+/** What `resolve` or `fetch` answered, copied by `fetch_copy`. */
 let fetched: Uint8Array | undefined;
 
 async function loadShelf(): Promise<void> {
   if (shelfIndex) return;
   // (Shelf's newest release this extension has, else its own copy: release.ts)
-  const { gz } = await indexBytes(() => fetch(new URL("../shelf-index.tsv.gzdata", import.meta.url)));
+  const { gz, meta } = await indexBytes((n) => fetch(new URL("../" + n, import.meta.url)));
   const tsv = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
-  const m = new Map<string, string[]>();
-  for (const l of tsv.split("\n")) {
-    const [name, pack, deps] = l.split("\t");
-    if (name && pack) m.set(name, [pack, ...(deps ? deps.split(",") : [])]);
-  }
   const names = await (await fetch(new URL("../texmf/names.txt", import.meta.url))).text();
   bundledNames = new Set(names.split("\n").filter(Boolean));
   const packs = await fetch(new URL("../packs/list.txt", import.meta.url)).then((r) => (r.ok ? r.text() : ""), () => "");
   bundledPacks = new Set(packs.split("\n").filter(Boolean));
-  shelfIndex = m;
+  shelfIndex = new Index(tsv, meta);
+}
+
+/**
+ * `name`'s key for the core: its texmf path (resolve.ts), or (the
+ * extension's bundled texmf/, flat) the name itself, unless the engine's
+ * search puts an engine's own tree's file first (tex/xelatex, …).
+ */
+function resolveName(engine: string, format: string, name: string): string | null {
+  const p = shelfIndex?.resolve(name, format, engine) ?? null;
+  if (!name.includes("/") && bundledNames?.has(name) && !(p && /^tex\/(xe|lua)(la)?tex\//.test(p))) return name;
+  return p;
 }
 
 function getSync(url: string): Uint8Array | null {
@@ -221,11 +233,21 @@ function systemImports(mem: () => WebAssembly.Memory) {
 }
 
 function shelfImports(mem: () => WebAssembly.Memory) {
+  const str = (ptr: number, len: number) => new TextDecoder().decode(new Uint8Array(mem().buffer, ptr >>> 0, len >>> 0));
   return {
+    /** `engine TAB format TAB name` → its key (a texmf path, or a bundled name), copied by fetch_copy; 0: none. */
+    resolve(ptr: number, len: number): number {
+      const [engine, format, name] = str(ptr, len).split("\t");
+      const key = name ? resolveName(engine, format, name) : null;
+      if (!key) return 0;
+      fetched = enc.encode(key);
+      return fetched.length;
+    },
+    /** `engine TAB key` → its packs (the key's own and, for that engine, what its loading reads), framed. */
     fetch(ptr: number, len: number): number {
-      const name = new TextDecoder().decode(new Uint8Array(mem().buffer, ptr >>> 0, len >>> 0));
+      const [engine, name] = str(ptr, len).split("\t");
       const parts: Uint8Array[] = [];
-      if (bundledNames?.has(name)) {
+      if (!name.includes("/") && bundledNames?.has(name)) {
         const b = getSync(new URL("../texmf/" + name, import.meta.url).href);
         if (b) {
           // (a pack of one file: its count 1, then the name and the bytes, each with its length)
@@ -234,7 +256,7 @@ function shelfImports(mem: () => WebAssembly.Memory) {
           parts.push(one);
         }
       } else {
-        for (const id of shelfIndex?.get(name) ?? []) {
+        for (const id of shelfIndex?.packs(name, engine) ?? []) {
           const here = bundledPacks.has(id);
           if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
           const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));

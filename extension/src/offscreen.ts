@@ -83,7 +83,7 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     // (packages: answered here, not by the worker)
     if (m.op === "package") {
-      resolve(m.name).then(
+      resolve(m.name, m.engine).then(
         (r) => {
           // (the rest of its packs: straight to the core, as bytes)
           for (const [f, b] of r?.extra ?? []) {

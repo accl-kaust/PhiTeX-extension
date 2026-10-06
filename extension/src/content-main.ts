@@ -6,7 +6,7 @@ import type { Edit } from "./edits.ts";
 import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
-import { unseen, type News } from "./news.ts";
+import { SUPPORT, unseen, type News } from "./news.ts";
 import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
 import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
@@ -165,6 +165,9 @@ class OverleafHost implements EditorHost {
   }
 }
 
+/** Whether the extension was reloaded or updated under this tab (its content script then cut off). */
+const contextGone = () => !chrome.runtime?.id;
+const GONE = "PhiTeX Instant was updated or reloaded: reload this tab to use it";
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 /** A chrome port to the offscreen document (which relays to the worker). Bytes come base64. */
@@ -194,13 +197,23 @@ class ChromeTransport implements CoreTransport {
       this.waiting.delete(r.id);
     });
     this.port.onDisconnect.addListener(() => {
-      for (const w of this.waiting.values()) w({ ok: false, error: "core disconnected" });
+      // (the extension reloaded or updated under this tab: this script is
+      // cut off from it for good; said once, nothing retried)
+      const gone = contextGone();
+      for (const w of this.waiting.values()) w({ ok: false, error: gone ? GONE : "core disconnected" });
       this.waiting.clear();
-      setTimeout(() => this.connect().then(() => this.lost.forEach((f) => f())), 500);
+      if (gone) return this.gone.forEach((f) => f());
+      setTimeout(() => this.connect().then(() => this.lost.forEach((f) => f()), (e) => console.warn("[phitex] reconnect", e)), 500);
     });
   }
+  /** Called once if the extension is reloaded or updated under this tab. */
+  onGone(cb: () => void) {
+    this.gone.push(cb);
+  }
+  private gone: (() => void)[] = [];
   request(req: CoreReq): Promise<CoreRes> {
     const id = this.nextId++;
+    if (contextGone()) return Promise.resolve({ ok: false, error: GONE } as CoreRes);
     return new Promise((res) => {
       this.waiting.set(id, res);
       this.port.postMessage({ id, ...req });
@@ -683,7 +696,10 @@ function dockInOverleaf(panel: Panel): Dock {
         .map((n) => `<div class="phitex-news-entry"><div class="phitex-news-title">${n.title} <span class="text-muted small">${n.version} · ${n.date}</span></div><ul>${n.items.map((i) => `<li>${i}</li>`).join("")}</ul></div>`)
         .join("")}
         <div class="small text-muted">From the unofficial PhiTeX extension, not Overleaf.</div>
-        <div class="phitex-tip-actions"><button type="button" class="btn btn-primary btn-sm" id="phitex-news-ok">Got it</button></div></div></div>`;
+        <div class="phitex-tip-actions">${[items[0].link, SUPPORT]
+          .filter((l): l is { label: string; href: string } => !!l)
+          .map((l) => `<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" href="${escapeHtml(l.href)}" style="margin-right:8px">${escapeHtml(l.label)}</a>`)
+          .join("")}<button type="button" class="btn btn-primary btn-sm" id="phitex-news-ok">Got it</button></div></div></div>`;
     document.body.append(t);
     const place = () => {
       if (!t.isConnected) return removeEventListener("resize", place);
@@ -989,8 +1005,18 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     document.body.append(t);
     t.onclick = () => t.remove();
   });
+  transport.onGone(() => {
+    const t = document.createElement("div");
+    t.className = "popover bs-popover-top show phitex-toast";
+    t.setAttribute("role", "status");
+    t.innerHTML = `<div class="popover-body">⚡ ${GONE}. <button type="button" class="btn btn-primary btn-sm">Reload</button></div>`;
+    Object.assign(t.style, { position: "fixed", right: "16px", bottom: "16px", maxWidth: "340px", zIndex: "1060" });
+    document.body.append(t);
+    t.querySelector("button")!.onclick = () => location.reload();
+  });
   try {
     devMark("connect");
+    if (contextGone()) return;
     await transport.connect();
     devMark("connected");
     giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);

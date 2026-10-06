@@ -1,0 +1,4 @@
+{ "project": "test/scenarios/xe-chinese", "name": "xe-chinese",
+  "steps": [ { "idle": 10000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; const a = r?.querySelector('#approx'); return (a && getComputedStyle(a).display) + ' | ' + r?.querySelectorAll('.slot').length + ' pages | ' + r?.querySelectorAll('svg.page use').length + ' glyphs | ' + [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 200); })()", "page": true },
+    { "shot": "xe-chinese" } ] }

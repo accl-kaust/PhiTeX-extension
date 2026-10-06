@@ -157,6 +157,9 @@ if (!(await state())?.pages) {
   console.log("editor:", await evalIn(`(() => { const c = document.querySelector(".cm-editor .cm-content"); return c ? "cm-content" + (c.cmView || c.cmTile ? ", with its view" : ", no view") : typeof mockEditor; })()`));
   for (const e of events) console.log(`  ${e.t} ms  ${e.k}  ${String(e.d).slice(0, 400)}`);
   for (const l of workerLog.slice(-20)) console.log("  worker:", l.slice(0, 400));
+  // (the session's own last events: what it opened, what the core said)
+  const trace = await evalIn(`JSON.stringify((globalThis.__phitexSession?.trace ?? []).slice(-25))`, true).catch(() => "[]");
+  for (const t of JSON.parse(trace ?? "[]")) console.log("  session:", JSON.stringify(t).slice(0, 400));
   try { process.kill(-mock.pid); } catch {}
   process.exit(1);
 }

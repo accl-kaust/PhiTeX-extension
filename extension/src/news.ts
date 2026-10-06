@@ -19,24 +19,16 @@ export const SUPPORT: { label: string; href: string } | null = null;
 
 export const NEWS: News[] = [
   {
-    version: "0.3.0",
-    date: "2026-10-06",
-    title: "XeLaTeX",
+    version: "0.4.0",
+    date: "2026-10-07",
+    title: "XeLaTeX, figures, and a faster, clearer preview",
     items: [
-      "Projects using <b>fontspec</b>, <b>unicode-math</b> or <b>polyglossia</b> now typeset with real XeLaTeX, in your browser.",
-      "Fonts by name (TeX Gyre, Latin Modern Math, and the rest of TeX Live's OpenType fonts) or uploaded to your project.",
-    ],
-  },
-  {
-    version: "0.2.1",
-    date: "2026-10-05",
-    title: "minted, colour, and steadier references",
-    items: [
-      "<b>minted</b> code listings with Pygments' colours, run locally (the first one loads Python, a few seconds).",
-      "Coloured text (<code>\\textcolor</code>) shows in colour.",
+      "Projects using <b>fontspec</b>, <b>unicode-math</b> or <b>polyglossia</b> now typeset with real XeLaTeX, in your browser: TeX Live's OpenType fonts by name or your own uploaded ones, Arabic, Hebrew, Chinese (xeCJK, ctex).",
+      "<b>Figures</b> in the instant preview: PNG, JPEG, PDF figures and matplotlib plots, trimmed and clipped.",
+      "<b>minted</b> code listings with Pygments' colours, and coloured text (<code>\\textcolor</code>).",
       "A half-typed command no longer turns references into <b>??</b>: the last good pages stay until it is fixed.",
-      "Faster startup and incremental page updates; smooth PDF scrolling and an optional highlight that follows your cursor.",
-      "Package lists update without an extension update.",
+      "Pages drawn as <b>Vector</b> (instant, selectable) or with <b>PDF.js</b>; a highlight that follows your cursor, chosen in the tour.",
+      "Opening a project shows what it is doing, step by step; an idle tab no longer uses any CPU.",
     ],
   },
   {

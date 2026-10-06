@@ -1,0 +1,52 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,booktabs}
+\usepackage{tikz}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\usepackage{polyglossia}
+\setmainlanguage{english}
+\setotherlanguages{arabic,hindi}
+\setmainfont{Latin Modern Roman}
+\newfontfamily\arabicfont[Script=Arabic]{Amiri}
+\newfontfamily\hindifont[Script=Devanagari]{NewComputerModern 10 Devanagari}
+\newfontfamily\zhfont{FandolSong}
+\newfontfamily\jafont{IPAexMincho}
+\begin{document}
+\section{Introduction}\label{sec:intro}
+Every writer knows the rhythm.
+
+\begin{figure}[h!]
+\centering
+\newcommand\petals{5}
+\begin{tikzpicture}[scale=.6]
+  \foreach \i in {1,...,\petals}
+    \draw[fill=red!15, rotate=\i*360/\petals] (0,0) .. controls (.7,.45) and (1.7,.35) .. (2,0) .. controls (1.7,-.35) and (.7,-.45) .. (0,0);
+\end{tikzpicture}
+\caption{A figure.}\label{fig:live}
+\end{figure}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lr}\toprule Language & Script\\\midrule Arabic & RTL\\ Hindi & Devanagari\\\bottomrule\end{tabular}
+\caption{Scripts.}
+\end{table}
+
+\textlang{arabic}{مرحبا بالعالم}
+
+\textlang{hindi}{नमस्ते दुनिया। क्षत्रिय, ज्ञान, श्रद्धा, कि की कु कू के कै।}
+
+{\zhfont 你好，世界！实时排版。}
+
+{\jafont こんにちは、世界。リアルタイム組版。}
+
+Section~\ref{sec:method} describes the method~\cite{knuth84}, with $\sum_{i=1}^n i = \frac{n(n+1)}{2}$.
+
+\newpage
+\section{Method}\label{sec:method}
+A document is a program.
+\[ x = 1 \]
+
+\begin{thebibliography}{9}
+\bibitem{knuth84} D.~E. Knuth. \emph{The \TeX book}. 1984.
+\end{thebibliography}
+\end{document}

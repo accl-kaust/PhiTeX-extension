@@ -188,15 +188,16 @@ impl Files for DpxFiles {
 pub type Started = Option<(Vec<u8>, Live, Session)>;
 
 /// The PDF xelatex makes of `xdv` (`job`.pdf), and each page's glyph runs.
-pub fn to_pdf(xdv: &[u8], job: &[u8], files: BTreeMap<Vec<u8>, Arc<[u8]>>, read: &Read, cache: &shelf::Cache, now: i64, started: &mut Started) -> (Vec<u8>, Vec<Vec<GlyphRun>>) {
+/// A fatal driver error (`Err`) leaves no PDF, as xelatex's pipe makes none.
+pub fn to_pdf(xdv: &[u8], job: &[u8], files: BTreeMap<Vec<u8>, Arc<[u8]>>, read: &Read, cache: &shelf::Cache, now: i64, started: &mut Started) -> partex_xdvipdfmx::ctx::Result<(Vec<u8>, Vec<Vec<GlyphRun>>)> {
     // (an XDV the job did not finish, a fatal error's, has no postamble
     // and its 223s: no PDF, as xelatex's pipe makes none of it)
     if xdv.len() < 16 || 15 + usize::from(xdv[14]) > xdv.len() || xdv.last() != Some(&223) {
-        return (Vec::new(), Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let (pre, pages) = split_xdv(xdv);
     if pages.is_empty() {
-        return (Vec::new(), Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let options = Options {
         pdf_filename: Some(job.to_vec()),
@@ -216,7 +217,7 @@ pub fn to_pdf(xdv: &[u8], job: &[u8], files: BTreeMap<Vec<u8>, Arc<[u8]>>, read:
         }
         _ => {
             let live = Live::new(RefCell::new(files));
-            let s = Session::new(options, Box::new(DpxFiles { files: live.clone(), read: read.clone(), shelf: cache.clone() }), deflate, &xdv[..pre]);
+            let s = Session::new(options, Box::new(DpxFiles { files: live.clone(), read: read.clone(), shelf: cache.clone() }), deflate, &xdv[..pre])?;
             let copy = s.snapshot();
             *started = Some((xdv[..pre].to_vec(), live, s));
             copy
@@ -226,16 +227,16 @@ pub fn to_pdf(xdv: &[u8], job: &[u8], files: BTreeMap<Vec<u8>, Arc<[u8]>>, read:
     let mut out = Vec::new();
     let mut runs = Vec::new();
     for (a, b) in pages {
-        let p = s.page(&xdv[a..b]);
+        let p = s.page(&xdv[a..b])?;
         out.extend(p.pdf);
         runs.push(p.glyph_runs);
     }
     let t2 = crate::clock_ns();
-    out.extend(s.finish());
+    out.extend(s.finish()?);
     let t3 = crate::clock_ns();
     let (n, miss, lms) = LOOKUPS.with_borrow(|l| *l);
     COST.with_borrow_mut(|c| *c = format!("start {:.1} ms, pages {:.1} ms, end {:.1} ms; {n} lookups ({miss} missed) {lms:.1} ms", ms(t0, t1), ms(t1, t2), ms(t2, t3)));
-    (out, runs)
+    Ok((out, runs))
 }
 
 /// A font program read with skrifa, for its outlines and its characters.

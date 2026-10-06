@@ -1170,10 +1170,21 @@ impl Session {
         if h != self.xdv_hash || self.pdf.is_empty() {
             let t = Instant::now();
             let job = format!("{}.pdf", self.main.strip_suffix(".tex").unwrap_or(&self.main));
-            let (pdf, runs) = xetex::to_pdf(&xdv, job.as_bytes(), files, &self.xread, &self.shelf, epoch(&self.started), &mut self.dpx);
-            self.pdf = pdf;
-            self.shipped = runs.len();
-            self.runs = runs;
+            match xetex::to_pdf(&xdv, job.as_bytes(), files, &self.xread, &self.shelf, epoch(&self.started), &mut self.dpx) {
+                Ok((pdf, runs)) => {
+                    self.pdf = pdf;
+                    self.shipped = runs.len();
+                    self.runs = runs;
+                }
+                // (the driver stopped, as xelatex's xdvipdfmx would: said
+                // as the job's error, the last good pages kept)
+                Err(fatal) => {
+                    self.term.extend_from_slice(format!("\n! {fatal}\n").as_bytes());
+                    self.history = self.history.max(2);
+                    self.xdv = xdv;
+                    return;
+                }
+            }
             self.xdv_hash = h;
             self.pdf_hashes = None;
             self.pdf_first = None;
@@ -1496,6 +1507,15 @@ impl Session {
         let o = tex.origins(page);
         let files: Vec<String> = tex.origin_files().iter().map(|f| esc(f)).collect();
         let mut g = String::new();
+        // (XeTeX: one origin per glyph run, in the runs' order, 1:1)
+        if self.xetex {
+            for (i, r) in self.runs.get(page).map_or(&[][..], Vec::as_slice).iter().enumerate() {
+                let o = o.get(i).copied().unwrap_or(partex_core::GlyphOrigin::NONE);
+                let file = if o.file == u32::MAX { -1 } else { i64::from(o.file) };
+                let _ = write!(g, "{}[{:.2},{:.2},{file},{},{},{}]", if g.is_empty() { "" } else { "," }, r.x - x0, y1 - r.y, o.start, o.end, u8::from(o.synthesized));
+            }
+            return Some(format!("{{\"files\":[{}],\"g\":[{g}]}}", files.join(",")));
+        }
         for (i, s) in shown.iter().enumerate() {
             let o = o.get(i).copied().unwrap_or(partex_core::GlyphOrigin::NONE);
             let file = if o.file == u32::MAX { -1 } else { i64::from(o.file) };

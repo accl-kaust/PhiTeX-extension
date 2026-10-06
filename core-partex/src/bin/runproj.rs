@@ -65,6 +65,10 @@ fn main() {
     for (n, b) in &binary {
         s.set_bytes(n, b);
     }
+    // (PHITEX_PLAIN=1: the browser's start, a plain first paint, the SSA program after)
+    if std::env::var("PHITEX_PLAIN").is_ok_and(|v| v == "1") {
+        s.fast_start();
+    }
     let mut asked = BTreeSet::new();
     loop {
         let st = s.status();

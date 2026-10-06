@@ -1020,7 +1020,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     await transport.connect();
     devMark("connected");
     giveBinary = (path, bytes) => transport.request({ op: "binary", file: path, b64: b64of(bytes) } as never);
-    const { panel: saved } = await chrome.storage.local.get("panel");
+    // (workers: 1 keeps the one-worker start, a plain first paint then the SSA program in the same worker; a debugging switch)
+    const { panel: saved, workers } = await chrome.storage.local.get(["panel", "workers"]);
     let engineSetting: EngineChoice = "auto", projectEngine: Engine | undefined;
     const readEngine = async () => {
       const { engine, engines } = await chrome.storage.local.get(["engine", "engines"]);
@@ -1036,6 +1037,7 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     });
     session = new PreviewSession(new OverleafHost(panel), transport, tee(panel, ch, () => mirrored), {
       engine: (main) => resolve(engineSetting, projectEngine, main),
+      workers: workers === 1 ? 1 : undefined,
       // (a XeLaTeX project: approximated with pdfLaTeX, unless chosen for it)
       shims: async (main) => {
         if (projectEngine || !approximable(main)) return null;

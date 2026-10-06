@@ -491,6 +491,8 @@ pub struct Session {
     pub fallback_dir: Option<std::path::PathBuf>,
     /// XeTeX (xelatex), not pdfTeX: `pdf` is made from the XDV the job writes.
     pub xetex: bool,
+    /// Plain builds only (`plain_only`).
+    plain_only: bool,
     /// (XeTeX) The XDV the last link made (the PDF is converted from it).
     xdv: Vec<u8>,
     /// (XeTeX) A hash of the XDV `pdf` was made from.
@@ -686,6 +688,7 @@ impl Session {
             how: String::new(),
             fallback_dir: None,
             xetex: false,
+            plain_only: false,
             xdv: Vec::new(),
             xdv_hash: 0,
             runs: Vec::new(),
@@ -720,6 +723,18 @@ impl Session {
     pub fn fast_start(&mut self) {
         if std::env::var("PHITEX_NO_PLAIN").is_err() && self.tex.is_none() {
             self.want_ssa = false;
+        }
+    }
+
+    /// Plain builds only (the browser's first-paint worker, while another
+    /// builds the SSA program): an edit builds plain again, and nothing is
+    /// readied when idle. `false` lets the SSA program come, as `fast_start`.
+    pub fn plain_only(&mut self, on: bool) {
+        self.plain_only = on;
+        if on {
+            self.fast_start();
+        } else {
+            self.want_ssa = true;
         }
     }
 
@@ -769,6 +784,9 @@ impl Session {
     /// decoded): once per cold build, when idle; the first keystroke would
     /// pay it. True if there was anything to do.
     pub fn prepare(&mut self) -> bool {
+        if self.plain_only {
+            return false;
+        }
         // (after a plain first paint: the SSA program, now, while idle; from
         // converged files, as latexmk's last run, so its trips are few)
         if self.plain && self.tex.is_none() {
@@ -1402,8 +1420,9 @@ impl Session {
         self.files.get_mut(name).unwrap().replace_range(range, text);
         self.changed.push(name.to_string());
         self.stale = true;
-        // (the writer is typing: the program that makes keystrokes cheap)
-        self.want_ssa = true;
+        // (the writer is typing: the program that makes keystrokes cheap;
+        // not here when another worker builds it, `plain_only`)
+        self.want_ssa = !self.plain_only;
         Ok(())
     }
 
@@ -1839,7 +1858,7 @@ mod abi {
         let mut r = Reader(unsafe { input(ptr, len) });
         // (fuel, main, the text files, then the binary ones, figures: all
         // there before the first build)
-        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>, bool)> {
+        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>, bool, u32)> {
             let _fuel = r.u32()?;
             let main = r.str()?.to_string();
             let n = r.u32()?;
@@ -1854,9 +1873,13 @@ mod abi {
             }
             // (then the engine: 1 XeTeX; absent or 0 pdfTeX)
             let xetex = r.u32().unwrap_or(0) == 1;
-            Some((main, files, bins, xetex))
+            // (then how to start: 0 or absent a plain first paint, the SSA
+            // program at the first edit or when idle; 1 plain builds only
+            // (another worker builds the program); 2 the SSA program at once)
+            let start = r.u32().unwrap_or(0);
+            Some((main, files, bins, xetex, start))
         };
-        let Some((main, files, bins, xetex)) = parse() else {
+        let Some((main, files, bins, xetex, start)) = parse() else {
             out_json("{\"error\":\"bad open input\"}".into());
             return 0;
         };
@@ -1865,7 +1888,11 @@ mod abi {
         for (n, b) in bins {
             s.set_bytes(&n, b);
         }
-        s.fast_start();
+        match start {
+            1 => s.plain_only(true),
+            2 => {}
+            _ => s.fast_start(),
+        }
         let st = s.status();
         let h = NEXT.with_borrow_mut(|n| {
             *n += 1;
@@ -1874,6 +1901,13 @@ mod abi {
         out_json(format!("{{\"handle\":{h},\"build_ms\":{},{}}}", s.build_ms, st.json()));
         SESSIONS.with_borrow_mut(|m| m.insert(h, s));
         h
+    }
+
+    /// Plain builds only, on or off (`Session::plain_only`): off, the SSA
+    /// program is built at the next build (the other worker failed).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_plain_only(h: u32, on: u32) {
+        let _ = with(h, |s| s.plain_only(on != 0));
     }
 
     #[unsafe(no_mangle)]

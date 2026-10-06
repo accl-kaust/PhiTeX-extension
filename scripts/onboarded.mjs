@@ -23,8 +23,8 @@ export function onboarded(version) {
 }
 
 /** A JavaScript expression for the mock's page: a promise of "onboarded" once written. */
-export function onboardScript(version) {
-  return `new Promise((ok) => { addEventListener("message", (e) => e.data?.src === "phitex-dev" && e.data.type === "onboarded" && ok("onboarded")); postMessage({ src: "phitex-dev", type: "onboard", storage: ${JSON.stringify(onboarded(version))} }, location.origin); setTimeout(() => ok("timeout: no content script?"), 5000); })`;
+export function onboardScript(version, extra = {}) {
+  return `new Promise((ok) => { addEventListener("message", (e) => e.data?.src === "phitex-dev" && e.data.type === "onboarded" && ok("onboarded")); postMessage({ src: "phitex-dev", type: "onboard", storage: ${JSON.stringify({ ...onboarded(version), ...extra })} }, location.origin); setTimeout(() => ok("timeout: no content script?"), 5000); })`;
 }
 
 /** A JavaScript expression for the mock's page: a promise of the content script's trace and errors (JSON). */

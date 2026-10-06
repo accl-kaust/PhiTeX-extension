@@ -36,7 +36,7 @@ export interface EditorHost {
 
 /** The core's requests (worker.ts's `Req`, less the routing fields). */
 export type CoreReq =
-  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine }
+  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine; workers?: 1 }
   | { op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { op: "set_file"; file: string; text: string }
   | { op: "png"; page: number; dpi: number }
@@ -111,7 +111,7 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
+export type CoreEvent = { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "switched" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -167,6 +167,8 @@ export interface PreviewSink {
 
 export interface Options {
   fuel: number;
+  /** 1: the one-worker start (the offscreen document's two-worker start otherwise, where the machine allows it). */
+  workers?: 1;
   /** Pages as draw lists (vector: real text, a few KB) or PNGs (PhiTeX's: a grey box a glyph). */
   format: "vector" | "png";
   dpi: number;
@@ -298,6 +300,13 @@ export class PreviewSession {
     core.onEvent?.((e) => {
       if (e.event === "preparing") return this.sink.preparing?.(e.on);
       // (references settled after one-trip keystrokes: the pages that changed drawn again)
+      // (the two-worker start: the SSA worker took over; its glyphs' sources are its own)
+      if (e.event === "switched") {
+        this.tr("core: the SSA worker took over", {});
+        this.glyphCache.clear();
+        if (this.opened) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+        return;
+      }
       if (e.event === "settled") {
         if (this.opened && !this.busy) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
         return;
@@ -448,7 +457,7 @@ export class PreviewSession {
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
     // (an open with minted in the sources loads the worker's \write18 runner, Pyodide)
     this.minted = Object.values(this.files).some(usesMinted);
-    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine });
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine, workers: this.o.workers });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
     const latex = r.json.engine === "partex";

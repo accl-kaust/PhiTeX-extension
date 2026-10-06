@@ -136,7 +136,8 @@ try {
   const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"), "utf8")).version;
   for (let i = 0; i < 40 && !contexts.some((c) => c.auxData?.isDefault); i++) await sleep(250);
   await sleep(1000);
-  if ((await evalIn(onboardScript(version))) === "onboarded") {
+  // (PHITEX_WORKERS=1: the one-worker start, to compare; else the two-worker start where it applies)
+  if ((await evalIn(onboardScript(version, { workers: process.env.PHITEX_WORKERS === "1" ? 1 : 2 }))) === "onboarded") {
     await call("Page.reload");
     await sleep(1500);
   }

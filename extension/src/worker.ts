@@ -12,7 +12,15 @@ import { Index } from "./resolve.ts";
 // Overleaf page.
 
 export type Req =
-  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string }
+  /**
+   * `start`: 0 (or absent) a plain first paint, the SSA program at the first
+   * edit or when idle; 1 plain builds only (another worker builds the
+   * program: the offscreen's two-worker start); 2 the SSA program at once.
+   * `noMinted`: minted's runner not loaded (the other worker loads it).
+   */
+  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string; start?: 0 | 1 | 2; noMinted?: boolean }
+  /** Plain builds only, on or off (off: this worker builds the SSA program after all). */
+  | { id: number; client: string; op: "plain_only"; on: boolean }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { id: number; client: string; op: "set_file"; file: string; text: string }
   | { id: number; client: string; op: "set_bytes"; file: string; bytes: Uint8Array }
@@ -65,6 +73,7 @@ interface Core {
   ph_status(h: number): void;
   ph_log?(h: number): void;
   ph_idle?(): number;
+  ph_plain_only?(h: number, on: number): void;
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
   ph_trace?(h: number, on: number): void;
@@ -480,8 +489,8 @@ function handle(r: Req): Res {
       const bins = Object.entries(r.binaries ?? {});
       f.u32(bins.length);
       for (const [n, b] of bins) f.str(n).bytes(b);
-      // (the engine: 1 XeTeX)
-      f.u32(r.engine === "xelatex" ? 1 : 0);
+      // (the engine: 1 XeTeX; then how to start)
+      f.u32(r.engine === "xelatex" ? 1 : 0).u32(r.start ?? 0);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
       // (the pages' hashes with it: the tab lays them out now, not after
@@ -571,6 +580,9 @@ function handle(r: Req): Res {
       }
       return { id: r.id, ok: true, json };
     }
+    case "plain_only":
+      if (h) core.ph_plain_only?.(h, r.on ? 1 : 0);
+      return { id: r.id, ok: !!h };
     case "close":
       if (h) core.ph_close(h);
       sessions.delete(r.client);
@@ -725,7 +737,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     await ready;
     // (a project that uses minted: Pyodide loaded before its first build,
     // as \\write18 runs synchronously inside it)
-    if (r.op === "open" && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
+    if (r.op === "open" && !r.noMinted && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
     if (r.op === "open" && r.engine === "xelatex") await loadXe();
     res = handle(r);
     shipPdf(r);

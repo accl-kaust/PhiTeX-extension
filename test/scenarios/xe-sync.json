@@ -1,0 +1,66 @@
+{
+ "project": "test/scenarios/xe-sync",
+ "name": "xe-sync",
+ "steps": [
+  {
+   "dblpage": [
+    0,
+    0.3,
+    0.35
+   ]
+  },
+  {
+   "dblpage": [
+    1,
+    0.7,
+    0.5
+   ]
+  },
+  {
+   "dbltext": "See Section~\\ref{sec:2}"
+  },
+  {
+   "dbltext": "Section 5}"
+  },
+  {
+   "type": "Hello world. ",
+   "after": "\\section{Section 3}\\label{sec:3}\n"
+  },
+  {
+   "idle": 1500
+  },
+  {
+   "dbltext": "Hello world"
+  },
+  {
+   "dblpage": [
+    0,
+    0.5,
+    0.6
+   ]
+  },
+  {
+   "cursor": "Hello world"
+  },
+  {
+   "cursor": "See Section"
+  },
+  {
+   "shot": "sync"
+  },
+  {
+   "eval": "(() => { const t = mockEditor.text(); mockEditor.replace(0, t.length, t); return t.length; })()",
+   "page": true
+  },
+  {
+   "idle": 2000
+  },
+  {
+   "dblpage": [
+    0,
+    0.3,
+    0.35
+   ]
+  }
+ ]
+}

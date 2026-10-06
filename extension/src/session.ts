@@ -12,6 +12,11 @@ import { ENGINES, type Engine } from "./engines.ts";
 import { report } from "./report.ts";
 
 /** Whether a source loads minted (as the worker's own test, worker.ts). */
+/** A main file's preamble: what its engine is read from (engines.ts `needs`). */
+const preambleOf = (t: string | undefined) => {
+  const end = t?.indexOf("\\begin{document}") ?? -1;
+  return end < 0 ? (t ?? "") : t!.slice(0, end);
+};
 const usesMinted = (t: string) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t);
 import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
@@ -31,7 +36,7 @@ export interface EditorHost {
 
 /** The core's requests (worker.ts's `Req`, less the routing fields). */
 export type CoreReq =
-  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine }
+  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine; workers?: 1 }
   | { op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { op: "set_file"; file: string; text: string }
   | { op: "png"; page: number; dpi: number }
@@ -44,7 +49,7 @@ export type CoreReq =
   | { op: "auxdump" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
-  | { op: "package"; name: string };
+  | { op: "package"; name: string; engine?: string };
 
 /** A page as PhiTeX draws it, in PDF points from the top left (core's draws_json). */
 export interface Draws {
@@ -106,7 +111,7 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
+export type CoreEvent = { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "switched" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -162,6 +167,8 @@ export interface PreviewSink {
 
 export interface Options {
   fuel: number;
+  /** 1: the one-worker start (the offscreen document's two-worker start otherwise, where the machine allows it). */
+  workers?: 1;
   /** Pages as draw lists (vector: real text, a few KB) or PNGs (PhiTeX's: a grey box a glyph). */
   format: "vector" | "png";
   dpi: number;
@@ -256,6 +263,14 @@ export class PreviewSession {
   }
   /** The core fetches a pack mid-build (the job goes on with it): the view says which. */
   private onFetching(e: Extract<CoreEvent, { event: "fetching" }>): void {
+    // (a pack the worker could not get: Shelf unreachable, or not there)
+    if (e.failed) {
+      this.tr("package: core fetch failed", e);
+      this.pkg.loading = this.pkg.loading.filter((n) => n !== e.pack);
+      this.pkg.failed = [...(this.pkg.failed ?? []), { name: e.pack, error: `Shelf: ${e.name} not fetched` }];
+      this.tellPackages();
+      return;
+    }
     this.tr("package: core fetches", e);
     this.pkg.source = this.source.label;
     // (one at a time, in order: the one before it has arrived)
@@ -285,6 +300,13 @@ export class PreviewSession {
     core.onEvent?.((e) => {
       if (e.event === "preparing") return this.sink.preparing?.(e.on);
       // (references settled after one-trip keystrokes: the pages that changed drawn again)
+      // (the two-worker start: the SSA worker took over; its glyphs' sources are its own)
+      if (e.event === "switched") {
+        this.tr("core: the SSA worker took over", {});
+        this.glyphCache.clear();
+        if (this.opened) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+        return;
+      }
       if (e.event === "settled") {
         if (this.opened && !this.busy) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
         return;
@@ -316,7 +338,7 @@ export class PreviewSession {
         });
         this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
         if (res.error) this.errorsSeen = [...this.errorsSeen.slice(-19), `${r.op}: ${res.error}`];
-        const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
+        const lost = res.json?.error === "no such handle" || /^(core trapped|PDF driver failed)/.test(res.error ?? "");
         // (a build that came back whole: a trap after it is a new one)
         if (res.ok && (r.op === "edit" || r.op === "status")) this.traps = 0;
         if (lost && this.opened && r.op !== "open") {
@@ -422,6 +444,9 @@ export class PreviewSession {
     // (XeLaTeX approximated: pdfLaTeX with stand-ins for fontspec & co.)
     const shims = !ENGINES[want].ready && want === "xelatex" ? await this.o.shims?.(this.files[this.main]) : null;
     const engine: Engine = shims ? "pdflatex" : want;
+    this.engine = engine;
+    this.wanted = want;
+    this.preamble = preambleOf(this.files[this.main]);
     this.sink.engine?.({ engine: want, ready: ENGINES[engine].ready, approx: !!shims });
     // (an engine ⚡ Instant doesn't run yet: nothing is built; the view says so and offers another)
     if (!ENGINES[engine].ready) {
@@ -432,7 +457,7 @@ export class PreviewSession {
     await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
     // (an open with minted in the sources loads the worker's \write18 runner, Pyodide)
     this.minted = Object.values(this.files).some(usesMinted);
-    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine });
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine, workers: this.o.workers });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
     this.opened = true;
     const latex = r.json.engine === "partex";
@@ -456,6 +481,11 @@ export class PreviewSession {
   /** When the core trapped, in the last minute. */
   /** Traps since the last build that came back whole. */
   private traps = 0;
+  /** The engine the project runs with (its packages are resolved for it: which tree's file). */
+  private engine: Engine = "pdflatex";
+  /** The engine the main file asked for at the last open (before the shims' choice), and its preamble then. */
+  private wanted?: Engine;
+  private preamble?: string;
   /** The core runs LaTeX (the open reply's `engine`; until it says, as partex's, the default build). */
   private latex = true;
   private diags: Diagnostic[] = [];
@@ -537,7 +567,7 @@ export class PreviewSession {
     const got: (readonly [string, string | null])[] = [];
     this.tr("packages: want", want);
     const fetchOne = async (n: string): Promise<void> => {
-      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
       this.tr(t === null ? "package: none" : "package: got", n);
       got.push([n, t]);
       this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
@@ -599,7 +629,7 @@ export class PreviewSession {
     this.pkg.loading.push(...want);
     tell();
     const one = async (n: string): Promise<void> => {
-      const t = await src.resolve(n).catch((e) => this.failed(n, e));
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
       this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
       if (t !== null) this.pkg.done!.push(n);
       if (t !== null && t !== DELIVERED) this.pkgFiles[n] = t;
@@ -1008,6 +1038,21 @@ export class PreviewSession {
       this.tr("minted: open again, with its runner", {});
       await this.reopen();
       return false;
+    }
+    // (the main file's preamble now asks for another engine, \usepackage{fontspec}
+    // added or a whole XeLaTeX paper pasted in, or no longer does: opened
+    // again with it; the engine is looked at only when the preamble changed)
+    if (file === this.main && this.o.engine) {
+      const pre = preambleOf(b.text);
+      if (pre !== this.preamble) {
+        this.preamble = pre;
+        const want = this.o.engine(b.text);
+        if (want !== this.wanted) {
+          this.tr("engine: open again", { from: this.wanted, to: want });
+          await this.reopen();
+          return false;
+        }
+      }
     }
     for (const [i, e] of edits.entries()) {
       const last = i === edits.length - 1;

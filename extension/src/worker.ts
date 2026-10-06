@@ -1,4 +1,5 @@
 import { indexBytes, packUrl } from "./release.ts";
+import { Index } from "./resolve.ts";
 // The PhiTeX core in a dedicated worker: the wasm (wasm32-wasip1) on a
 // minimal WASI shim, one session per client (an Overleaf tab).
 //
@@ -11,7 +12,15 @@ import { indexBytes, packUrl } from "./release.ts";
 // Overleaf page.
 
 export type Req =
-  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string }
+  /**
+   * `start`: 0 (or absent) a plain first paint, the SSA program at the first
+   * edit or when idle; 1 plain builds only (another worker builds the
+   * program: the offscreen's two-worker start); 2 the SSA program at once.
+   * `noMinted`: minted's runner not loaded (the other worker loads it).
+   */
+  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string; start?: 0 | 1 | 2; noMinted?: boolean }
+  /** Plain builds only, on or off (off: this worker builds the SSA program after all). */
+  | { id: number; client: string; op: "plain_only"; on: boolean }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
   | { id: number; client: string; op: "set_file"; file: string; text: string }
   | { id: number; client: string; op: "set_bytes"; file: string; bytes: Uint8Array }
@@ -64,6 +73,7 @@ interface Core {
   ph_status(h: number): void;
   ph_log?(h: number): void;
   ph_idle?(): number;
+  ph_plain_only?(h: number, on: number): void;
   ph_pages(h: number): void;
   ph_origins?(h: number, page: number): void;
   ph_trace?(h: number, on: number): void;
@@ -81,34 +91,45 @@ interface Core {
 class Exit extends Error {}
 
 /**
- * Shelf, for the core (its `phitex.fetch` import, shelf.rs): a file TeX asks
- * for and the session lacks, fetched there and then (a synchronous request,
- * as a worker may make), so the job never stops at a file TeX Live has.
- * The name's pack and the packs its loading reads, by the index the
- * extension ships; the browser's cache keeps them (Shelf's packs are
- * immutable). The extension's bundled texmf/ files go as a pack of one.
+ * Shelf, for the core (its `phitex.resolve` and `phitex.fetch` imports,
+ * shelf.rs): a file TeX asks for and the session lacks is resolved here to
+ * its texmf path, per the session's engine and the file's kpathsea format
+ * (resolve.ts, release.json's `search`), then its pack and the packs its
+ * loading reads (the engine's deps column) fetched there and then (a
+ * synchronous request, as a worker may make), so the job never stops at a
+ * file TeX Live has. The core keeps files by path, and each name's path,
+ * so it asks again for neither. The browser's cache keeps the packs
+ * (Shelf's are immutable). The extension's bundled texmf/ files (flat, by
+ * name) go as a pack of one.
  */
-let shelfIndex: Map<string, string[]> | undefined;
+let shelfIndex: Index | undefined;
 let bundledNames: Set<string> | undefined;
 /** Shelf packs the extension ships (packs/: the ones most documents load), read from it, not Shelf. */
 let bundledPacks = new Set<string>();
+/** What `resolve` or `fetch` answered, copied by `fetch_copy`. */
 let fetched: Uint8Array | undefined;
 
 async function loadShelf(): Promise<void> {
   if (shelfIndex) return;
   // (Shelf's newest release this extension has, else its own copy: release.ts)
-  const { gz } = await indexBytes(() => fetch(new URL("../shelf-index.tsv.gzdata", import.meta.url)));
+  const { gz, meta } = await indexBytes((n) => fetch(new URL("../" + n, import.meta.url)));
   const tsv = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
-  const m = new Map<string, string[]>();
-  for (const l of tsv.split("\n")) {
-    const [name, pack, deps] = l.split("\t");
-    if (name && pack) m.set(name, [pack, ...(deps ? deps.split(",") : [])]);
-  }
   const names = await (await fetch(new URL("../texmf/names.txt", import.meta.url))).text();
   bundledNames = new Set(names.split("\n").filter(Boolean));
   const packs = await fetch(new URL("../packs/list.txt", import.meta.url)).then((r) => (r.ok ? r.text() : ""), () => "");
   bundledPacks = new Set(packs.split("\n").filter(Boolean));
-  shelfIndex = m;
+  shelfIndex = new Index(tsv, meta);
+}
+
+/**
+ * `name`'s key for the core: its texmf path (resolve.ts), or (the
+ * extension's bundled texmf/, flat) the name itself, unless the engine's
+ * search puts an engine's own tree's file first (tex/xelatex, …).
+ */
+function resolveName(engine: string, format: string, name: string): string | null {
+  const p = shelfIndex?.resolve(name, format, engine) ?? null;
+  if (!name.includes("/") && bundledNames?.has(name) && !(p && /^tex\/(xe|lua)(la)?tex\//.test(p))) return name;
+  return p;
 }
 
 function getSync(url: string): Uint8Array | null {
@@ -221,11 +242,21 @@ function systemImports(mem: () => WebAssembly.Memory) {
 }
 
 function shelfImports(mem: () => WebAssembly.Memory) {
+  const str = (ptr: number, len: number) => new TextDecoder().decode(new Uint8Array(mem().buffer, ptr >>> 0, len >>> 0));
   return {
+    /** `engine TAB format TAB name` → its key (a texmf path, or a bundled name), copied by fetch_copy; 0: none. */
+    resolve(ptr: number, len: number): number {
+      const [engine, format, name] = str(ptr, len).split("\t");
+      const key = name ? resolveName(engine, format, name) : null;
+      if (!key) return 0;
+      fetched = enc.encode(key);
+      return fetched.length;
+    },
+    /** `engine TAB key` → its packs (the key's own and, for that engine, what its loading reads), framed. */
     fetch(ptr: number, len: number): number {
-      const name = new TextDecoder().decode(new Uint8Array(mem().buffer, ptr >>> 0, len >>> 0));
+      const [engine, name] = str(ptr, len).split("\t");
       const parts: Uint8Array[] = [];
-      if (bundledNames?.has(name)) {
+      if (!name.includes("/") && bundledNames?.has(name)) {
         const b = getSync(new URL("../texmf/" + name, import.meta.url).href);
         if (b) {
           // (a pack of one file: its count 1, then the name and the bytes, each with its length)
@@ -234,11 +265,13 @@ function shelfImports(mem: () => WebAssembly.Memory) {
           parts.push(one);
         }
       } else {
-        for (const id of shelfIndex?.get(name) ?? []) {
+        for (const id of shelfIndex?.packs(name, engine) ?? []) {
           const here = bundledPacks.has(id);
           if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
           const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));
           if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
+          // (a pack that did not come: said, not taken for fetched)
+          else (self as unknown as Worker).postMessage({ fetching: id, name, failed: true });
         }
       }
       if (!parts.length) return 0;
@@ -344,6 +377,32 @@ const loadAssets = () =>
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));
 
+let xeAssets: Promise<Uint8Array> | undefined;
+/** The core instance XeTeX's assets were given to (a new instance after a trap needs them again). */
+let xeCore: Core | undefined;
+
+/**
+ * XeTeX's assets (assets-xelatex.bin.gzdata: its format, the font index,
+ * dvipdfmx.cfg, the TECkit mappings), fetched and given to the core once,
+ * for the first xelatex project: a pdfLaTeX-only user never loads them.
+ */
+async function loadXe(): Promise<void> {
+  if (xeCore === core || !core.ph_assets) return;
+  const a = await (xeAssets ??= fetch(new URL("assets-xelatex.bin.gzdata", import.meta.url)).then(async (r) => {
+    if (!r.ok) throw new Error(`xelatex assets: ${r.status}`);
+    return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  }));
+  const p = core.ph_alloc(a.length);
+  new Uint8Array(core.memory.buffer, p >>> 0, a.length).set(a);
+  const n = core.ph_assets(p, a.length);
+  core.ph_free(p, a.length);
+  if (!n) throw new Error("xelatex assets: bad framing");
+  xeCore = core;
+}
+
+/** The clients whose project is XeTeX's: their pages are drawn here (with the glyph runs), not by the draw worker. */
+const xetexClients = new Set<string>();
+
 /**
  * The draw worker (a second instance of the core, named "draw"): it only
  * draws pages from the PDF the build worker links, so pages draw while a
@@ -419,8 +478,10 @@ function handle(r: Req): Res {
   const h = sessions.get(r.client) ?? 0;
   switch (r.op) {
     case "open": {
-      // (one core, pdfLaTeX's: another engine's core is chosen here when there is one)
-      if (r.engine && r.engine !== "pdflatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
+      // (one core: pdfLaTeX's or XeTeX's; LuaTeX's not yet)
+      if (r.engine && r.engine !== "pdflatex" && r.engine !== "xelatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
+      if (r.engine === "xelatex") xetexClients.add(r.client);
+      else xetexClients.delete(r.client);
       if (h) core.ph_close(h);
       const f = new Frame().u32(r.fuel).str(r.main).u32(Object.keys(r.files).length);
       for (const [n, t] of Object.entries(r.files)) f.str(n).str(t);
@@ -428,6 +489,8 @@ function handle(r: Req): Res {
       const bins = Object.entries(r.binaries ?? {});
       f.u32(bins.length);
       for (const [n, b] of bins) f.str(n).bytes(b);
+      // (the engine: 1 XeTeX; then how to start)
+      f.u32(r.engine === "xelatex" ? 1 : 0).u32(r.start ?? 0);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
       // (the pages' hashes with it: the tab lays them out now, not after
@@ -517,6 +580,9 @@ function handle(r: Req): Res {
       }
       return { id: r.id, ok: true, json };
     }
+    case "plain_only":
+      if (h) core.ph_plain_only?.(h, r.on ? 1 : 0);
+      return { id: r.id, ok: !!h };
     case "close":
       if (h) core.ph_close(h);
       sessions.delete(r.client);
@@ -553,7 +619,7 @@ function shipPdf(r: Req): void {
 /** Client `client`'s PDF to the drawer, if its pages changed since the last one sent. */
 function shipFor(client: string): void {
   const h = sessions.get(client);
-  if (!h || !core.ph_draw_set) return;
+  if (!h || !core.ph_draw_set || xetexClients.has(client)) return;
   core.ph_pages(h);
   const key = new TextDecoder().decode(outBytes());
   if (shipped.get(client) === key) return;
@@ -671,7 +737,8 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     await ready;
     // (a project that uses minted: Pyodide loaded before its first build,
     // as \\write18 runs synchronously inside it)
-    if (r.op === "open" && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
+    if (r.op === "open" && !r.noMinted && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
+    if (r.op === "open" && r.engine === "xelatex") await loadXe();
     res = handle(r);
     shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)
@@ -688,7 +755,9 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     // A trap (a PhiTeX panic, with panic = "abort") leaves the instance
     // unusable: start a new one; every client must open again.
     // (and a core that fails to load at all says so: the reply always goes)
-    res = { id: r.id, ok: false, error: `core trapped: ${e}${panicText()}` };
+    // (XeTeX's PDF driver, xdvipdfmx, stops with a panic too: said so)
+    const why = panicText();
+    res = { id: r.id, ok: false, error: `${/partex_xdvipdfmx|xdvipdfmx/.test(why) ? "PDF driver failed" : "core trapped"}: ${e}${why}` };
     sessions.clear();
     await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }

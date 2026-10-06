@@ -34,6 +34,19 @@ if [ $engine = partex ]; then
     (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
   fi
   scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gzdata
+  # XeTeX's: its format, made with its font index (the engine's otf-index
+  # over the fonts Shelf serves, scripts/font-index.sh), dvipdfmx.cfg and the
+  # TECkit mappings; a second file the worker loads for the first xelatex
+  # project only
+  # (made outside the sandbox: it reads Shelf's repo and runs its own bwrap)
+  if [ ! -f target/fmt-xe/fontindex.pxfi ]; then
+    echo "no target/fmt-xe/fontindex.pxfi: run scripts/font-index.sh first (after Shelf's release.py)" >&2
+    exit 1
+  fi
+  if [ ! -f target/fmt-xe/xelatex.fmt ]; then
+    (ulimit -v 8000000; scripts/sandbox env MKFMT_XETEX="$PWD/target/fmt-xe/fontindex.pxfi" target/partex/release/mkfmt target/fmt-xe texmf)
+  fi
+  scripts/sandbox python3 scripts/make-xe-assets.py target/fmt-xe extension/dist/assets-xelatex.bin.gzdata
 else
   (cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
     cargo build --release --target wasm32-wasip1)
@@ -47,9 +60,12 @@ cp NOTICE extension/NOTICE.txt
 # The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
 # them before asking Shelf.
 rm -rf extension/texmf && cp -r texmf extension/texmf
-# Shelf's index (name -> pack), made by Shelf's build: scripts/shelf-index.sh
+# Shelf's index (texmf path -> pack) and its release.json (how names
+# resolve per engine), made by Shelf's release.py: scripts/shelf-index.sh
 # (named .gzdata: Edge's store refuses archives inside a package)
-cp shelf-index.tsv.gz extension/shelf-index.tsv.gzdata
+# (SHELF_INDEX, SHELF_RELEASE: another release's, a local Shelf's for a --dev build)
+cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
+cp "${SHELF_RELEASE:-shelf-release.json}" extension/shelf-release.json
 scripts/sandbox npx tsc -p .
 # Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
 lm=/usr/share/texmf-dist/fonts/opentype/public
@@ -83,8 +99,11 @@ scripts/sandbox node -e '
     m.web_accessible_resources[0].matches.push("http://localhost/*");
   }
   fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
-# (--dev: Shelf from a local server, ../shelf.PhiTeX.org/serve.py)
-$dev && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
+# (SHELF_LOCAL=1 with --dev: Shelf from a local server,
+# ../shelf.PhiTeX.org/serve.py, serving a release's h/ packs, with
+# SHELF_INDEX that release's index; else the live Shelf, whose index
+# shelf-index.tsv.gz is)
+$dev && [ "${SHELF_LOCAL:-}" = 1 ] && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
 # Every module the content script imports must be web-accessible.
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.json"));

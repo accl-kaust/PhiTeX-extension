@@ -1,0 +1,14 @@
+{
+ "project": "test/scenarios/refs",
+ "name": "engine-switch",
+ "steps": [
+  { "idle": 4000 },
+  { "eval": "(() => { const t = mockEditor.text(); globalThis.__orig = t; mockEditor.replace(0, t.length, \"\\\\documentclass{article}\\n\\\\usepackage{fontspec}\\n\\\\setmainfont{TeX Gyre Pagella}\\n\\\\begin{document}\\n\\\\section{Switched}\\nNow set with XeTeX, in Pagella.\\n\\\\end{document}\\n\"); return 1; })()", "page": true },
+  { "idle": 6000 },
+  { "eval": "(() => { const s = globalThis.__phitexSession; const r = document.querySelector('phitex-preview')?.shadowRoot; return s.engine + ' | ' + r?.querySelectorAll('.slot').length + ' pages | ' + [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 80) + ' | diag: ' + [...(r?.querySelectorAll('.diag') ?? [])].map((d) => d.innerText).join(' ').slice(0, 160); })()" },
+  { "eval": "(() => { const t = mockEditor.text(); mockEditor.replace(0, t.length, globalThis.__orig); return 1; })()", "page": true },
+  { "idle": 6000 },
+  { "eval": "(() => { const s = globalThis.__phitexSession; const r = document.querySelector('phitex-preview')?.shadowRoot; return s.engine + ' | ' + r?.querySelectorAll('.slot').length + ' pages | ' + [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 80) + ' | trace: ' + s.trace.filter((e) => /engine: open again/.test(e.k ?? e.kind ?? JSON.stringify(e))).length; })()" },
+  { "shot": "engine-switch" }
+ ]
+}

@@ -12,8 +12,8 @@
 export interface PackageSource {
   /** Shown to the user: "TeX Live 2025", ... */
   readonly label: string;
-  /** `name`'s text (as the core asked for it: "amsmath.sty"), or null: not there. */
-  resolve(name: string): Promise<string | null>;
+  /** `name`'s text (as the core asked for it: "amsmath.sty") for `engine` (pdflatex, xelatex: which tree's file), or null: not there. */
+  resolve(name: string, engine?: string): Promise<string | null>;
 }
 
 /**
@@ -50,10 +50,11 @@ export function cached(inner: PackageSource): PackageSource {
   const seen = new Map<string, Promise<string | null>>();
   return {
     label: inner.label,
-    resolve(name) {
-      let p = seen.get(name);
+    resolve(name, engine) {
+      const k = `${engine ?? ""}\t${name}`;
+      let p = seen.get(k);
       // (a failure is not remembered: asked again, it is fetched again)
-      if (!p) seen.set(name, (p = inner.resolve(name).catch((e) => (seen.delete(name), Promise.reject(e)))));
+      if (!p) seen.set(k, (p = inner.resolve(name, engine).catch((e) => (seen.delete(k), Promise.reject(e)))));
       return p;
     },
   };

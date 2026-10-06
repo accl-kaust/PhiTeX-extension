@@ -130,6 +130,19 @@ try {
   console.log("worker console: not attached:", String(e));
 }
 
+// the onboarded state (scripts/onboarded.mjs: no welcome tip, terms or
+// tour over the page in a fresh profile), then the project again
+{
+  const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"), "utf8")).version;
+  for (let i = 0; i < 40 && !contexts.some((c) => c.auxData?.isDefault); i++) await sleep(250);
+  await sleep(1000);
+  // (PHITEX_WORKERS=1: the one-worker start, to compare; else the two-worker start where it applies)
+  if ((await evalIn(onboardScript(version, { workers: process.env.PHITEX_WORKERS === "1" ? 1 : 2 }))) === "onboarded") {
+    await call("Page.reload");
+    await sleep(1500);
+  }
+}
+
 // the first page
 // (a long project's first build may take a minute or more: waited for
 // while the session is building, up to 10 minutes; given up after 30 s
@@ -145,6 +158,9 @@ if (!(await state())?.pages) {
   console.log("editor:", await evalIn(`(() => { const c = document.querySelector(".cm-editor .cm-content"); return c ? "cm-content" + (c.cmView || c.cmTile ? ", with its view" : ", no view") : typeof mockEditor; })()`));
   for (const e of events) console.log(`  ${e.t} ms  ${e.k}  ${String(e.d).slice(0, 400)}`);
   for (const l of workerLog.slice(-20)) console.log("  worker:", l.slice(0, 400));
+  // (the session's own last events: what it opened, what the core said)
+  const trace = await evalIn(`JSON.stringify((globalThis.__phitexSession?.trace ?? []).slice(-25))`, true).catch(() => "[]");
+  for (const t of JSON.parse(trace ?? "[]")) console.log("  session:", JSON.stringify(t).slice(0, 400));
   try { process.kill(-mock.pid); } catch {}
   process.exit(1);
 }

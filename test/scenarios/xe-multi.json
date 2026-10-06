@@ -1,0 +1,9 @@
+{ "project": "test/scenarios/xe-multi", "name": "xe-multi",
+  "steps": [ { "idle": 15000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; return r?.querySelectorAll('.slot').length + ' pages | ' + r?.querySelectorAll('svg.page use').length + ' glyphs'; })()", "page": true },
+    { "type": " سلام", "after": "مرحبا بالعالم", "keys": 150 }, { "idle": 3000 },
+    { "type": " भारत", "after": "नमस्ते दुनिया", "keys": 150 }, { "idle": 3000 },
+    { "type": "中文", "after": "实时排版", "keys": 150 }, { "idle": 3000 },
+    { "type": "日本", "after": "リアルタイム組版", "keys": 150 }, { "idle": 4000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview').shadowRoot; const page = r.querySelector('svg.page'); const defs = r.getElementById('phx-glyphs'); const c = page.cloneNode(true); if (defs) c.insertAdjacentHTML('afterbegin', '<defs>' + (defs.querySelector('defs') ?? defs).innerHTML + '</defs>'); c.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); return 'SVG:' + btoa(unescape(encodeURIComponent(c.outerHTML))); })()", "page": true },
+    { "shot": "xe-multi" } ] }

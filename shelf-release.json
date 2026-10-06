@@ -1,0 +1,160 @@
+{
+ "schema": 3,
+ "release": "tl2026.4",
+ "index": "index-tl2026.4.tsv.gz",
+ "min_extension": "0.3.0",
+ "notice": null,
+ "packs": 6919,
+ "deps": [
+  "pdftex",
+  "xetex"
+ ],
+ "search": {
+  "pdftex": {
+   "tex": [
+    "tex/latex",
+    "tex/generic",
+    "tex"
+   ],
+   "tfm": [
+    "fonts/tfm"
+   ],
+   "vf": [
+    "fonts/vf"
+   ],
+   "type1": [
+    "fonts/type1"
+   ],
+   "enc": [
+    "fonts/enc"
+   ],
+   "map": [
+    "fonts/map/pdflatex",
+    "fonts/map/pdftex",
+    "fonts/map/dvips",
+    "fonts/map"
+   ],
+   "opentype": [
+    "fonts/opentype",
+    "fonts/truetype"
+   ],
+   "truetype": [
+    "fonts/truetype",
+    "fonts/opentype"
+   ],
+   "bst": [
+    "bibtex/bst",
+    "bibtex/csf"
+   ],
+   "bib": [
+    "bibtex/bib"
+   ],
+   "ist": [
+    "makeindex"
+   ]
+  },
+  "xetex": {
+   "tex": [
+    "tex/xelatex",
+    "tex/latex",
+    "tex/xetex",
+    "tex/generic",
+    "tex"
+   ],
+   "tfm": [
+    "fonts/tfm"
+   ],
+   "vf": [
+    "fonts/vf"
+   ],
+   "type1": [
+    "fonts/type1"
+   ],
+   "enc": [
+    "fonts/enc"
+   ],
+   "map": [
+    "fonts/map/xelatex",
+    "fonts/map/pdftex",
+    "fonts/map/dvips",
+    "fonts/map"
+   ],
+   "opentype": [
+    "fonts/opentype",
+    "fonts/truetype"
+   ],
+   "truetype": [
+    "fonts/truetype",
+    "fonts/opentype"
+   ],
+   "bst": [
+    "bibtex/bst",
+    "bibtex/csf"
+   ],
+   "bib": [
+    "bibtex/bib"
+   ],
+   "ist": [
+    "makeindex"
+   ]
+  },
+  "luatex": {
+   "tex": [
+    "tex/lualatex",
+    "tex/latex",
+    "tex/luatex",
+    "tex/generic",
+    "tex"
+   ],
+   "tfm": [
+    "fonts/tfm"
+   ],
+   "vf": [
+    "fonts/vf"
+   ],
+   "type1": [
+    "fonts/type1"
+   ],
+   "enc": [
+    "fonts/enc"
+   ],
+   "map": [
+    "fonts/map/lualatex",
+    "fonts/map/pdftex",
+    "fonts/map/dvips",
+    "fonts/map"
+   ],
+   "opentype": [
+    "fonts/opentype",
+    "fonts/truetype"
+   ],
+   "truetype": [
+    "fonts/truetype",
+    "fonts/opentype"
+   ],
+   "bst": [
+    "bibtex/bst",
+    "bibtex/csf"
+   ],
+   "bib": [
+    "bibtex/bib"
+   ],
+   "ist": [
+    "makeindex"
+   ],
+   "lua": [
+    "scripts/lualatex/lua",
+    "scripts/lualatex",
+    "scripts/luatex/lua",
+    "scripts/luatex",
+    "scripts/lua",
+    "scripts",
+    "tex/lualatex",
+    "tex/latex",
+    "tex/luatex",
+    "tex/generic",
+    "tex"
+   ]
+  }
+ }
+}

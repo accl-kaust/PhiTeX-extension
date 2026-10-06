@@ -135,12 +135,42 @@ impl Type1 {
     #[must_use]
     pub fn path(&self, name: &str) -> Option<String> {
         let cs = self.charstrings.get(name)?;
-        let mut r = Run { t1: self, d: String::new(), x: 0.0, y: 0.0, flex: None, ps: Vec::new(), open: false, depth: 0 };
+        let mut r = Run { t1: self, d: String::new(), x: 0.0, y: 0.0, flex: None, ps: Vec::new(), open: false, depth: 0, w: 0.0 };
         r.run(cs, &mut Vec::new(), 0.0, 0.0);
         if r.open {
             r.d.push('Z');
         }
         Some(r.d)
+    }
+
+    /// Glyph `name`'s advance width (font units, `hsbw`'s), if the font has it.
+    #[must_use]
+    pub fn width(&self, name: &str) -> Option<f64> {
+        let cs = self.charstrings.get(name)?;
+        let mut r = Run { t1: self, d: String::new(), x: 0.0, y: 0.0, flex: None, ps: Vec::new(), open: false, depth: 0, w: 0.0 };
+        r.run(cs, &mut Vec::new(), 0.0, 0.0);
+        Some(r.w)
+    }
+
+    /// A `.pfb` file (segments `0x80 1` cleartext, `0x80 2` binary, …), or a
+    /// font program as the PDF embeds it (cleartext up to `eexec`, then binary).
+    #[must_use]
+    pub fn from_file(b: &[u8]) -> Option<Type1> {
+        if b.first() != Some(&0x80) {
+            let e = find(b, b"eexec", 0)? + 5;
+            let e = e + b[e..].iter().take_while(|c| matches!(c, b'\r' | b'\n' | b' ')).count();
+            return Type1::parse(b, e);
+        }
+        let (mut clear, mut bin, mut i) = (Vec::new(), Vec::new(), 0);
+        while i + 6 <= b.len() && b[i] == 0x80 && b[i + 1] != 3 {
+            let n = u32::from_le_bytes([b[i + 2], b[i + 3], b[i + 4], b[i + 5]]) as usize;
+            let seg = b.get(i + 6..i + 6 + n)?;
+            if b[i + 1] == 1 && bin.is_empty() { clear.extend_from_slice(seg) } else if b[i + 1] == 2 { bin.extend_from_slice(seg) }
+            i += 6 + n;
+        }
+        let len1 = clear.len();
+        clear.extend_from_slice(&bin);
+        Type1::parse(&clear, len1)
     }
 }
 
@@ -155,6 +185,8 @@ struct Run<'a> {
     ps: Vec<f64>,
     open: bool,
     depth: u32,
+    /// The advance width `hsbw` gave.
+    w: f64,
 }
 
 impl Run<'_> {
@@ -215,6 +247,7 @@ impl Run<'_> {
                 13 => {
                     // hsbw: sbx wx
                     let sbx = st.first().copied().unwrap_or(0.0);
+                    self.w = st.get(1).copied().unwrap_or(0.0);
                     self.x = ox + sbx;
                     self.y = oy;
                     st.clear();

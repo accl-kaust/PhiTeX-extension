@@ -9,15 +9,17 @@
 //      the .def, .cfg and .fd files it reads, and every file of the pack is
 //      kept in IndexedDB.
 //
-// Which pack holds a name is in an index the extension holds (shipped, and
-// newer releases of it fetched daily, release.ts): no request to learn it,
-// and a name the index lacks (a project's own file it doesn't have) never
-// leaves the browser.
+// Which file a name is, for the project's engine, and which pack holds it,
+// is in an index the extension holds (shipped, and newer releases of it
+// fetched daily, release.ts; the rule is resolve.ts's, the worker's too):
+// no request to learn it, and a name the index lacks (a project's own file
+// it doesn't have) never leaves the browser. Files are kept by texmf path.
 
 // (Cloudflare Pages' own address until there is a domain: shelf.phitex.org)
 export const SHELF = "https://shelf-phitex.pages.dev/tl2026/";
 
 import { indexBytes, packUrl } from "./release.ts";
+import { Index, formatOf, shelfEngine } from "./resolve.ts";
 
 const once = <T>(f: () => Promise<T>) => {
   let p: Promise<T> | undefined;
@@ -31,16 +33,10 @@ const bundled = once(async () => names(await (await fetch(chrome.runtime.getURL(
 /** What the core's assets hold (the format, fonts, the popular packages): never fetched. */
 const inCore = once(async () => names(await (await fetch(chrome.runtime.getURL("dist/assets-names.txt"))).text()));
 
-/** Name → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
+/** Path → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
 const index = once(async () => {
-  const { gz } = await indexBytes(() => fetch(chrome.runtime.getURL("shelf-index.tsv.gzdata")));
-  const m = new Map<string, Row>();
-  const text = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
-  for (const line of text.split("\n")) {
-    const [name, pack, deps] = line.split("\t");
-    if (name && pack) m.set(name, { pack, deps: deps ? deps.split(",") : [] });
-  }
-  return m;
+  const { gz, meta } = await indexBytes((n) => fetch(chrome.runtime.getURL(n)));
+  return new Index(await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text(), meta);
 });
 
 const db = once(
@@ -95,8 +91,6 @@ function unpack(b: Uint8Array): [string, Uint8Array][] {
 
 /** Each pack fetched once (in flight or done), its files kept. */
 const packs = new Map<string, Promise<Map<string, Uint8Array>>>();
-/** Index rows: a name's pack, and the packs its loading reads (Shelf's trace). */
-type Row = { pack: string; deps: string[] };
 /** Shelf packs the extension ships (packs/list.txt): read from it, not Shelf. */
 const shipped = once(async () => {
   const r = await fetch(chrome.runtime.getURL("packs/list.txt")).catch(() => null);
@@ -146,22 +140,28 @@ const given = new Set<string>();
 
 /**
  * `name`'s file and where it came from (null: in neither texmf/ nor Shelf),
- * and `extra`: the other files of its pack and of the packs its loading
- * reads (Shelf's trace), each pack's once. The build stops at the first file
+ * for `engine` (the extension's: pdflatex, xelatex), and `extra`: the other
+ * files of its pack and of the packs its loading reads with that engine
+ * (Shelf's trace), each pack's once, by texmf path. The build stops at the first file
  * it lacks, so the core gets them all before it asks: a package and what it
  * loads in one round, not a build each.
  */
-export async function resolve(name: string): Promise<(Resolved & { extra?: [string, Uint8Array][] }) | null> {
+export async function resolve(name: string, engine?: string): Promise<(Resolved & { extra?: [string, Uint8Array][] }) | null> {
   if (name.includes("/") || name.startsWith(".")) return null;
   if ((await inCore().catch(() => new Set<string>())).has(name)) return { from: "core", inCore: true };
-  if ((await bundled()).has(name)) return { text: await (await fetch(chrome.runtime.getURL("texmf/" + name))).text(), from: "bundled" };
-  const row = (await index()).get(name);
-  const hit = await idbGet(name).catch(() => undefined);
-  if (!row) return hit ? { ...asFile(name, hit), from: "cache" } : null;
-  const ids = [row.pack, ...row.deps].filter((id) => !given.has(id));
+  const e = shelfEngine(engine);
+  const ix = await index();
+  const path = ix.resolve(name, formatOf(name), e);
+  // (the bundled texmf/, unless the engine's own tree has the file first, as the worker decides)
+  if ((await bundled()).has(name) && !(path && /^tex\/(xe|lua)(la)?tex\//.test(path)))
+    return { text: await (await fetch(chrome.runtime.getURL("texmf/" + name))).text(), from: "bundled" };
+  if (!path) return null;
+  const hit = await idbGet(path).catch(() => undefined);
+  const [own, ...deps] = ix.packs(path, e);
+  const ids = [own, ...deps].filter((id) => !given.has(id));
   for (const id of ids) given.add(id);
   const got = await Promise.all(ids.map((id) => pack(id).catch(() => new Map<string, Uint8Array>())));
-  const extra: [string, Uint8Array][] = got.flatMap((m) => [...m].filter(([n]) => n !== name));
-  const b = hit ?? (await pack(row.pack)).get(name);
+  const extra: [string, Uint8Array][] = got.flatMap((m) => [...m].filter(([n]) => n !== path));
+  const b = hit ?? (await pack(own)).get(path);
   return b ? { ...asFile(name, b), from: hit ? "cache" : "shelf", extra } : null;
 }

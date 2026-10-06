@@ -34,6 +34,7 @@ mod bib;
 mod shelf;
 pub mod system;
 pub mod type1;
+pub mod xetex;
 
 pub use draws::draws_json;
 
@@ -82,6 +83,7 @@ fn suffix(kind: FileKind) -> &'static [u8] {
         FileKind::Bst => b".bst",
         FileKind::Bib => b".bib",
         FileKind::Ist => b".ist",
+        FileKind::OpenType => b".otf",
         _ => b"",
     }
 }
@@ -99,6 +101,31 @@ impl Host for MemHost {
     fn read_file(&mut self, name: &[u8], kind: FileKind) -> Option<OpenedFile> {
         // kpathsea: the name with the kind's suffix first, then as given
         let base = name.strip_prefix(b"./").unwrap_or(name);
+        // (XeTeX's font index: one asset, whatever the name)
+        if kind == FileKind::FontIndex {
+            let c = self.files.get(xetex::INDEX).cloned().or_else(|| self.fallback.as_mut().and_then(|f| f(xetex::INDEX)).map(Arc::from))?;
+            self.files.insert(xetex::INDEX.to_vec(), c.clone());
+            return Some(OpenedFile { name: xetex::INDEX.to_vec(), contents: c });
+        }
+        // (XeTeX's fonts: by TeX Live's absolute path, kept by the path
+        // inside it; or by base name, found in the font index's paths)
+        if matches!(kind, FileKind::OpenType | FileKind::TrueType | FileKind::MiscFonts | FileKind::Type1 | FileKind::Pict) || base.starts_with(xetex::TL) {
+            for n in [with_suffix(base, kind), base.to_vec()] {
+                for k in xetex::keys(&n).into_iter().skip(1) {
+                    let c = self.files.get(&k).cloned().or_else(|| {
+                        let c: Arc<[u8]> = Arc::from(self.fallback.as_mut()?(&k)?);
+                        self.files.insert(k.clone(), c.clone());
+                        Some(c)
+                    });
+                    if let Some(c) = c {
+                        self.served.push((String::from_utf8_lossy(&k).into_owned(), c.len(), "font"));
+                        // (under the name asked too: `unchanged` finds it by that)
+                        self.files.insert(n.clone(), c.clone());
+                        return Some(OpenedFile { name: n, contents: c });
+                    }
+                }
+            }
+        }
         for n in [with_suffix(base, kind), base.to_vec()] {
             // (a file this job wrote, `\jobname.aux` at the end: as on a
             // disk, what was written so far, open or not; a rebuild opens it
@@ -155,7 +182,8 @@ impl Host for MemHost {
             .iter()
             .map(|(name, kind, got)| {
                 let base = name.strip_prefix(b"./").unwrap_or(name);
-                let cands = [with_suffix(base, *kind), base.to_vec()];
+                // (XeTeX's font index: the one asset, whatever the name)
+                let cands = if *kind == FileKind::FontIndex { [xetex::INDEX.to_vec(), xetex::INDEX.to_vec()] } else { [with_suffix(base, *kind), base.to_vec()] };
                 if cands.iter().any(|n| self.written.contains_key(n)) {
                     return false;
                 }
@@ -281,8 +309,14 @@ impl Host for MemHost {
 /// sizes that made it.
 #[must_use]
 pub fn texlive_params(ini: bool) -> Params {
+    engine_params(false, ini)
+}
+
+/// TeX Live's sizes for pdfTeX, or (`xetex`) XeTeX.
+#[must_use]
+pub fn engine_params(xetex: bool, ini: bool) -> Params {
     Params {
-        flavor: partex_core::Flavor::PdfTex,
+        flavor: if xetex { partex_core::Flavor::XeTeX } else { partex_core::Flavor::PdfTex },
         etex: ini,
         ini,
         main_memory: 5_000_000,
@@ -357,6 +391,10 @@ thread_local! {
 
 /// Add assets (the format, fonts) for every session of this instance.
 pub fn add_assets(m: BTreeMap<Vec<u8>, Arc<[u8]>>) {
+    // (XeTeX's font index: its fonts' base names, for a font asked by file name)
+    if let Some(b) = m.get(xetex::INDEX) {
+        xetex::learn_index(b);
+    }
     ASSETS.with_borrow_mut(|a| a.extend(m));
 }
 
@@ -432,6 +470,19 @@ pub struct Session {
     /// (native tools) A flat directory of TeX Live's files the host reads a
     /// name from when it has none: no fetch loop.
     pub fallback_dir: Option<std::path::PathBuf>,
+    /// XeTeX (xelatex), not pdfTeX: `pdf` is made from the XDV the job writes.
+    pub xetex: bool,
+    /// (XeTeX) The XDV the last link made (the PDF is converted from it).
+    xdv: Vec<u8>,
+    /// (XeTeX) A hash of the XDV `pdf` was made from.
+    xdv_hash: u64,
+    /// (XeTeX) Each page's glyph runs, from xdvipdfmx.
+    runs: Vec<Vec<partex_xdvipdfmx::dvi::GlyphRun>>,
+    /// (XeTeX) The fonts xdvipdfmx read (their outlines are drawn), and the faces parsed.
+    xread: xetex::Read,
+    faces: xetex::Faces,
+    /// (XeTeX) xdvipdfmx started, gone on from for each XDV.
+    dpx: xetex::Started,
 }
 
 #[derive(Debug)]
@@ -615,6 +666,13 @@ impl Session {
             want_ssa: true,
             how: String::new(),
             fallback_dir: None,
+            xetex: false,
+            xdv: Vec::new(),
+            xdv_hash: 0,
+            runs: Vec::new(),
+            xread: xetex::Read::default(),
+            faces: xetex::Faces::new(),
+            dpx: None,
         }
     }
 
@@ -659,6 +717,10 @@ impl Session {
         if let Some(dir) = self.fallback_dir.clone() {
             return Some(Box::new(move |n: &[u8]| {
                 let n = std::str::from_utf8(n).ok()?;
+                // (XeTeX's fonts, by their path inside TeX Live, from this machine's)
+                if n.starts_with("fonts/") {
+                    return std::fs::read(std::path::Path::new("/usr/share/texmf-dist").join(n)).ok();
+                }
                 if n.contains('/') {
                     return None;
                 }
@@ -666,6 +728,16 @@ impl Session {
             }));
         }
         let cache = self.shelf.clone();
+        // (native tools, XeTeX: a font by its path inside TeX Live, from this machine's)
+        if !shelf::available() && self.xetex {
+            return Some(Box::new(|n: &[u8]| {
+                let n = std::str::from_utf8(n).ok()?;
+                if !n.starts_with("fonts/") {
+                    return None;
+                }
+                std::fs::read(std::path::Path::new("/usr/share/texmf-dist").join(n)).ok()
+            }));
+        }
         shelf::available().then(|| -> Box<dyn FnMut(&[u8]) -> Option<Vec<u8>>> { Box::new(move |n: &[u8]| shelf::get(&cache, n)) })
     }
 
@@ -864,7 +936,7 @@ impl Session {
             // .aux is not the next keystroke's, the last complete trip's
             // streams stay, and it leaves no PDF: the last good pages stay)
             tracker.keep_complete.set(true);
-            let mut tex = Tex::new(host, tracker, texlive_params(false));
+            let mut tex = Tex::new(host, tracker, engine_params(self.xetex, false));
             // (windows: steps cut inside long runs, a tikzpicture's say, at
             // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
             tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
@@ -880,7 +952,7 @@ impl Session {
             // (the main file by the primitive \input, as `pdflatex main.tex`
             // opens it: LaTeX's \input{main} tests it with \pdffilesize,
             // which every keystroke changes, and re-ran that lookup)
-            let cmd = format!("&pdflatex \\nonstopmode{mode}\\csname @@input\\endcsname{{{main}}}");
+            let cmd = if self.xetex { self.command() } else { format!("&pdflatex \\nonstopmode{mode}\\csname @@input\\endcsname{{{main}}}") };
             let r = ssa::run_applying(&mut tex, cmd.as_bytes(), false, 0, false);
             let run_ms = ms(t.elapsed());
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
@@ -930,6 +1002,10 @@ impl Session {
     /// The job's command line.
     fn command(&self) -> String {
         let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
+        // (XeTeX: its XDV made a PDF by the link, `xetex::to_pdf`)
+        if self.xetex {
+            return format!("&xelatex \\nonstopmode\\csname @@input\\endcsname{{{main}}}");
+        }
         // (PDF mode uncompressed: pdfdraw reads the content streams back;
         // the main file by the primitive \input, as `pdflatex main.tex`)
         let mode = if pdf_mode() { "\\pdfcompresslevel=0 \\pdfobjcompresslevel=0 " } else { "\\pdfoutput=0 " };
@@ -946,7 +1022,7 @@ impl Session {
         let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
         host.fallback = self.fallback();
         // (its command count, beside the tracked build's: the two compared)
-        let mut tex = Tex::new(host, Untracked, texlive_params(false));
+        let mut tex = Tex::new(host, Untracked, engine_params(self.xetex, false));
         let h = tex.run(self.command().as_bytes());
         let commands = tex.commands();
         let host = std::mem::take(tex.host_mut());
@@ -959,6 +1035,10 @@ impl Session {
         self.missing.sort();
         self.missing.dedup();
         self.pdf = host.written.get(format!("{job}.pdf").as_bytes()).cloned().unwrap_or_default();
+        if self.xetex {
+            let xdv = std::mem::take(&mut self.pdf);
+            self.from_xdv(xdv, host.files.clone());
+        }
         // (BibTeX's .bbl/.blg are not the job's: kept from the run before)
         let tools: BTreeMap<Vec<u8>, Arc<[u8]>> = self.carried.iter().filter(|(n, _)| n.ends_with(b".bbl") || n.ends_with(b".blg")).map(|(n, b)| (n.clone(), b.clone())).collect();
         self.carried = host
@@ -981,6 +1061,10 @@ impl Session {
     /// (a cold build's first link, a numbering it cannot follow) the full
     /// link, every file whole. As the CLI's `SsaLinker::link`.
     fn link(&mut self) {
+        // (XeTeX: the link splices the XDV, `pdf` the PDF made of it)
+        if self.xetex {
+            std::mem::swap(&mut self.pdf, &mut self.xdv);
+        }
         let tex = self.tex.as_mut().unwrap();
         // (exactly once per link: the steps' chunks changed since the last)
         let changes = ssa::take_step_changes(&mut tex.tracker().rec.borrow_mut());
@@ -1041,6 +1125,36 @@ impl Session {
             (self.pdf, self.dvi, self.pdf_first, self.pdf_hashes, self.pages, self.fonts) = (pdf, dvi, first, hashes, pages, fonts);
             self.relink = true;
         }
+        if self.xetex {
+            let xdv = std::mem::take(&mut self.pdf);
+            self.pdf = std::mem::take(&mut self.xdv);
+            let files = self.tex.as_ref().map(|t| t.host().files.clone()).unwrap_or_default();
+            self.from_xdv(xdv, files);
+        }
+    }
+
+    /// (XeTeX) The PDF of `xdv` (the job's), its glyph runs: made again
+    /// only when the XDV changed.
+    fn from_xdv(&mut self, xdv: Vec<u8>, files: BTreeMap<Vec<u8>, Arc<[u8]>>) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        xdv.hash(&mut h);
+        let h = h.finish();
+        if h != self.xdv_hash || self.pdf.is_empty() {
+            let t = Instant::now();
+            let job = format!("{}.pdf", self.main.strip_suffix(".tex").unwrap_or(&self.main));
+            let (pdf, runs) = xetex::to_pdf(&xdv, job.as_bytes(), files, &self.xread, &self.shelf, epoch(&self.started), &mut self.dpx);
+            self.pdf = pdf;
+            self.shipped = runs.len();
+            self.runs = runs;
+            self.xdv_hash = h;
+            self.pdf_hashes = None;
+            self.pdf_first = None;
+            self.pdf_draws.clear();
+            let _ = write!(self.how, "; xdvipdfmx {:.1} ms", ms(t.elapsed()));
+            self.history_log.push(format!("xdvipdfmx: {:.1} ms: {}", ms(t.elapsed()), xetex::COST.with_borrow(Clone::clone)));
+        }
+        self.xdv = xdv;
     }
 
     /// The incremental link of `changes`; false: the full link is to be made.
@@ -1318,7 +1432,18 @@ impl Session {
             if let Some(d) = self.pdf_draws.get(&page) {
                 return Some(d.clone());
             }
-            let d = pdfdraw::page(&self.pdf, page, &mut self.pdf_fonts)?;
+            let d = if self.xetex {
+                // (XeTeX: the native fonts' glyphs from the glyph runs)
+                let runs = self.runs.get(page).map_or(&[][..], |r| &r[..]);
+                let (files, read, shelf) = (self.tex.as_ref().map(|t| &t.host().files), &self.xread, &self.shelf);
+                let empty = BTreeMap::new();
+                let files = files.unwrap_or(&empty);
+                let faces = &mut self.faces;
+                let mut extra = |f0: usize, h: f64| xetex::extra(runs, h, f0, faces, &mut |n| xetex::get(files, read, shelf, n));
+                pdfdraw::page_with(&self.pdf, page, &mut self.pdf_fonts, Some(&mut extra))?
+            } else {
+                pdfdraw::page(&self.pdf, page, &mut self.pdf_fonts)?
+            };
             self.pdf_draws.insert(page, d.clone());
             return Some(d);
         }
@@ -1446,6 +1571,17 @@ fn now() -> DateTime {
         day: day as i32,
         minutes: ((s % 86_400) / 60) as i32,
     }
+}
+
+/// A job time as seconds since 1970 (UTC; xdvipdfmx's dates).
+fn epoch(t: &DateTime) -> i64 {
+    // (days from the civil date, Howard Hinnant's algorithm)
+    let (y, m, d) = (i64::from(t.year) - i64::from(t.month <= 2), i64::from(t.month), i64::from(t.day));
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) * 86_400 + i64::from(t.minutes) * 60
 }
 
 fn ms(d: std::time::Duration) -> f64 {
@@ -1656,7 +1792,7 @@ mod abi {
         let mut r = Reader(unsafe { input(ptr, len) });
         // (fuel, main, the text files, then the binary ones, figures: all
         // there before the first build)
-        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>)> {
+        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>, bool)> {
             let _fuel = r.u32()?;
             let main = r.str()?.to_string();
             let n = r.u32()?;
@@ -1669,13 +1805,16 @@ mod abi {
             for _ in 0..r.u32().unwrap_or(0) {
                 bins.push((r.str()?.to_string(), r.bytes()?));
             }
-            Some((main, files, bins))
+            // (then the engine: 1 XeTeX; absent or 0 pdfTeX)
+            let xetex = r.u32().unwrap_or(0) == 1;
+            Some((main, files, bins, xetex))
         };
-        let Some((main, files, bins)) = parse() else {
+        let Some((main, files, bins, xetex)) = parse() else {
             out_json("{\"error\":\"bad open input\"}".into());
             return 0;
         };
         let mut s = Session::open(files, &main);
+        s.xetex = xetex;
         for (n, b) in bins {
             s.set_bytes(&n, b);
         }

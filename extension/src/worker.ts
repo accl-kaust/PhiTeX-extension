@@ -344,6 +344,32 @@ const loadAssets = () =>
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));
 
+let xeAssets: Promise<Uint8Array> | undefined;
+/** The core instance XeTeX's assets were given to (a new instance after a trap needs them again). */
+let xeCore: Core | undefined;
+
+/**
+ * XeTeX's assets (assets-xelatex.bin.gzdata: its format, the font index,
+ * dvipdfmx.cfg, the TECkit mappings), fetched and given to the core once,
+ * for the first xelatex project: a pdfLaTeX-only user never loads them.
+ */
+async function loadXe(): Promise<void> {
+  if (xeCore === core || !core.ph_assets) return;
+  const a = await (xeAssets ??= fetch(new URL("assets-xelatex.bin.gzdata", import.meta.url)).then(async (r) => {
+    if (!r.ok) throw new Error(`xelatex assets: ${r.status}`);
+    return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  }));
+  const p = core.ph_alloc(a.length);
+  new Uint8Array(core.memory.buffer, p >>> 0, a.length).set(a);
+  const n = core.ph_assets(p, a.length);
+  core.ph_free(p, a.length);
+  if (!n) throw new Error("xelatex assets: bad framing");
+  xeCore = core;
+}
+
+/** The clients whose project is XeTeX's: their pages are drawn here (with the glyph runs), not by the draw worker. */
+const xetexClients = new Set<string>();
+
 /**
  * The draw worker (a second instance of the core, named "draw"): it only
  * draws pages from the PDF the build worker links, so pages draw while a
@@ -419,8 +445,10 @@ function handle(r: Req): Res {
   const h = sessions.get(r.client) ?? 0;
   switch (r.op) {
     case "open": {
-      // (one core, pdfLaTeX's: another engine's core is chosen here when there is one)
-      if (r.engine && r.engine !== "pdflatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
+      // (one core: pdfLaTeX's or XeTeX's; LuaTeX's not yet)
+      if (r.engine && r.engine !== "pdflatex" && r.engine !== "xelatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
+      if (r.engine === "xelatex") xetexClients.add(r.client);
+      else xetexClients.delete(r.client);
       if (h) core.ph_close(h);
       const f = new Frame().u32(r.fuel).str(r.main).u32(Object.keys(r.files).length);
       for (const [n, t] of Object.entries(r.files)) f.str(n).str(t);
@@ -428,6 +456,8 @@ function handle(r: Req): Res {
       const bins = Object.entries(r.binaries ?? {});
       f.u32(bins.length);
       for (const [n, b] of bins) f.str(n).bytes(b);
+      // (the engine: 1 XeTeX)
+      f.u32(r.engine === "xelatex" ? 1 : 0);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
       // (the pages' hashes with it: the tab lays them out now, not after
@@ -553,7 +583,7 @@ function shipPdf(r: Req): void {
 /** Client `client`'s PDF to the drawer, if its pages changed since the last one sent. */
 function shipFor(client: string): void {
   const h = sessions.get(client);
-  if (!h || !core.ph_draw_set) return;
+  if (!h || !core.ph_draw_set || xetexClients.has(client)) return;
   core.ph_pages(h);
   const key = new TextDecoder().decode(outBytes());
   if (shipped.get(client) === key) return;
@@ -672,6 +702,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     // (a project that uses minted: Pyodide loaded before its first build,
     // as \\write18 runs synchronously inside it)
     if (r.op === "open" && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
+    if (r.op === "open" && r.engine === "xelatex") await loadXe();
     res = handle(r);
     shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)
@@ -688,7 +719,9 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     // A trap (a PhiTeX panic, with panic = "abort") leaves the instance
     // unusable: start a new one; every client must open again.
     // (and a core that fails to load at all says so: the reply always goes)
-    res = { id: r.id, ok: false, error: `core trapped: ${e}${panicText()}` };
+    // (XeTeX's PDF driver, xdvipdfmx, stops with a panic too: said so)
+    const why = panicText();
+    res = { id: r.id, ok: false, error: `${/partex_xdvipdfmx|xdvipdfmx/.test(why) ? "PDF driver failed" : "core trapped"}: ${e}${why}` };
     sessions.clear();
     await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }

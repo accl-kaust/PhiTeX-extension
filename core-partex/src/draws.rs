@@ -105,6 +105,8 @@ impl Walk<'_> {
                     i += len;
                 }
                 Item::Missing { .. } | Item::Special { .. } => {}
+                // (XeTeX's native glyphs and pictures: DVI mode does not draw them)
+                Item::Native { width, .. } | Item::Pic { width, .. } => h += i64::from(width),
                 Item::Cut => return,
             }
             i += 1;
@@ -137,7 +139,7 @@ impl Walk<'_> {
                     v += i64::from(size);
                     i += len;
                 }
-                Item::Char { .. } | Item::Missing { .. } | Item::Edge { .. } | Item::Special { .. } => {}
+                Item::Char { .. } | Item::Missing { .. } | Item::Edge { .. } | Item::Special { .. } | Item::Native { .. } | Item::Pic { .. } => {}
                 Item::Cut => return,
             }
             i += 1;

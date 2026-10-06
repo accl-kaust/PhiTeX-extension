@@ -114,10 +114,13 @@ Permissions:
 It is experimental. When the ⚡ Instant page and Overleaf's PDF disagree,
 Overleaf's is right.
 
-- **pdfLaTeX only, for now**: projects that need XeLaTeX or LuaLaTeX
-  (`fontspec`, `unicode-math`, `polyglossia`, …) can't be previewed yet. The
-  card says so and offers pdfLaTeX anyway; Settings → Engine chooses for
-  every project, the card for one.
+- **pdfLaTeX and XeLaTeX, not LuaLaTeX yet**: a project that loads
+  `fontspec`, `unicode-math`, `polyglossia`, … runs with XeLaTeX (its fonts
+  from TeX Live, by name or file, or uploaded to the project; its PDF made
+  by xdvipdfmx in the browser). LuaLaTeX projects can't be previewed yet:
+  the card says so and offers pdfLaTeX anyway; Settings → Engine chooses
+  for every project, the card for one. XeLaTeX's page view draws text in
+  black whatever `\textcolor` says, and its downloaded PDF is uncompressed.
 - **Images**: PDF, PNG and JPEG figures work.
 - **Shell escape** is restricted, as in TeX Live's `pdflatex`, and only
   `minted`'s command runs: packages that run other programs (`gnuplottex`,

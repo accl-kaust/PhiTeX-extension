@@ -1,6 +1,6 @@
 // The TeX engines a project may need, and which one ⚡ Instant runs it with.
-// Only pdfLaTeX runs today; XeLaTeX and LuaLaTeX are listed so the settings,
-// the per-project choice and the prompt are ready when their cores are.
+// pdfLaTeX and XeLaTeX run; LuaLaTeX is listed so the settings, the
+// per-project choice and the prompt are ready when its core is.
 
 export type Engine = "pdflatex" | "xelatex" | "lualatex";
 /** The setting: an engine, or "auto" (the project's own choice, else what its preamble needs). */
@@ -8,7 +8,7 @@ export type EngineChoice = "auto" | Engine;
 
 export const ENGINES: Record<Engine, { label: string; ready: boolean }> = {
   pdflatex: { label: "pdfLaTeX", ready: true },
-  xelatex: { label: "XeLaTeX", ready: false },
+  xelatex: { label: "XeLaTeX", ready: true },
   lualatex: { label: "LuaLaTeX", ready: false },
 };
 

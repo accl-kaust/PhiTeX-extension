@@ -316,7 +316,7 @@ export class PreviewSession {
         });
         this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
         if (res.error) this.errorsSeen = [...this.errorsSeen.slice(-19), `${r.op}: ${res.error}`];
-        const lost = res.json?.error === "no such handle" || /^core trapped/.test(res.error ?? "");
+        const lost = res.json?.error === "no such handle" || /^(core trapped|PDF driver failed)/.test(res.error ?? "");
         // (a build that came back whole: a trap after it is a new one)
         if (res.ok && (r.op === "edit" || r.op === "status")) this.traps = 0;
         if (lost && this.opened && r.op !== "open") {

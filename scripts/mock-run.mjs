@@ -130,6 +130,18 @@ try {
   console.log("worker console: not attached:", String(e));
 }
 
+// the onboarded state (scripts/onboarded.mjs: no welcome tip, terms or
+// tour over the page in a fresh profile), then the project again
+{
+  const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"), "utf8")).version;
+  for (let i = 0; i < 40 && !contexts.some((c) => c.auxData?.isDefault); i++) await sleep(250);
+  await sleep(1000);
+  if ((await evalIn(onboardScript(version))) === "onboarded") {
+    await call("Page.reload");
+    await sleep(1500);
+  }
+}
+
 // the first page
 // (a long project's first build may take a minute or more: waited for
 // while the session is building, up to 10 minutes; given up after 30 s

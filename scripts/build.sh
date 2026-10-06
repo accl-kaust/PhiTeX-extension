@@ -34,6 +34,20 @@ if [ $engine = partex ]; then
     (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
   fi
   scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gzdata
+  # XeTeX's: its format, made with its font index (the engine's otf-index:
+  # TeX Live's fonts/opentype and fonts/truetype as fc-list lists them for
+  # xelatex), dvipdfmx.cfg and the TECkit mappings; a second file the worker
+  # loads for the first xelatex project only
+  partex_root=$(sed -n 's|^partex-core = { path = "\(.*\)/crates/partex-core" }|\1|p' core-partex/Cargo.toml)
+  if [ ! -f target/fmt-xe/fontindex.pxfi ]; then
+    mkdir -p target/fmt-xe
+    (cd "core-partex/$partex_root" && scripts/sandbox cargo run -q -p partex-otf --release --example otf-index -- target/fontindex.pxfi)
+    cp "core-partex/$partex_root/target/fontindex.pxfi" target/fmt-xe/
+  fi
+  if [ ! -f target/fmt-xe/xelatex.fmt ]; then
+    (ulimit -v 8000000; scripts/sandbox env MKFMT_XETEX="$PWD/target/fmt-xe/fontindex.pxfi" target/partex/release/mkfmt target/fmt-xe texmf)
+  fi
+  scripts/sandbox python3 scripts/make-xe-assets.py target/fmt-xe extension/dist/assets-xelatex.bin.gzdata
 else
   (cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
     cargo build --release --target wasm32-wasip1)
@@ -49,7 +63,8 @@ cp NOTICE extension/NOTICE.txt
 rm -rf extension/texmf && cp -r texmf extension/texmf
 # Shelf's index (name -> pack), made by Shelf's build: scripts/shelf-index.sh
 # (named .gzdata: Edge's store refuses archives inside a package)
-cp shelf-index.tsv.gz extension/shelf-index.tsv.gzdata
+# (SHELF_INDEX: another index, a local Shelf build's for a --dev build)
+cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
 scripts/sandbox npx tsc -p .
 # Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
 lm=/usr/share/texmf-dist/fonts/opentype/public

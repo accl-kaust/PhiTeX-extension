@@ -1,4 +1,6 @@
 { "project": "test/scenarios/xelatex", "name": "xelatex",
-  "steps": [ { "idle": 4000 },
-    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; const a = r?.querySelector('#approx'); return (a && getComputedStyle(a).display) + ' | ' + r?.querySelectorAll('.slot').length + ' pages | ' + [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 120); })()", "page": true },
+  "steps": [ { "idle": 8000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; const a = r?.querySelector('#approx'); return (a && getComputedStyle(a).display) + ' | ' + r?.querySelectorAll('.slot').length + ' pages | ' + r?.querySelectorAll('svg.page use').length + ' glyphs | ' + [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 120); })()", "page": true },
+    { "type": "s", "after": "café" }, { "idle": 3000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; return [...(r?.querySelectorAll('svg.page text') ?? [])].map((t) => t.textContent).join(' ').slice(0, 120); })()", "page": true },
     { "shot": "xelatex" } ] }

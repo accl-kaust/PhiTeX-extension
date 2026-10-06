@@ -6,6 +6,9 @@
 //! for in each TEXMF (flat, as Shelf serves them), then kpsewhich, and the
 //! job is built again, as the extension's package loop does. Prints each
 //! build's time and what it asked for, then the terminal's last lines.
+//! PHITEX_XETEX=DIR: xelatex, its format and font index from DIR
+//! (`MKFMT_XETEX=… mkfmt DIR`), dvipdfmx.cfg and the TECkit mappings
+//! from TeX Live.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,6 +25,23 @@ fn main() {
         add_dir(&mut assets, &PathBuf::from(format!("/usr/share/texmf-dist/fonts/tfm/public/{d}")));
     }
     add_dir(&mut assets, Path::new("/usr/share/texmf-dist/fonts/tfm/jknappen/ec"));
+    let xe = std::env::var("PHITEX_XETEX").ok();
+    if let Some(d) = &xe {
+        for n in ["xelatex.fmt", "fontindex.pxfi"] {
+            assets.insert(n.as_bytes().to_vec(), Arc::from(std::fs::read(Path::new(d).join(n)).unwrap()));
+        }
+        assets.insert(b"dvipdfmx.cfg".to_vec(), Arc::from(std::fs::read("/usr/share/texmf-dist/dvipdfmx/dvipdfmx.cfg").unwrap()));
+        let o = Command::new("find").arg("/usr/share/texmf-dist/fonts/misc/xetex/fontmapping").args(["-name", "*.tec"]).output().unwrap();
+        for p in String::from_utf8(o.stdout).unwrap().lines() {
+            let n = Path::new(p).file_name().unwrap().to_string_lossy().into_owned().into_bytes();
+            assets.entry(n).or_insert_with(|| Arc::from(std::fs::read(p).unwrap()));
+        }
+        for m in ["pdftex/updmap/pdftex.map", "dvipdfmx/kanjix.map", "dvipdfmx/ckx.map"] {
+            if let Ok(b) = std::fs::read(format!("/usr/share/texmf-dist/fonts/map/{m}")) {
+                assets.insert(Path::new(m).file_name().unwrap().to_string_lossy().as_bytes().to_vec(), Arc::from(b));
+            }
+        }
+    }
     add_assets(assets);
     let (mut files, mut binary) = (BTreeMap::new(), Vec::new());
     // (the project's folders too: names relative to DIR, as Overleaf's paths)
@@ -37,6 +57,7 @@ fn main() {
     }
     let t0 = std::time::Instant::now();
     let mut s = Session::open(files, main);
+    s.xetex = xe.is_some();
     // (PHITEX_FLAT=dir: read missing names from a flat TeX Live, as if the core had it all)
     if let Ok(d) = std::env::var("PHITEX_FLAT") {
         s.fallback_dir = Some(PathBuf::from(d));
@@ -82,6 +103,13 @@ fn main() {
         let st = s.status();
         println!("edit {f}: {old:?} -> {new:?}: {:.1} ms ({}), history {}, pages {}", t.elapsed().as_secs_f64() * 1e3, s.how, st.history, st.pages);
     }
+    // (PHITEX_DRAW=file: page 1's draw list written there)
+    if let Ok(f) = std::env::var("PHITEX_DRAW") {
+        let t = std::time::Instant::now();
+        let d = s.draws(0).unwrap_or_default();
+        println!("draw page 1: {} bytes, {:.1} ms", d.len(), t.elapsed().as_secs_f64() * 1e3);
+        std::fs::write(f, d).unwrap();
+    }
     if !s.pdf.is_empty() {
         std::fs::write("target/runproj.pdf", &s.pdf).unwrap();
         println!("target/runproj.pdf: {} bytes", s.pdf.len());
@@ -100,6 +128,10 @@ fn add_dir(m: &mut BTreeMap<Vec<u8>, Arc<[u8]>>, d: &Path) {
 }
 
 fn find(texmf: &[String], name: &str) -> Option<Vec<u8>> {
+    // (XeTeX's fonts, by TeX Live's absolute path)
+    if name.starts_with('/') {
+        return std::fs::read(name).ok();
+    }
     for d in texmf {
         if let Ok(t) = std::fs::read(Path::new(d).join(name)) {
             return Some(t);

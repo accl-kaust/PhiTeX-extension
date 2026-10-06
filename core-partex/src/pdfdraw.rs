@@ -376,6 +376,9 @@ struct Font {
     outlines: Option<(std::rc::Rc<crate::type1::Type1>, Vec<Option<String>>)>,
     /// The font's id on the page (`F`): its outlines' ids.
     fref: usize,
+    /// A Type 0 font (XeTeX's native fonts, through xdvipdfmx): its glyphs
+    /// come from the glyph runs (`xetex::extra`), not from here.
+    cid: bool,
 }
 
 /// The CSS face a TeX font is drawn in (`panel.ts` maps these to Latin Modern).
@@ -555,9 +558,15 @@ pub fn hashes(pdf: &[u8]) -> Vec<u64> {
 
 /// Page `k`'s draw list (v2), its fonts parsed through `fonts`.
 pub fn page(pdf: &[u8], k: usize, fonts: &mut Fonts) -> Option<String> {
+    page_with(pdf, k, fonts, None)
+}
+
+/// Page `k`'s draw list with what `extra` adds (XeTeX's glyph runs: given
+/// the first font ref free and the page's height).
+pub fn page_with(pdf: &[u8], k: usize, fonts: &mut Fonts, extra: Option<&mut dyn FnMut(usize, f64) -> crate::xetex::Extra>) -> Option<String> {
     let p = Pdf::open(pdf)?;
     let page = p.pages().into_iter().nth(k)?;
-    Some(draw(&p, &page, fonts))
+    Some(draw_with(&p, &page, fonts, extra))
 }
 
 /// Every page's draw list and hash (tools).
@@ -599,6 +608,10 @@ fn page_content(p: &Pdf, page: &O) -> (Vec<u8>, u64) {
 }
 
 fn draw(p: &Pdf, page: &O, programs: &mut Fonts) -> String {
+    draw_with(p, page, programs, None)
+}
+
+fn draw_with(p: &Pdf, page: &O, programs: &mut Fonts, extra: Option<&mut dyn FnMut(usize, f64) -> crate::xetex::Extra>) -> String {
     let mut keys: Vec<&'static str> = Vec::new();
     {
         let mut frefs: Vec<String> = Vec::new();
@@ -652,7 +665,8 @@ fn draw(p: &Pdf, page: &O, programs: &mut Fonts) -> String {
                 });
                 let fref = frefs.len();
                 frefs.push(base.clone());
-                fonts.insert(name, Font { key, first, widths, uni, ex, outlines, fref });
+                let cid = matches!(f.get("Subtype"), Some(O::Name(s)) if s == "Type0");
+                fonts.insert(name, Font { key, first, widths, uni, ex, outlines, fref, cid });
             }
         }
         // the content
@@ -668,7 +682,24 @@ fn draw(p: &Pdf, page: &O, programs: &mut Fonts) -> String {
             let Some(d) = names.get(usize::from(c)).cloned().flatten().and_then(|n| t1.path(&n)) else { continue };
             let _ = write!(g, "{}\"{fr}:{c}\":{}", if g.is_empty() { "" } else { "," }, esc(&d));
         }
-        let fr: Vec<String> = frefs.iter().map(|b| esc(&ident(b))).collect();
+        let mut fr: Vec<String> = frefs.iter().map(|b| esc(&ident(b))).collect();
+        let mut t = t;
+        if let Some(extra) = extra {
+            let e = extra(fr.len(), h);
+            fr.extend(e.fonts.iter().map(|f| esc(f)));
+            if !e.g.is_empty() {
+                if !g.is_empty() {
+                    g.push(',');
+                }
+                g.push_str(&e.g);
+            }
+            if !e.t.is_empty() {
+                if !t.is_empty() {
+                    t.push(',');
+                }
+                t.push_str(&e.t);
+            }
+        }
         format!("{{\"v\":2,\"w\":{},\"h\":{},\"f\":[{}],\"F\":[{}],\"g\":{{{g}}},\"t\":[{t}],\"p\":[{paths}],\"r\":[]}}", r2(w), r2(h), f.join(","), fr.join(","))
     }
 }
@@ -696,6 +727,9 @@ fn interpret(b: &[u8], fonts: &HashMap<String, Font>, page_h: f64, used: &mut st
     };
     let mut show = |s: &[u8], g: &G, tm: &mut M, text: &mut String, kern_after: &[(usize, f64)]| {
         let Some(fi) = g.font else { return };
+        if flist[fi].1.cid {
+            return;
+        }
         let font = flist[fi].1;
         let (mut xs, mut txt) = (String::new(), String::new());
         // (runs: size, y as in the PDF, the x list, the text)

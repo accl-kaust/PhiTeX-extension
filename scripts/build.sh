@@ -98,8 +98,11 @@ scripts/sandbox node -e '
     m.web_accessible_resources[0].matches.push("http://localhost/*");
   }
   fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
-# (--dev: Shelf from a local server, ../shelf.PhiTeX.org/serve.py)
-$dev && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
+# (SHELF_LOCAL=1 with --dev: Shelf from a local server,
+# ../shelf.PhiTeX.org/serve.py, serving a release's h/ packs, with
+# SHELF_INDEX that release's index; else the live Shelf, whose index
+# shelf-index.tsv.gz is)
+$dev && [ "${SHELF_LOCAL:-}" = 1 ] && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
 # Every module the content script imports must be web-accessible.
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.json"));

@@ -106,7 +106,7 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
+export type CoreEvent = { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -256,6 +256,14 @@ export class PreviewSession {
   }
   /** The core fetches a pack mid-build (the job goes on with it): the view says which. */
   private onFetching(e: Extract<CoreEvent, { event: "fetching" }>): void {
+    // (a pack the worker could not get: Shelf unreachable, or not there)
+    if (e.failed) {
+      this.tr("package: core fetch failed", e);
+      this.pkg.loading = this.pkg.loading.filter((n) => n !== e.pack);
+      this.pkg.failed = [...(this.pkg.failed ?? []), { name: e.pack, error: `Shelf: ${e.name} not fetched` }];
+      this.tellPackages();
+      return;
+    }
     this.tr("package: core fetches", e);
     this.pkg.source = this.source.label;
     // (one at a time, in order: the one before it has arrived)

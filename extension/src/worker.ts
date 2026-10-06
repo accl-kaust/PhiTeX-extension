@@ -239,6 +239,8 @@ function shelfImports(mem: () => WebAssembly.Memory) {
           if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
           const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));
           if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
+          // (a pack that did not come: said, not taken for fetched)
+          else (self as unknown as Worker).postMessage({ fetching: id, name, failed: true });
         }
       }
       if (!parts.length) return 0;

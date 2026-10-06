@@ -30,9 +30,9 @@ const replies = new Map<number, (r: Res) => void>();
 let nextId = 1;
 /** Every tab's port: the worker's progress (a Shelf pack fetched mid-build) goes to each. */
 const ports = new Set<chrome.runtime.Port>();
-worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string; drawPdf?: boolean; client?: string; pdf?: Uint8Array; preparing?: boolean }>) => {
+worker.onmessage = (e: MessageEvent<Res & { fetching?: string; name?: string; failed?: boolean; drawPdf?: boolean; client?: string; pdf?: Uint8Array; preparing?: boolean }>) => {
   if (e.data.fetching) {
-    for (const p of ports) p.postMessage({ event: "fetching", pack: e.data.fetching, name: e.data.name });
+    for (const p of ports) p.postMessage({ event: "fetching", pack: e.data.fetching, name: e.data.name, failed: e.data.failed });
     return;
   }
   if (e.data.drawPdf && e.data.client && e.data.pdf) {

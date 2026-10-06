@@ -1,0 +1,2 @@
+{ "project": "test/scenarios/figures", "name": "figures",
+  "steps": [ { "idle": 4000 }, { "parity": 0.5 } ] }

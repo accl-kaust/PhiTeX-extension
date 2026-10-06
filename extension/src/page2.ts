@@ -17,14 +17,24 @@ export interface Draws2 {
    * with a colour last when not black (a text run's sixth field then 0 or 1);
    * a glyph run's ninth field, [a, b, c, d]: one transformed glyph (rotated,
    * slanted, extended: XeTeX's), drawn by matrix(a b c d x y), colour null if black. */
-  t: (([number, number, number, string, string] | [number, number, number, string, string, 0 | 1, string?]) | [-1, number, number, string, "", number, number[], (string | null)?, [number, number, number, number]?])[];
+  t: (([number, number, number, string, string] | [number, number, number, string, string, 0 | 1, (string | null)?, (string | null)?]) | [-1, number, number, string, "", number, number[], (string | null)?, ([number, number, number, number] | null)?, (string | null)?])[];
   /** The outline fonts' names (ids), by the glyph runs' font. */
   F?: string[];
   /** Outlines by "font:code": SVG path data in 1/1000 em, y up. */
   g?: Record<string, string>;
-  /** [d, fill, stroke, width] */
-  p: [string, string | null, string | null, number][];
-  r: unknown[];
+  /** [d, fill, stroke, width, clip?] */
+  p: ([string, string | null, string | null, number] | [string, string | null, string | null, number, string | null])[];
+  /** Images: [id, a, b, c, d, e, f, clip?], the matrix taking the image's
+   * unit square (row 0 at y 0) to the page, in points from its top left. */
+  r: ([string, number, number, number, number, number, number] | [string, number, number, number, number, number, number, string | null])[];
+  /** Clips by the page's own ids: [SVG path d, 1 if even-odd, the clip it is inside?]. */
+  C?: Record<string, [string, 0 | 1, string?]>;
+  /** The paint order, as runs [list (0 p, 1 r, 2 t), first, count]; absent: p, then r, then t. */
+  o?: [0 | 1 | 2, number, number][];
+  /** The images' data URLs by id (each sent once: the view keeps them, see `store`). */
+  I?: Record<string, string>;
+  /** How many of the page's drawing operators this list leaves out (none: absent). */
+  x?: number;
 }
 
 const NS = "http://www.w3.org/2000/svg";
@@ -61,41 +71,86 @@ export const loadFonts = () =>
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** FNV-1a, as hex: a clip's id from what it is (a page's own ids are only the page's). */
+function fnv(s: string): string {
+  let x = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 0x01000193);
+  return (x >>> 0).toString(16);
+}
+
+/** The page's clips: by its own ids, the view-wide id (from the clip's path, rule and parent) and the `<clipPath>`. */
+function clips(d: Draws2): Map<string, { id: string; markup: string }> {
+  const out = new Map<string, { id: string; markup: string }>();
+  const resolve = (cid: string, depth = 0): { id: string; markup: string } | undefined => {
+    const have = out.get(cid);
+    if (have) return have;
+    const c = d.C?.[cid];
+    if (!c || depth > 64) return undefined;
+    const [path, evenOdd, parent] = c;
+    const up = parent ? resolve(parent, depth + 1) : undefined;
+    const id = `k${fnv(`${path}|${evenOdd}|${up?.id ?? ""}`)}`;
+    const markup = `<clipPath id="${id}" clipPathUnits="userSpaceOnUse"${up ? ` clip-path="url(#${up.id})"` : ""}><path d="${esc(path)}"${evenOdd ? ' clip-rule="evenodd"' : ""}/></clipPath>`;
+    const r = { id, markup };
+    out.set(cid, r);
+    return r;
+  };
+  for (const cid of Object.keys(d.C ?? {})) resolve(cid);
+  return out;
+}
+
 /** The page's elements as markup, one string each (the keys of the update). */
 export function elements(d: Draws2): string[] {
-  const out: string[] = [];
-  for (const [d_, fill, stroke, w] of d.p)
-    out.push(`<path d="${d_}" fill="${fill ?? "none"}" stroke="${stroke ?? "none"}" stroke-width="${w}"/>`);
+  const cl = d.C ? clips(d) : undefined;
+  // (a clipped element in a group clipped: the clip in the page's space, not the element's own transform's)
+  const clip = (m: string, c: string | null | undefined) => {
+    const k = c != null ? cl?.get(c) : undefined;
+    return k ? `<g clip-path="url(#${k.id})">${m}</g>` : m;
+  };
+  const path = (e: Draws2["p"][number]) => {
+    const [d_, fill, stroke, w, c] = e as [string, string | null, string | null, number, (string | null)?];
+    return clip(`<path d="${d_}" fill="${fill ?? "none"}" stroke="${stroke ?? "none"}" stroke-width="${w}"/>`, c);
+  };
+  // (images: a `<use>` of the view's store, the pixels parsed once)
+  const image = (e: Draws2["r"][number]) => {
+    const [id, a, b, c_, d_, e_, f, c] = e as [string, number, number, number, number, number, number, (string | null)?];
+    return typeof id === "string" ? clip(`<use href="#i${esc(id)}" transform="matrix(${a} ${b} ${c_} ${d_} ${e_} ${f})"/>`, c) : "";
+  };
   // (glyph ids: the font's name and the code, the same on every page; the
-  // outlines themselves live in the view's one glyph store, see `glyphs`)
+  // outlines themselves live in the view's one store, see `store`)
   const gid = (fr: number, c: number) => `g${d.F?.[fr] ?? fr}_${c}`;
-  for (const r of d.t) {
+  const text = (r: Draws2["t"][number]) => {
     if (r[0] === -1) {
-      const [, size, y, xs, , fr, codes, colour, m] = r as [-1, number, number, string, "", number, number[], (string | null)?, [number, number, number, number]?];
-      if (m) {
-        out.push(`<g transform="matrix(${m.join(" ")} ${xs} ${y})"${colour ? ` fill="${esc(colour)}"` : ""}><use href="#${gid(fr, codes[0])}"/></g>`);
-        continue;
-      }
+      const [, size, y, xs, , fr, codes, colour, m, c] = r as [-1, number, number, string, "", number, number[], (string | null)?, ([number, number, number, number] | null)?, (string | null)?];
+      if (m) return clip(`<g transform="matrix(${m.join(" ")} ${xs} ${y})"${colour ? ` fill="${esc(colour)}"` : ""}><use href="#${gid(fr, codes[0])}"/></g>`, c);
       const k = size / 1000;
       const x = xs.split(" ");
-      out.push(`<g transform="translate(0 ${y}) scale(${k} ${-k})"${colour ? ` fill="${esc(colour)}"` : ""}>${codes.map((c, i) => `<use href="#${gid(fr, c)}" x="${(+x[i] / k).toFixed(1)}"/>`).join("")}</g>`);
-      continue;
+      return clip(`<g transform="translate(0 ${y}) scale(${k} ${-k})"${colour ? ` fill="${esc(colour)}"` : ""}>${codes.map((g, i) => `<use href="#${gid(fr, g)}" x="${(+x[i] / k).toFixed(1)}"/>`).join("")}</g>`, c);
     }
-    const [f, size, y, xs, text, outlined, colour] = r as [number, number, number, string, string, (0 | 1)?, string?];
-    out.push(`<text x="${xs}" y="${y}" font-size="${size}" font-family="${esc(FAMILY[d.f[f]] ?? FAMILY.roman)}"${outlined ? ' fill-opacity="0"' : colour ? ` style="fill:${esc(colour)}"` : ""}>${esc(text)}</text>`);
-  }
+    const [f, size, y, xs, txt, outlined, colour, c] = r as [number, number, number, string, string, (0 | 1)?, (string | null)?, (string | null)?];
+    return clip(`<text x="${xs}" y="${y}" font-size="${size}" font-family="${esc(FAMILY[d.f[f]] ?? FAMILY.roman)}"${outlined ? ' fill-opacity="0"' : colour ? ` style="fill:${esc(colour)}"` : ""}>${esc(txt)}</text>`, c);
+  };
+  const out: string[] = [];
+  const lists = [d.p ?? [], d.r ?? [], d.t ?? []] as const;
+  const one = (l: 0 | 1 | 2, i: number) => {
+    const e = lists[l][i];
+    if (e === undefined) return;
+    const m = l === 0 ? path(e as Draws2["p"][number]) : l === 1 ? image(e as Draws2["r"][number]) : text(e as Draws2["t"][number]);
+    if (m) out.push(m);
+  };
+  if (d.o) for (const [l, first, n] of d.o) for (let i = first; i < first + n; i++) one(l, i);
+  else for (const l of [0, 1, 2] as const) for (let i = 0; i < lists[l].length; i++) one(l, i);
   return out;
 }
 
 type Keyed = Element & { __k?: string };
 
 /**
- * The view's glyph store: one hidden svg's <defs> in the page's root (the
- * shadow root, where `<use href>` finds ids), each outline added once, the
- * first time a page brings it; never parsed again.
+ * The view's glyph and image store: one hidden svg's <defs> in the page's
+ * root (the shadow root, where `<use href>` finds ids), each outline or
+ * image added once, the first time a page brings it; never parsed again.
  */
-function glyphs(el: HTMLElement, d: Draws2): void {
-  if (!d.g) return;
+function store(el: HTMLElement, d: Draws2): void {
+  if (!d.g && !d.I && !d.C) return;
   const root = el.getRootNode() as Document | ShadowRoot;
   let defs: Element | null = root.getElementById?.("phx-glyphs") ?? null;
   if (!defs) {
@@ -108,7 +163,17 @@ function glyphs(el: HTMLElement, d: Draws2): void {
   }
   const have = ((defs as Element & { __ids?: Set<string> }).__ids ??= new Set());
   let fresh = "";
-  for (const [k, p] of Object.entries(d.g)) {
+  for (const [id, url] of Object.entries(d.I ?? {})) {
+    if (have.has("i" + id)) continue;
+    have.add("i" + id);
+    fresh += `<image id="i${esc(id)}" width="1" height="1" preserveAspectRatio="none" href="${esc(url)}"/>`;
+  }
+  for (const { id, markup } of d.C ? clips(d).values() : []) {
+    if (have.has(id)) continue;
+    have.add(id);
+    fresh += markup;
+  }
+  for (const [k, p] of Object.entries(d.g ?? {})) {
     const [fr, c] = k.split(":");
     const id = `g${d.F?.[+fr] ?? fr}_${c}`;
     if (have.has(id)) continue;
@@ -136,7 +201,7 @@ export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
   const paper = svg.querySelector("rect.paper")!;
   paper.setAttribute("width", String(d.w));
   paper.setAttribute("height", String(d.h));
-  glyphs(el, d);
+  store(el, d);
   const g = svg.querySelector("g.c")!;
   const keys = elements(d);
   const old = new Map<string, Keyed[]>();

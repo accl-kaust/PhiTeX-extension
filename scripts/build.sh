@@ -90,7 +90,7 @@ echo "minted: $(du -sh extension/dist/pyodide | cut -f1) Pyodide, $(wc -l < exte
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
 dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done
 # (the engine's commit, from the pin, as version_name: debug reports name it)
-engine=$(grep -oE "partex-phitex-[0-9a-f]+" core-partex/Cargo.toml | head -1 | sed 's/partex-phitex-//')
+engine=$(grep -oE "partex-phitex-[0-9a-f+]+" core-partex/Cargo.toml | head -1 | sed 's/partex-phitex-//')
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
   m.version_name = `${m.version_name ?? m.version} (engine ${process.argv[2]})`;

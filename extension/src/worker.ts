@@ -480,6 +480,7 @@ function handle(r: Req): Res {
     case "open": {
       // (one core: pdfLaTeX's or XeTeX's; LuaTeX's not yet)
       if (r.engine && r.engine !== "pdflatex" && r.engine !== "xelatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
+      imagesSent.delete(r.client);
       if (r.engine === "xelatex") xetexClients.add(r.client);
       else xetexClients.delete(r.client);
       if (h) core.ph_close(h);
@@ -666,11 +667,28 @@ function drawAhead(client: string, n: number): void {
   setTimeout(next, 0);
 }
 
+/** Per client: the images whose pixels it was sent (its view keeps them; an open starts again). */
+const imagesSent = new Map<string, Set<string>>();
+
+/** `draws` with only the images `client` has not been sent: a figure's pixels cross once, not every keystroke. */
+function newImages<T>(client: string, draws: T): T {
+  const I = (draws as { I?: Record<string, string> } | undefined)?.I;
+  if (!I) return draws;
+  let sent = imagesSent.get(client);
+  if (!sent) imagesSent.set(client, (sent = new Set()));
+  for (const id of Object.keys(I)) {
+    if (sent.has(id)) delete I[id];
+    else sent.add(id);
+  }
+  return draws;
+}
+
 function handleDraw(r: Req): Res {
   let slot = slots.get(r.client);
   if (r.op === "close") {
     if (slot) core.ph_draw_drop!(slot);
     slots.delete(r.client);
+    imagesSent.delete(r.client);
     return { id: r.id, ok: true };
   }
   if (!slot) slots.set(r.client, (slot = nextSlot++));
@@ -684,7 +702,7 @@ function handleDraw(r: Req): Res {
     around.set(r.client, r.page);
     const t = performance.now();
     const d = drawPage(slot, r.page);
-    return { id: r.id, ok: !!d.draws, draws: d.draws as Res["draws"], json: { hash: d.hash, draw_ms: performance.now() - t, kept: !d.fresh } };
+    return { id: r.id, ok: !!d.draws, draws: newImages(r.client, d.draws) as Res["draws"], json: { hash: d.hash, draw_ms: performance.now() - t, kept: !d.fresh } };
   }
   return { id: r.id, ok: false, error: `the draw worker does not do ${r.op}` };
 }
@@ -746,7 +764,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)
     if (res.png && (("dpi" in r && r.dpi === 0) || (core.ph_assets && res.png[0] !== 0x89))) {
-      res.draws = res.png.length ? JSON.parse(new TextDecoder().decode(res.png)) : undefined;
+      res.draws = res.png.length ? newImages(r.client, JSON.parse(new TextDecoder().decode(res.png))) : undefined;
       delete res.png;
     } else if (res.png?.length) {
       const t = performance.now();

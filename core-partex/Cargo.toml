@@ -12,14 +12,15 @@ crate-type = ["cdylib", "rlib"]
 # (PDF streams: a pure-Rust zlib for Host::deflate, which works in wasm; not
 # zlib's bytes, so not byte-exact with pdfTeX, which a preview doesn't need)
 miniz_oxide = "0.8"
-partex-core = { path = "../../../tmp/partex-phitex-d27052b/crates/partex-core" }
+partex-core = { path = "../../../tmp/partex-phitex-61717de+1d08197/crates/partex-core" }
 # (pdftext: the glyphs a PDF page shows, in the order origins count them)
-partex-engine = { path = "../../../tmp/partex-phitex-d27052b/crates/partex-engine" }
+partex-engine = { path = "../../../tmp/partex-phitex-61717de+1d08197/crates/partex-engine" }
 # (BibTeX between a build's trips, in process: bib.rs)
-partex-bibtex = { path = "../../../tmp/partex-phitex-d27052b/crates/partex-bibtex" }
+partex-bibtex = { path = "../../../tmp/partex-phitex-61717de+1d08197/crates/partex-bibtex" }
 # (XeTeX: its PDF from the XDV, in process; the glyph runs' outlines)
-partex-xdvipdfmx = { path = "../../../tmp/partex-phitex-d27052b/crates/partex-xdvipdfmx" }
-skrifa = { version = "=0.48.0", default-features = false, features = ["libm"] }
+partex-xdvipdfmx = { path = "../../../tmp/partex-phitex-61717de+1d08197/crates/partex-xdvipdfmx" }
+# (the page drawer: a PDF page's draw list, XeTeX's glyph runs, images)
+phitex-draw = { path = "../../../tmp/partex-phitex-61717de+1d08197/crates/phitex-draw" }
 
 [profile.release]
 opt-level = 3

@@ -165,6 +165,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "phitex-draw"
+version = "0.0.0"
+dependencies = [
+ "miniz_oxide",
+ "partex-engine",
+ "partex-xdvipdfmx",
+ "skrifa",
+]
+
+[[package]]
 name = "phitex-ir"
 version = "0.0.0"
 
@@ -177,7 +187,7 @@ dependencies = [
  "partex-core",
  "partex-engine",
  "partex-xdvipdfmx",
- "skrifa",
+ "phitex-draw",
 ]
 
 [[package]]

@@ -101,6 +101,90 @@ const shot = async (name) => {
   const r = await call("Page.captureScreenshot", { format: "png" });
   fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(r.result.data, "base64"));
 };
+/**
+ * `{"parity": pct}`: each page as the vector view draws it against poppler
+ * (pdftoppm) on the same PDF (the session's), screenshot strip by strip (the
+ * stage's height), compared in 4×4 blocks of grey. "missing": blocks the
+ * reference inks that the vector view leaves blank (a figure dropped);
+ * "diff": any block that differs. A page fails over `pct` % missing; diff
+ * images (red: missing, blue/orange: other) land beside the shots as
+ * parity-<page>-<strip>.png.
+ */
+async function parity(s) {
+  const P = `const r = document.querySelector("phitex-preview").shadowRoot, st = r.getElementById("stage")`;
+  // (a frame: a background tab paints, and its observers run, only when one is asked for)
+  const frame = () => call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
+  // (a wide window: the page at fit width big enough to compare)
+  await call("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1400, deviceScaleFactor: 1, mobile: false });
+  await sleep(1000);
+  await idle(1000, 60_000);
+  const n = await evalIn(`(() => { ${P}; return r.querySelectorAll(".slot").length; })()`, true);
+  const strips = [];
+  for (let k = 0; k < n; k++) {
+    for (let off = 0, i = 0; ; i++) {
+      const box = await evalIn(`(() => { ${P}; const el = r.querySelector('.slot[data-k="${k}"]'); st.scrollTop = el.offsetTop + ${off}; const a = el.getBoundingClientRect(), b = st.getBoundingClientRect(); const y = Math.max(a.top, b.top); return { x: a.left, y, top: y - a.top, w: a.width, h: Math.min(a.bottom, b.bottom) - y, H: a.height, step: b.height }; })()`, true);
+      let drawn = false;
+      for (let t = 0; t < 100 && !drawn; t++) {
+        await frame();
+        drawn = await evalIn(`(() => { ${P}; return !!r.querySelector('.slot[data-k="${k}"] svg.page'); })()`, true);
+        if (!drawn) await sleep(100);
+      }
+      if (!drawn) console.log(`parity: page ${k} not drawn`);
+      await sleep(300);
+      // (whatever lies over the page (a dialog, the chip, a badge) hidden for the shot: the topmost element at points across it, if not the page's own)
+      await evalIn(`(() => { ${P}; const el = r.querySelector('.slot[data-k="${k}"]'); const a = el.getBoundingClientRect(); for (let i = 1; i < 12; i++) for (let j = 1; j < 12; j++) { const x = a.left + a.width * i / 12, y = ${box.y} + ${box.h} * j / 12; for (let t = 0; t < 8; t++) { const top = (r.elementFromPoint?.(x, y) ?? document.elementFromPoint(x, y)); if (!top || el.contains(top) || top === st || top.closest?.("#stage") === st && !top.closest(".slot")) break; const o = top.closest?.("dialog, [role=dialog]") ?? top; if (o.dataset) o.dataset.parityHidden = o.style.visibility || "-"; o.style.visibility = "hidden"; } } })()`, true);
+      await frame();
+      const shotR = await call("Page.captureScreenshot", { format: "png", clip: { x: box.x, y: box.y, width: box.w, height: Math.max(1, box.h), scale: 1 } });
+      strips.push({ k, i, box, vector: shotR.result.data });
+      await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; for (const o of [...r.querySelectorAll("[data-parity-hidden]"), ...document.querySelectorAll("[data-parity-hidden]")]) { o.style.visibility = o.dataset.parityHidden === "-" ? "" : o.dataset.parityHidden; delete o.dataset.parityHidden; } })()`, true);
+      off += box.step;
+      if (off >= box.H || box.h <= 0) break;
+    }
+  }
+  await call("Emulation.clearDeviceMetricsOverride");
+  // (the reference: the session's PDF, by poppler, at the page's width on screen)
+  const b64 = await evalIn(`(async () => { const b = await globalThis.__phitexSession.pdf(); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); })()`, true);
+  const pdf = path.join(out, "parity.pdf");
+  fs.writeFileSync(pdf, Buffer.from(b64 ?? "", "base64"));
+  const refs = {};
+  for (let k = 0; k < n; k++) {
+    const w = Math.round(strips.find((x) => x.k === k)?.box.w ?? 800);
+    const base = path.join(out, `parity-ref-${k}`);
+    execFileSync("pdftoppm", ["-png", "-singlefile", "-f", String(k + 1), "-l", String(k + 1), "-scale-to-x", String(w), "-scale-to-y", "-1", pdf, base]);
+    refs[k] = fs.readFileSync(`${base}.png`).toString("base64");
+  }
+  const results = [];
+  let worst = 0;
+  for (const { k, i, box, vector } of strips) {
+    const r = await evalIn(`(async () => {
+      const load = async (b) => createImageBitmap(await (await fetch("data:image/png;base64," + b)).blob());
+      const [a, b] = await Promise.all([load(${JSON.stringify(vector)}), load(${JSON.stringify(refs[k])})]);
+      const w = a.width, h = a.height;
+      const grey = (im, dy) => { const c = new OffscreenCanvas(w, h), x = c.getContext("2d"); x.fillStyle = "white"; x.fillRect(0, 0, w, h); x.drawImage(im, 0, -dy, w, im.height * w / im.width); const d = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h); for (let i = 0; i < w * h; i++) g[i] = d[4 * i] * 0.3 + d[4 * i + 1] * 0.59 + d[4 * i + 2] * 0.11; return [g, c]; };
+      const [ga] = grey(a, 0), [gb, cb] = grey(b, ${box.top} * b.width / w);
+      const B = 4, bw = Math.floor(w / B), bh = Math.floor(h / B);
+      const out = new OffscreenCanvas(w, h), ox = out.getContext("2d"); ox.drawImage(cb, 0, 0); ox.fillStyle = "rgba(255,255,255,0.7)"; ox.fillRect(0, 0, w, h);
+      let miss = 0, diff = 0;
+      for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+        let sa = 0, sb = 0;
+        for (let y = 0; y < B; y++) for (let x = 0; x < B; x++) { const i = (by * B + y) * w + bx * B + x; sa += ga[i]; sb += gb[i]; }
+        sa /= B * B; sb /= B * B;
+        if (Math.abs(sa - sb) > 48) { diff++; if (sa > 235 && sb < 200) { miss++; ox.fillStyle = "red"; } else ox.fillStyle = sa < sb ? "blue" : "orange"; ox.fillRect(bx * B, by * B, B, B); }
+      }
+      const png = await out.convertToBlob({ type: "image/png" });
+      const u8 = new Uint8Array(await png.arrayBuffer()); let s = ""; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode(...u8.subarray(i, i + 32768));
+      return { missing: 100 * miss / (bw * bh || 1), diff: 100 * diff / (bw * bh || 1), png: btoa(s) };
+    })()`);
+    if (!r) continue;
+    fs.writeFileSync(path.join(out, `parity-${k}-${i}.png`), Buffer.from(r.png, "base64"));
+    fs.writeFileSync(path.join(out, `parity-${k}-${i}-vector.png`), Buffer.from(vector, "base64"));
+    results.push(`${k}-${i}: missing ${r.missing.toFixed(2)}%, diff ${r.diff.toFixed(2)}%`);
+    worst = Math.max(worst, r.missing);
+  }
+  s.result = { pass: worst <= s.parity, worst: +worst.toFixed(2), strips: results };
+  console.log("parity:", JSON.stringify(s.result, null, 1));
+  if (worst > s.parity) process.exitCode = 1;
+}
 const pos = (s) => `(() => { const t = mockEditor.text(); ${s.after !== undefined ? `const i = t.${s.last ? "lastIndexOf" : "indexOf"}(${JSON.stringify(s.after)}); return i < 0 ? -1 : i + ${JSON.stringify(s.after)}.length;` : s.before !== undefined ? `return t.indexOf(${JSON.stringify(s.before)});` : "return t.length;"} })()`;
 
 // the workers' console (the core's stderr: a panic's message, before its trap),
@@ -172,6 +256,8 @@ if (!(await state())?.pages) {
 // ("noidle": the steps start at the first page, while the core readies its rebuilds)
 if (!sc.noidle) await idle();
 const steps = [];
+// (PHITEX_PARITY=pct: every scenario checked against poppler at its end)
+if (process.env.PHITEX_PARITY && !(sc.steps ?? []).some((s) => s.parity !== undefined)) (sc.steps ??= []).push({ idle: 1500 }, { parity: +process.env.PHITEX_PARITY });
 for (const s of sc.steps ?? []) {
   const t = Date.now() - T0;
   if (s.type !== undefined) {
@@ -217,6 +303,7 @@ for (const s of sc.steps ?? []) {
     console.log("cpu:", JSON.stringify(s.result, null, 1));
   }
   else if (s.wait !== undefined) await sleep(s.wait);
+  else if (s.parity !== undefined) await parity(s);
   else if (s.shot) await shot(s.shot);
   else if (s.clean) await evalIn(`(() => { document.getElementById("phitex-zoom")?.click(); document.querySelector("[data-act=clean]")?.click(); })()`);
   else if (s.scroll !== undefined) {
@@ -329,4 +416,4 @@ if (!keep) {
   try { execFileSync("pkill", ["-f", "--", `--user-data-dir=${path.join(root, PROFILE)}( |$)`]); } catch {}
   process.kill(-mock.pid);
 }
-process.exit(0);
+process.exit(process.exitCode ?? 0);

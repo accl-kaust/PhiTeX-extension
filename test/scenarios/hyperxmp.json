@@ -1,0 +1,2 @@
+{ "project": "test/scenarios/hyperxmp", "name": "hyperxmp",
+  "steps": [ { "idle": 4000 }, { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; return r?.querySelectorAll('.slot').length + ' pages | ' + [...(r?.querySelectorAll('.diag') ?? [])].map((d) => d.innerText.replace(/\\s+/g, ' ').slice(0, 160)).join(' || '); })()", "page": true } ] }

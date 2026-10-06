@@ -29,11 +29,9 @@ use partex_core::{DateTime, FileKind, Host, OpenedFile, Params, Tex, Untracked, 
 
 pub mod draws;
 pub mod dvi;
-pub mod pdfdraw;
 mod bib;
 pub mod shelf;
 pub mod system;
-pub mod type1;
 pub mod xetex;
 
 pub use draws::draws_json;
@@ -315,6 +313,13 @@ impl Host for MemHost {
     fn now(&self) -> DateTime {
         self.now.unwrap_or(DateTime { year: 2026, month: 1, day: 1, minutes: 0 })
     }
+    /// `\pdffilemoddate` (XeTeX's `\filemoddate`): a file the job has (the
+    /// project's, one it read or wrote) changed when the session started,
+    /// as far as it can tell: the job's own date, the same every build.
+    fn file_mod_date(&mut self, name: &[u8]) -> Option<Vec<u8>> {
+        let base = name.strip_prefix(b"./").unwrap_or(name);
+        (self.files.contains_key(base) || self.written.contains_key(base)).then(|| self.creation_date())
+    }
     fn page_written(&mut self, page: &Page) {
         self.pages.push(page.clone());
     }
@@ -439,7 +444,9 @@ pub struct Session {
     /// Pages drawn since the last build, by number.
     pdf_draws: HashMap<usize, String>,
     /// Font programs parsed, kept across builds.
-    pdf_fonts: pdfdraw::Fonts,
+    pdf_fonts: phitex_draw::Fonts,
+    /// The PDF, read (its cross-reference and pages), when first drawn or hashed.
+    pdf_doc: Option<phitex_draw::Pdf>,
     /// The files the last plain build wrote that a next run reads (`.aux`,
     /// `.toc`, `.lof`, acronym lists, …), not the PDF or the log: the
     /// tracked build starts from them, as a second pdflatex run does, so
@@ -465,7 +472,7 @@ pub struct Session {
     /// Each build: what changed before it and what it cost (the debug log).
     history_log: Vec<String>,
     /// Each page's hash with where its content lies, for the next hashing.
-    page_sums: Vec<pdfdraw::PageSum>,
+    page_sums: Vec<phitex_draw::PageSum>,
     /// The PDF's first byte the last link changed (None: unknown, hash all).
     pdf_first: Option<usize>,
     /// The next link is a full one (the last kept the pages of the trip before).
@@ -501,7 +508,7 @@ pub struct Session {
     runs: Vec<Vec<partex_xdvipdfmx::api::GlyphRun>>,
     /// (XeTeX) The fonts xdvipdfmx read (their outlines are drawn), and the faces parsed.
     xread: xetex::Read,
-    faces: xetex::Faces,
+    faces: phitex_draw::xetex::Faces,
     /// (XeTeX) xdvipdfmx started, gone on from for each XDV.
     dpx: xetex::Started,
 }
@@ -661,7 +668,8 @@ impl Session {
             shipped: 0,
             pdf_hashes: None,
             pdf_draws: HashMap::new(),
-            pdf_fonts: pdfdraw::Fonts::new(),
+            pdf_fonts: phitex_draw::Fonts::new(),
+            pdf_doc: None,
             carried: BTreeMap::new(),
             trace: false,
             unsettled: false,
@@ -693,7 +701,7 @@ impl Session {
             xdv_hash: 0,
             runs: Vec::new(),
             xread: xetex::Read::default(),
-            faces: xetex::Faces::new(),
+            faces: phitex_draw::xetex::Faces::new(),
             dpx: None,
         }
     }
@@ -1076,6 +1084,7 @@ impl Session {
         self.pdf_hashes = None;
         self.pdf_first = None;
         self.pdf_draws.clear();
+                self.pdf_doc = None;
         self.missing = host.missing.iter().map(|(n, _)| String::from_utf8_lossy(n).into_owned()).collect();
         self.missing.sort();
         self.missing.dedup();
@@ -1207,6 +1216,7 @@ impl Session {
             self.pdf_hashes = None;
             self.pdf_first = None;
             self.pdf_draws.clear();
+                self.pdf_doc = None;
             let _ = write!(self.how, "; xdvipdfmx {:.1} ms", ms(t.elapsed()));
             self.history_log.push(format!("xdvipdfmx: {:.1} ms: {}", ms(t.elapsed()), xetex::COST.with_borrow(Clone::clone)));
         }
@@ -1313,6 +1323,7 @@ impl Session {
                 };
                 self.pdf_hashes = None;
                 self.pdf_draws.clear();
+                self.pdf_doc = None;
             } else if name.ends_with(b".dvi") {
                 self.dvi = buf;
             } else {
@@ -1369,6 +1380,7 @@ impl Session {
                 self.pdf_hashes = None;
                 self.pdf_first = None;
                 self.pdf_draws.clear();
+                self.pdf_doc = None;
                 let mut term = h.term.clone();
                 term.extend_from_slice(&l.term);
                 self.term = term;
@@ -1462,18 +1474,28 @@ impl Session {
             .collect()
     }
 
+    /// The PDF, read once per link.
+    fn doc(&mut self) -> Option<&phitex_draw::Pdf> {
+        if self.pdf_doc.is_none() && !self.pdf.is_empty() {
+            self.pdf_doc = phitex_draw::Pdf::open(&Arc::from(&self.pdf[..]));
+        }
+        self.pdf_doc.as_ref()
+    }
+
     /// The PDF's pages' hashes (cheap: no drawing).
     fn pdf_hashes(&mut self) -> &[u64] {
         if self.pdf_hashes.is_none() {
             // (the pages after the link's first changed byte hashed again,
             // the others kept)
             let first = self.pdf_first.take();
-            let sums = pdfdraw::hashes_since(&self.pdf, &self.page_sums, first);
+            self.doc();
+            let Some(doc) = self.pdf_doc.as_ref() else { return &[] };
+            let sums = doc.hashes_since(&self.page_sums, first);
             let hs: Vec<u64> = sums.iter().map(|s| s.hash).collect();
             // (traced: checked against every page hashed again)
             if self.trace {
                 let kept = sums.iter().zip(&self.page_sums).filter(|(a, b)| a.hash == b.hash).count();
-                let same = pdfdraw::hashes(&self.pdf) == hs;
+                let same = self.doc().is_some_and(|d| d.hashes() == hs);
                 self.history_log.push(format!("pages: first changed byte {first:?}, {kept} of {} kept, {}", hs.len(), if same { "== all hashed" } else { "!= all hashed" }));
             }
             self.pdf_hashes = Some(hs);
@@ -1489,6 +1511,8 @@ impl Session {
             if let Some(d) = self.pdf_draws.get(&page) {
                 return Some(d.clone());
             }
+            self.doc()?;
+            let doc = self.pdf_doc.as_ref()?;
             let d = if self.xetex {
                 // (XeTeX: the native fonts' glyphs from the glyph runs)
                 let runs = self.runs.get(page).map_or(&[][..], |r| &r[..]);
@@ -1496,10 +1520,10 @@ impl Session {
                 let empty = BTreeMap::new();
                 let files = files.unwrap_or(&empty);
                 let faces = &mut self.faces;
-                let mut extra = |f0: usize, h: f64| xetex::extra(runs, h, f0, faces, &mut |n| xetex::get(files, read, shelf, n, "").map(|(_, b)| b));
-                pdfdraw::page_with(&self.pdf, page, &mut self.pdf_fonts, Some(&mut extra))?
+                let mut extra = |f0: usize, h: f64| phitex_draw::xetex::extra(runs, h, f0, faces, &mut |n: &[u8]| xetex::get(files, read, shelf, n, "").map(|(_, b)| b));
+                doc.draw_with(page, &mut self.pdf_fonts, Some(&mut extra))?
             } else {
-                pdfdraw::page(&self.pdf, page, &mut self.pdf_fonts)?
+                doc.draw(page, &mut self.pdf_fonts)?
             };
             self.pdf_draws.insert(page, d.clone());
             return Some(d);
@@ -1692,21 +1716,21 @@ mod abi {
 
     #[derive(Default)]
     struct Drawer {
-        pdf: Vec<u8>,
+        pdf: Option<phitex_draw::Pdf>,
         hashes: Vec<u64>,
         /// Draw lists by page hash: a page unchanged in a new PDF is not drawn again.
         draws: HashMap<u64, String>,
-        fonts: pdfdraw::Fonts,
+        fonts: phitex_draw::Fonts,
     }
 
     /// Give drawer `slot` a new PDF (the input). Returns its page count; the
     /// draw lists of pages it still has (by hash) are kept.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ph_draw_set(slot: u32, ptr: *const u8, len: usize) -> u32 {
-        let pdf = unsafe { input(ptr, len) }.to_vec();
+        let pdf = phitex_draw::Pdf::open(&Arc::from(unsafe { input(ptr, len) }));
         DRAWERS.with_borrow_mut(|m| {
             let d = m.entry(slot).or_default();
-            d.hashes = pdfdraw::hashes(&pdf);
+            d.hashes = pdf.as_ref().map(phitex_draw::Pdf::hashes).unwrap_or_default();
             let keep: std::collections::HashSet<u64> = d.hashes.iter().copied().collect();
             d.draws.retain(|h, _| keep.contains(h));
             d.pdf = pdf;
@@ -1724,7 +1748,7 @@ mod abi {
             if let Some(j) = d.draws.get(&h) {
                 return (2, j.clone().into_bytes());
             }
-            let Some(j) = pdfdraw::page(&d.pdf, k as usize, &mut d.fonts) else { return (0, Vec::new()) };
+            let Some(j) = d.pdf.as_ref().and_then(|p| p.draw(k as usize, &mut d.fonts)) else { return (0, Vec::new()) };
             d.draws.insert(h, j.clone());
             (1, j.into_bytes())
         });

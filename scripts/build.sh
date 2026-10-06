@@ -34,15 +34,14 @@ if [ $engine = partex ]; then
     (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
   fi
   scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gzdata
-  # XeTeX's: its format, made with its font index (the engine's otf-index:
-  # TeX Live's fonts/opentype and fonts/truetype as fc-list lists them for
-  # xelatex), dvipdfmx.cfg and the TECkit mappings; a second file the worker
-  # loads for the first xelatex project only
-  partex_root=$(sed -n 's|^partex-core = { path = "\(.*\)/crates/partex-core" }|\1|p' core-partex/Cargo.toml)
+  # XeTeX's: its format, made with its font index (the engine's otf-index
+  # over the fonts Shelf serves, scripts/font-index.sh), dvipdfmx.cfg and the
+  # TECkit mappings; a second file the worker loads for the first xelatex
+  # project only
+  # (made outside the sandbox: it reads Shelf's repo and runs its own bwrap)
   if [ ! -f target/fmt-xe/fontindex.pxfi ]; then
-    mkdir -p target/fmt-xe
-    (cd "core-partex/$partex_root" && scripts/sandbox cargo run -q -p partex-otf --release --example otf-index -- target/fontindex.pxfi)
-    cp "core-partex/$partex_root/target/fontindex.pxfi" target/fmt-xe/
+    echo "no target/fmt-xe/fontindex.pxfi: run scripts/font-index.sh first (after Shelf's release.py)" >&2
+    exit 1
   fi
   if [ ! -f target/fmt-xe/xelatex.fmt ]; then
     (ulimit -v 8000000; scripts/sandbox env MKFMT_XETEX="$PWD/target/fmt-xe/fontindex.pxfi" target/partex/release/mkfmt target/fmt-xe texmf)

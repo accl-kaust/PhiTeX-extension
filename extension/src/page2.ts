@@ -14,8 +14,10 @@ export interface Draws2 {
   f: string[];
   /** [font, size, y, "x x ...", text, 1 if its glyphs are drawn from outlines];
    * or [-1, size, y, "x x ...", "", outline font, codes]: the glyphs; either
-   * with a colour last when not black (a text run's sixth field then 0 or 1). */
-  t: (([number, number, number, string, string] | [number, number, number, string, string, 0 | 1, string?]) | [-1, number, number, string, "", number, number[], string?])[];
+   * with a colour last when not black (a text run's sixth field then 0 or 1);
+   * a glyph run's ninth field, [a, b, c, d]: one transformed glyph (rotated,
+   * slanted, extended: XeTeX's), drawn by matrix(a b c d x y), colour null if black. */
+  t: (([number, number, number, string, string] | [number, number, number, string, string, 0 | 1, string?]) | [-1, number, number, string, "", number, number[], (string | null)?, [number, number, number, number]?])[];
   /** The outline fonts' names (ids), by the glyph runs' font. */
   F?: string[];
   /** Outlines by "font:code": SVG path data in 1/1000 em, y up. */
@@ -69,7 +71,11 @@ export function elements(d: Draws2): string[] {
   const gid = (fr: number, c: number) => `g${d.F?.[fr] ?? fr}_${c}`;
   for (const r of d.t) {
     if (r[0] === -1) {
-      const [, size, y, xs, , fr, codes, colour] = r as [-1, number, number, string, "", number, number[], string?];
+      const [, size, y, xs, , fr, codes, colour, m] = r as [-1, number, number, string, "", number, number[], (string | null)?, [number, number, number, number]?];
+      if (m) {
+        out.push(`<g transform="matrix(${m.join(" ")} ${xs} ${y})"${colour ? ` fill="${esc(colour)}"` : ""}><use href="#${gid(fr, codes[0])}"/></g>`);
+        continue;
+      }
       const k = size / 1000;
       const x = xs.split(" ");
       out.push(`<g transform="translate(0 ${y}) scale(${k} ${-k})"${colour ? ` fill="${esc(colour)}"` : ""}>${codes.map((c, i) => `<use href="#${gid(fr, c)}" x="${(+x[i] / k).toFixed(1)}"/>`).join("")}</g>`);

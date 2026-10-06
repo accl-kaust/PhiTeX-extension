@@ -612,6 +612,9 @@ fn draw(p: &Pdf, page: &O, programs: &mut Fonts) -> String {
 }
 
 fn draw_with(p: &Pdf, page: &O, programs: &mut Fonts, extra: Option<&mut dyn FnMut(usize, f64) -> crate::xetex::Extra>) -> String {
+    // (XeTeX: every glyph, TFM fonts' too, comes from the glyph runs; the
+    // PDF gives the paths and rules only)
+    let runs_only = extra.is_some();
     let mut keys: Vec<&'static str> = Vec::new();
     {
         let mut frefs: Vec<String> = Vec::new();
@@ -642,7 +645,7 @@ fn draw_with(p: &Pdf, page: &O, programs: &mut Fonts, extra: Option<&mut dyn FnM
                 };
                 let uni = f.get("ToUnicode").and_then(|t| p.stream(t)).map(cmap).unwrap_or_default();
                 let ex = base.to_ascii_uppercase().contains("CMEX");
-                let outlines = font_program(p, &f, programs).map(|t1| {
+                let outlines = (!runs_only).then(|| font_program(p, &f, programs)).flatten().map(|t1| {
                     let mut names = t1.encoding.clone();
                     if let Some(e @ O::Dict(_)) = f.get("Encoding").map(|e| p.resolve(e))
                         && let Some(O::Arr(d)) = e.get("Differences").map(|d| p.resolve(d))
@@ -665,7 +668,7 @@ fn draw_with(p: &Pdf, page: &O, programs: &mut Fonts, extra: Option<&mut dyn FnM
                 });
                 let fref = frefs.len();
                 frefs.push(base.clone());
-                let cid = matches!(f.get("Subtype"), Some(O::Name(s)) if s == "Type0");
+                let cid = runs_only || matches!(f.get("Subtype"), Some(O::Name(s)) if s == "Type0");
                 fonts.insert(name, Font { key, first, widths, uni, ex, outlines, fref, cid });
             }
         }

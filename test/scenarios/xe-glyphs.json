@@ -1,0 +1,4 @@
+{ "project": "test/scenarios/xe-glyphs", "name": "xe-glyphs",
+  "steps": [ { "idle": 8000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview').shadowRoot; const page = r.querySelector('svg.page'); const defs = r.getElementById('phx-glyphs'); const c = page.cloneNode(true); if (defs) c.insertAdjacentHTML('afterbegin', '<defs>' + (defs.querySelector('defs') ?? defs).innerHTML + '</defs>'); c.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); return 'SVG:' + btoa(unescape(encodeURIComponent(c.outerHTML))); })()", "page": true },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview').shadowRoot; return [...r.querySelectorAll('svg.page text')].map((t) => t.textContent).join(' | '); })()", "page": true } ] }

@@ -498,7 +498,7 @@ pub struct Session {
     /// (XeTeX) A hash of the XDV `pdf` was made from.
     xdv_hash: u64,
     /// (XeTeX) Each page's glyph runs, from xdvipdfmx.
-    runs: Vec<Vec<partex_xdvipdfmx::dvi::GlyphRun>>,
+    runs: Vec<Vec<partex_xdvipdfmx::api::GlyphRun>>,
     /// (XeTeX) The fonts xdvipdfmx read (their outlines are drawn), and the faces parsed.
     xread: xetex::Read,
     faces: xetex::Faces,

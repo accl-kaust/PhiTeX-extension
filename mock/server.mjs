@@ -119,8 +119,20 @@ http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { const d = docs.get(m[1]); if (!d) return send(404, "text/plain", "no such doc"); d.text = b; send(204, "text/plain", ""); });
     return;
   }
-  if (u.pathname === "/project/mock/download/zip")
-    return send(200, "application/zip", zip([...[...docs.values()].map((d) => [d.path, d.text]), ...files]));
+  if (u.pathname === "/project/mock/download/zip") {
+    const z = zip([...[...docs.values()].map((d) => [d.path, d.text]), ...files]);
+    // (PHITEX_SLOWZIP=kbit/s: the ZIP trickled, as a slow connection sends a big project)
+    const kbps = +(process.env.PHITEX_SLOWZIP ?? 0);
+    if (!kbps) return send(200, "application/zip", z);
+    res.writeHead(200, { "content-type": "application/zip", "content-length": String(z.length) });
+    const step = Math.max(256, Math.round((kbps * 1000) / 8 / 10));
+    let at = 0;
+    const tick = setInterval(() => {
+      res.write(z.subarray(at, (at += step)));
+      if (at >= z.length) (clearInterval(tick), res.end());
+    }, 100);
+    return;
+  }
   if (u.pathname === "/project/mock/compile" && req.method === "POST")
     return void compile().then((c) => send(200, "application/json", JSON.stringify(c)));
   if (u.pathname === "/project/mock/output/output.pdf" && fs.existsSync(path.join(OUT, "output.pdf")))

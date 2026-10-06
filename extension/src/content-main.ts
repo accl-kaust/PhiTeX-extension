@@ -96,20 +96,55 @@ async function fetchDocs(panel: Panel, only?: (path: string) => boolean): Promis
     // files, figures, in one request, ~1 s; given to the core before the
     // first build. No waiting on the file tree, whose collapsed folders
     // never show their docs' ids)
+    panel.reading({ h: "Downloading the project from Overleaf…" });
     const z = await pageFetch(`${project()}/download/zip`, { credentials: "include" });
     if (!z.ok) throw new Error(`project download failed: ${z.status}`);
-    // (copied into this script's own memory: Firefox's content.fetch gives
-    // the page's ArrayBuffer, which this script's streams (DecompressionStream)
-    // never finish reading)
-    const pageBuf = new Uint8Array(await z.arrayBuffer());
-    const own = new Uint8Array(pageBuf.length);
-    own.set(pageBuf);
-    const zbuf = own.buffer;
+    const size = Number(z.headers.get("content-length")) || 0;
+    const mb = (n: number) => (n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`);
+    // (the bytes as they arrive, said on the card: Chrome's own fetch only;
+    // Firefox's content.fetch gives the page's stream, which this script's
+    // readers never finish reading)
+    let own: Uint8Array;
+    if (z.body && rawPageFetch === fetch) {
+      const parts: Uint8Array[] = [];
+      let got = 0;
+      const rd = z.body.getReader();
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        parts.push(value);
+        got += value.length;
+        panel.reading({ h: "Downloading the project from Overleaf…", detail: size ? `${mb(got)} of ${mb(size)}` : mb(got), pct: size ? Math.min(100, Math.round((100 * got) / size)) : undefined });
+      }
+      own = new Uint8Array(got);
+      let at = 0;
+      for (const p of parts) (own.set(p, at), (at += p.length));
+    } else {
+      if (size) panel.reading({ h: "Downloading the project from Overleaf…", detail: mb(size) });
+      // (copied into this script's own memory: Firefox's content.fetch gives
+      // the page's ArrayBuffer, which this script's streams (DecompressionStream)
+      // never finish reading)
+      const pageBuf = new Uint8Array(await z.arrayBuffer());
+      own = new Uint8Array(pageBuf.length);
+      own.set(pageBuf);
+    }
+    const zbuf = own.buffer as ArrayBuffer;
     devMark(`zip ${zbuf.byteLength} bytes`);
-    const { files: zipped, binaries: bin } = await readZip(zbuf);
+    const { files: zipped, binaries: bin } = await readZip(zbuf, (name, k, n) => panel.reading({ h: "Unpacking the project…", detail: name, done: k + 1, total: n }));
     devMark(`unzipped ${Object.keys(zipped).length} files`);
     Object.assign(files, zipped);
-    if (giveBinary) await Promise.all(Object.entries(bin).map(([p, b]) => giveBinary!(p, b)));
+    if (giveBinary) {
+      // (figures and other binary files, handed to the engine before the first build)
+      const all = Object.entries(bin);
+      let given = 0;
+      await Promise.all(
+        all.map(async ([p, b]) => {
+          await giveBinary!(p, b);
+          panel.reading({ h: "Handing figures to the engine…", detail: p, done: ++given, total: all.length });
+        }),
+      );
+    }
+    panel.reading({ h: "Project read · checking packages…", detail: `${Object.keys(files).length} files, ${Object.keys(bin).length} figures and other files` });
     panel.files(Object.keys(files), [], `${(performance.now() - t).toFixed(0)} ms; ${Object.keys(bin).length} binary files`);
     return files;
   }

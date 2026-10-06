@@ -9,7 +9,8 @@ async function inflate(b: Uint8Array): Promise<Uint8Array> {
 }
 
 /** The text files of a ZIP, by path; others are listed in `skipped`. */
-export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string, string>; skipped: string[]; binaries: Record<string, Uint8Array> }> {
+/** `onFile`: each file as it is read (its name, its index, the count), for the loading card. */
+export async function readZip(buf: ArrayBuffer, onFile?: (name: string, k: number, n: number) => void): Promise<{ files: Record<string, string>; skipped: string[]; binaries: Record<string, Uint8Array> }> {
   const b = new Uint8Array(buf);
   const d = new DataView(buf);
   let eocd = -1;
@@ -37,6 +38,7 @@ export async function readZip(buf: ArrayBuffer): Promise<{ files: Record<string,
     const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nlen));
     p += 46 + nlen + xlen + clen;
     if (name.endsWith("/")) continue;
+    onFile?.(name, k, n);
     if (method !== 0 && method !== 8) {
       skipped.push(name);
       continue;

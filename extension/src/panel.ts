@@ -335,7 +335,7 @@ footer .msg.err { color: var(--danger); }
 .load { max-width: 360px; margin: 0 auto; text-align: left; color: var(--fg2-dark); }
 .win.docked.light .load, .win:not(.docked) .load { color: var(--fg2); }
 .load h3 { margin: 0 0 10px; font: 600 14px "Noto Sans", system-ui, sans-serif; color: inherit; }
-.load .bar { height: 6px; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
+.load .bar { display: block; height: 6px; padding: 0; border: 0; border-radius: 9999px; background: rgb(127 127 127 / 25%); overflow: hidden; }
 .load .bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s ease; }
 .load .bar.busy i { width: 35% !important; animation: phx-busy 1.1s ease-in-out infinite; }
 @keyframes phx-busy { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
@@ -926,12 +926,69 @@ export class Panel {
     }
     const now = performance.now(), s = Math.round((now - this.loadT0) / 1000), quiet = (now - this.loadLast) / 1000;
     const fetching = el.dataset.phase === "fetch";
+    if (el.dataset.phase === "read") {
+      el.textContent = `Reading · ${s} s`;
+      return;
+    }
     el.textContent = fetching
       ? quiet < 4
         ? `Still fetching · ${s} s · files arriving`
         : `Still fetching · ${s} s · a large package (TikZ, fonts) is on its way`
       : `Typesetting · ${s} s`;
     if (s >= 20 && fetching) el.textContent += " · only the first time: next visits reuse them";
+  }
+
+  /** The reading step's last state, and when its card last changed (redrawn at most every 50 ms). */
+  private readNow: { h: string; detail?: string; done?: number; total?: number; pct?: number } | undefined;
+  private readDrawn = 0;
+  private readTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Reading the project, before the packages: what is happening (the
+   * download from Overleaf, each file unpacked, each figure handed to the
+   * engine), the file in hand and how far, so the first seconds read as work.
+   */
+  reading(r: { h: string; detail?: string; done?: number; total?: number; pct?: number }): void {
+    if (this.last || this.pkgBusy || this.loadDone >= 0) return;
+    this.readNow = r;
+    this.loadT0 ||= performance.now();
+    const wait = 50 - (performance.now() - this.readDrawn);
+    if (wait > 0) {
+      this.readTimer ??= setTimeout(() => ((this.readTimer = undefined), this.drawReading()), wait);
+      return;
+    }
+    this.drawReading();
+  }
+
+  private drawReading(): void {
+    const r = this.readNow;
+    if (!r || this.last || this.pkgBusy || this.loadDone >= 0) return;
+    this.readDrawn = performance.now();
+    const empty = this.$("#empty");
+    let card = empty.querySelector<HTMLElement>(".load.reading");
+    if (!card) {
+      empty.innerHTML =
+        `<div class="load reading"><div class="steps"><span class="now">Project</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div>` +
+        `<h3></h3><div class="bar busy"><i></i></div><div class="alive" data-phase="read"></div><div class="count"></div><div class="names"></div>` +
+        `<div class="note">Your project's files stay in this browser: read from Overleaf, typeset here.</div></div>`;
+      card = empty.querySelector<HTMLElement>(".load.reading")!;
+    }
+    card.querySelector("h3")!.textContent = r.h;
+    const pct = r.pct ?? (r.total ? Math.round((100 * (r.done ?? 0)) / r.total) : undefined);
+    const bar = card.querySelector(".bar")!;
+    bar.classList.toggle("busy", pct === undefined);
+    bar.querySelector("i")!.style.width = pct === undefined ? "" : `${pct}%`;
+    card.querySelector(".count")!.textContent = r.total ? `${r.done ?? 0} of ${r.total}` : "";
+    const names = card.querySelector(".names")!;
+    names.innerHTML = "";
+    if (r.detail) {
+      const c = document.createElement("span");
+      c.className = "ing";
+      c.textContent = r.detail;
+      names.append(c);
+    }
+    this.alive();
+    this.loadTick ??= setInterval(() => this.alive(), 1000);
   }
 
   packages(p: PackageState): void {

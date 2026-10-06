@@ -227,7 +227,22 @@ try {
   for (let i = 0; i < 20 && !contexts.some((c) => c.auxData?.type === "isolated"); i++) await sleep(250);
   await evalIn(`chrome.storage.local.remove(["follow", "panel"])`, true);
   if ((await evalIn(onboardScript(version, { workers: process.env.PHITEX_WORKERS === "1" ? 1 : 2, ...(sc.storage ?? {}) }))) === "onboarded") {
+    // (PHITEX_SLOWZIP=kbit/s: the mock sends the project's ZIP that slowly;
+    // a screenshot every 300 ms until the first page, load-<ms>.png: the
+    // loading card as a slow connection shows it)
+    const slow = +(process.env.PHITEX_SLOWZIP ?? 0);
     await call("Page.reload");
+    if (slow) {
+      const t0 = Date.now();
+      for (let i = 0; i < 200; i++) {
+        await sleep(300);
+        const r = await call("Page.captureScreenshot", { format: "png" });
+        fs.writeFileSync(path.join(out, `load-${String(Date.now() - t0).padStart(6, "0")}.png`), Buffer.from(r.result.data, "base64"));
+        if (process.env.PHITEX_LOADDEBUG) console.log("load:", await evalIn(`(() => { const r = document.querySelector("phitex-preview")?.shadowRoot; const b = r?.querySelector(".load .bar"), i = b?.querySelector("i"); if (!i) return null; const cb = getComputedStyle(b), ci = getComputedStyle(i); return JSON.stringify({ html: b.outerHTML, bar: [cb.display, cb.height, cb.padding, cb.width], i: [ci.display, ci.width, ci.height, ci.backgroundColor, ci.transform, ci.opacity] }); })()`, true));
+        const shown = await evalIn(`(() => { const r = document.querySelector("phitex-preview")?.shadowRoot; return !!r?.querySelector(".slot svg.page, .slot canvas"); })()`, true);
+        if (shown) break;
+      }
+    }
     await sleep(1500);
   }
 }

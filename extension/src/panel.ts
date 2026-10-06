@@ -387,11 +387,12 @@ footer .msg.err { color: var(--danger); }
 @keyframes chipflash { 0% { filter: brightness(1.45); } 100% { filter: none; } }
 @media (prefers-reduced-motion: reduce) { .speedchip.flash { animation: none; } }
 /* startup: the first paint is in, the SSA program (instant typing) still coming */
-.warmup { display: none; position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 3; pointer-events: none; white-space: nowrap;
-  height: 24px; padding: 0 12px; border-radius: 9999px; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+.warmup { display: none; position: absolute; left: 12px; right: 12px; margin: 0 auto; width: fit-content; top: 10px; z-index: 3; pointer-events: none;
+  min-height: 24px; box-sizing: border-box; padding: 4px 12px; border-radius: 12px; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; line-height: 16px; text-align: center;
   font-variant-numeric: tabular-nums; color: #fff; background: rgb(27 34 44 / 82%); box-shadow: 0 4px 12px rgba(0,0,0,.3); backdrop-filter: blur(4px); }
 .warmup.on { display: inline-flex; }
-.warmup .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
+.pkgs.on ~ .warmup { top: 56px; } /* below the strip, both said */
+.warmup .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
 .warmup .slow { color: #ffd27a; font-weight: 500; }
 .warmup.ready { background: var(--accent); }
 .warmup.ready .dot { display: none; }
@@ -498,8 +499,8 @@ export class Panel {
       <div class="btns"><button class="btn" id="reportcopy">Copy</button><button class="btn" id="reportmail">Email</button><button class="btn" id="reportclose">Close</button></div>
     </div>
     <div class="speedchip" id="speedchip" aria-live="off">⚡ – ms</div>
-    <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
+    <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
       <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
@@ -1160,7 +1161,7 @@ export class Panel {
     const since = w.since ?? Date.now();
     const tick = () => {
       const s = Math.round((Date.now() - since) / 1000);
-      el.innerHTML = `<span class="dot"></span>⚡ Preview ready · preparing instant typing… ${s} s${w.slow ? ` <span class="slow">· edits slower until ready</span>` : ""}`;
+      el.innerHTML = `<span class="dot"></span><span>⚡ Preview ready · preparing instant typing… ${s} s${w.slow ? ` <span class="slow">· edits slower until ready</span>` : ""}</span>`;
     };
     el.className = "warmup on";
     tick();

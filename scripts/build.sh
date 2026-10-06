@@ -93,7 +93,7 @@ dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done
 engine=$(grep -oE "partex-phitex-[0-9a-f]+" core-partex/Cargo.toml | head -1 | sed 's/partex-phitex-//')
 scripts/sandbox node -e '
   const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
-  m.version_name = `${m.version} (engine ${process.argv[2]})`;
+  m.version_name = `${m.version_name ?? m.version} (engine ${process.argv[2]})`;
   if (process.argv[1] === "true") {
     for (const c of m.content_scripts) c.matches.push("http://localhost/project/*");
     m.web_accessible_resources[0].matches.push("http://localhost/*");

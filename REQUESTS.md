@@ -17,21 +17,12 @@ around in the extension. Updated 2026-10-06 against engine `3459953`
 2. **Type 1 / TFM glyphs in the glyph runs** (`GlyphSource::Type1`, agreed):
    classic CM math under xelatex without `unicode-math` (`$\sum$`) has no
    runs. xdvipdfmx embeds those fonts as CFF, and the viewer draws ∑ as "P".
-3. **`GlyphOrigin` per glyph run** (in progress): SyncTeX, meaning
-   double-click and cursor sync, for XeTeX documents. `tex.origins(page)` is
-   empty under `Flavor::XeTeX`.
-4. **HaranoAji**: `\newfontfamily\jafont{HaranoAji Mincho}` fetches
-   `HaranoAjiMincho.fontspec`, then fontspec errors. Real xelatex with TeX
-   Live's fonts.conf loads it (file-name lookup from a `.fontspec`, or the
-   index's names?).
 5. **Text of RTL and complex scripts in the runs**: the selectable text over
    Arabic, Hebrew and Devanagari is scrambled. Needed: each run's or
    cluster's Unicode text in logical order (what ToUnicode / ActualText
    give).
 6. **Colour stack and CTM on the runs** (agreed): `\textcolor` draws black;
    `\rotatebox` and TikZ-transformed text are misplaced.
-7. **xdvipdfmx errors as `Result`** (branch `xdvipdfmx-result`): a fatal
-   driver error aborts the wasm worker today.
 
 ### Embedding
 
@@ -73,3 +64,6 @@ around in the extension. Updated 2026-10-06 against engine `3459953`
 - XeTeX: `Flavor::XeTeX`, fonts through the Host (`FontIndex`, `OpenType`),
   harfrust shaping, xdvipdfmx in process, glyph runs (`3459953`).
 - `\write18` (restricted) through `Host::system`, for minted.
+- XeTeX glyph origins (SyncTeX on xelatex), xdvipdfmx errors as `Result`,
+  `\XeTeXglyphbounds` (xeCJK, ctex) (`182fb8a`). HaranoAji was no bug: write
+  `{HaranoAjiMincho}`, as real xelatex needs too.

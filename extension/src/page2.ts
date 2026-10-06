@@ -190,7 +190,7 @@ function store(el: HTMLElement, d: Draws2): void {
  */
 export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
   void loadFonts();
-  let svg = el.firstElementChild as SVGSVGElement | null;
+  let svg = el.querySelector<SVGSVGElement>(":scope > svg.page");
   if (!svg || svg.dataset.v !== "2") {
     el.innerHTML = `<svg class="page" xmlns="${NS}" data-v="2" preserveAspectRatio="none" xml:space="preserve"><rect class="paper"/><g class="c"></g></svg>`;
     svg = el.firstElementChild as SVGSVGElement;
@@ -213,7 +213,7 @@ export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
   }
   const fresh: string[] = [];
   const slots: (Keyed | number)[] = keys.map((k) => old.get(k)?.pop() ?? (fresh.push(k), fresh.length - 1));
-  if (!fresh.length && slots.length === g.children.length && slots.every((s, i) => s === g.children[i])) return;
+  if (!fresh.length && slots.length === g.children.length && slots.every((s, i) => s === g.children[i])) return void (el.querySelector(":scope > img.ras") || raster(el, svg));
   const made: Keyed[] = [];
   if (fresh.length) {
     const tmp = document.createElementNS(NS, "g");
@@ -231,4 +231,84 @@ export function patch(el: HTMLElement, d: Draws2, w: number, h: number): void {
     if (at === n) at = at.nextSibling;
     else g.insertBefore(n, at);
   }
+  // (changed: drawn live until it settles, then as a picture again)
+  live(el, svg);
+  raster(el, svg);
+}
+
+/**
+ * Scrolling: a page's drawing (glyphs, paths, images, clips) as one picture,
+ * an <img> of the page as a standalone SVG, which the browser rasterizes
+ * once and then only moves; the live SVG keeps its text (selection, and
+ * text in the bundled fonts, which an SVG image cannot use) over it. A page
+ * that changes is drawn live (the keystroke's path) and becomes a picture
+ * again once it has not changed for a moment. Thousands of <use> glyphs
+ * painted live cost a 29-page document 14 fps scrolling, 90% busy; as
+ * pictures 55 fps, 17% (scripts/scrollbench.mjs).
+ */
+const RASTER_MS = 250;
+type Rastered = HTMLElement & { __ras?: ReturnType<typeof setTimeout>; __gen?: number };
+
+/** The live drawing shown again, the picture (now stale) dropped. */
+function live(el: Rastered, svg: SVGSVGElement): void {
+  svg.classList.remove("ras");
+  const img = el.querySelector<HTMLImageElement>(":scope > img.ras");
+  if (img) (URL.revokeObjectURL(img.src), img.remove());
+}
+
+function raster(el: Rastered, svg: SVGSVGElement): void {
+  clearTimeout(el.__ras);
+  const gen = (el.__gen = (el.__gen ?? 0) + 1);
+  el.__ras = setTimeout(() => void picture(el, svg, gen), RASTER_MS);
+}
+
+async function picture(el: Rastered, svg: SVGSVGElement, gen: number): Promise<void> {
+  if (!svg.isConnected || el.__gen !== gen) return;
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const defs = root.getElementById?.("phx-glyphs");
+  const g = svg.querySelector("g.c");
+  if (!g) return;
+  // (the drawing's markup, without the text; and what it refers to in the store: glyphs, images, clips and their parents)
+  const parts: string[] = [];
+  const refs = new Set<string>();
+  const ref = (m: string) => {
+    for (const r of m.matchAll(/(?:href="#|url\(#)([^")]+)/g)) refs.add(r[1]);
+  };
+  for (const c of Array.from(g.children)) {
+    if (c.tagName === "text") continue;
+    const m = c.outerHTML;
+    parts.push(m);
+    ref(m);
+  }
+  if (!parts.length) return;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let todo = [...refs]; todo.length; ) {
+    const id = todo.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const e = defs?.querySelector(`#${CSS.escape(id)}`);
+    if (!e) continue;
+    const m = e.outerHTML;
+    out.push(m);
+    for (const r of m.matchAll(/url\(#([^)]+)\)/g)) todo.push(r[1]);
+  }
+  const vb = svg.getAttribute("viewBox") ?? "";
+  const [, , vw, vh] = vb.split(" ");
+  const src = `<svg xmlns="${NS}" viewBox="${vb}" width="${vw}" height="${vh}" preserveAspectRatio="none"><defs>${out.join("")}</defs>${parts.join("")}</svg>`;
+  const img = new Image();
+  img.className = "ras";
+  img.alt = "";
+  img.src = URL.createObjectURL(new Blob([src], { type: "image/svg+xml" }));
+  try {
+    await img.decode();
+  } catch {
+    URL.revokeObjectURL(img.src);
+    return;
+  }
+  // (a change while it decoded: that one's picture follows)
+  if (!svg.isConnected || el.__gen !== gen) return void URL.revokeObjectURL(img.src);
+  live(el, svg);
+  el.insertBefore(img, svg);
+  svg.classList.add("ras");
 }

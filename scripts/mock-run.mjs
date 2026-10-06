@@ -130,6 +130,12 @@ async function parity(s) {
         if (!drawn) await sleep(100);
       }
       if (!drawn) console.log(`parity: page ${k} not drawn`);
+      // (and its picture, the one scrolling shows: page2.ts raster; a page of only text has none)
+      for (let t = 0; t < 30; t++) {
+        await frame();
+        if (await evalIn(`(() => { ${P}; const s = r.querySelector('.slot[data-k="${k}"]'); return !!s?.querySelector("img.ras") || !s?.querySelector("svg.page g.c > :not(text)"); })()`, true)) break;
+        await sleep(100);
+      }
       await sleep(300);
       // (whatever lies over the page (a dialog, the chip, a badge) hidden for the shot: the topmost element at points across it, if not the page's own)
       await evalIn(`(() => { ${P}; const el = r.querySelector('.slot[data-k="${k}"]'); const a = el.getBoundingClientRect(); for (let i = 1; i < 12; i++) for (let j = 1; j < 12; j++) { const x = a.left + a.width * i / 12, y = ${box.y} + ${box.h} * j / 12; for (let t = 0; t < 8; t++) { const top = (r.elementFromPoint?.(x, y) ?? document.elementFromPoint(x, y)); if (!top || el.contains(top) || top === st || top.closest?.("#stage") === st && !top.closest(".slot")) break; const o = top.closest?.("dialog, [role=dialog]") ?? top; if (o.dataset) o.dataset.parityHidden = o.style.visibility || "-"; o.style.visibility = "hidden"; } } })()`, true);
@@ -316,6 +322,44 @@ for (const s of sc.steps ?? []) {
     }
     s.result.top = [...self].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${Math.round(v)} ms ${k}`);
     console.log("cpu:", JSON.stringify(s.result, null, 1));
+  }
+  else if (s.scrollbench !== undefined) {
+    // (`{"scrollbench": ms, "px": n}`: the ⚡ view scrolled n px a frame, down then back up, for ms;
+    // the frames' times as the page saw them, and where the main thread went)
+    await call("Page.bringToFront");
+    await call("Emulation.setFocusEmulationEnabled", { enabled: true });
+    // (`"css"`: a style added to the view's shadow root first, to try a change)
+    if (s.css !== undefined) await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; let st = r.getElementById("phx-bench"); if (!st) { st = document.createElement("style"); st.id = "phx-bench"; r.append(st); } st.textContent = ${JSON.stringify(s.css)}; })()`, true);
+    const metrics = async () => Object.fromEntries((await call("Performance.getMetrics")).result.metrics.map((m) => [m.name, m.value]));
+    await call("Performance.enable");
+    await call("Profiler.enable");
+    await call("Profiler.setSamplingInterval", { interval: 200 });
+    const m0 = await metrics();
+    await call("Profiler.start");
+    const frames = await evalIn(`new Promise((done) => { const st = document.querySelector("phitex-preview").shadowRoot.getElementById("stage"); st.scrollTop = 0; const t0 = performance.now(), ts = []; let dir = 1; const f = (t) => { ts.push(t); st.scrollTop += dir * ${s.px ?? 60}; if (st.scrollTop + st.clientHeight >= st.scrollHeight - 1) dir = -1; if (st.scrollTop <= 0) dir = 1; if (t - t0 < ${s.scrollbench}) requestAnimationFrame(f); else done(ts); }; requestAnimationFrame(f); })`, true);
+    const prof = (await call("Profiler.stop")).result.profile;
+    const m1 = await metrics();
+    const d = (k) => ((m1[k] ?? 0) - (m0[k] ?? 0)) * 1000;
+    const dt = (frames ?? []).slice(1).map((t, i) => t - frames[i]).sort((a, b) => a - b);
+    const q = (p) => dt[Math.min(dt.length - 1, Math.floor(p * dt.length))]?.toFixed(1);
+    s.result = { frames: dt.length, fps: +((1000 * dt.length) / s.scrollbench).toFixed(1), median: q(0.5), p95: q(0.95), max: dt.at(-1)?.toFixed(1), over33: dt.filter((x) => x > 33.4).length, busy: `${((d("TaskDuration") / s.scrollbench) * 100).toFixed(1)}%`, script: Math.round(d("ScriptDuration")), layout: Math.round(d("LayoutDuration")), style: Math.round(d("RecalcStyleDuration")), layouts: (m1.LayoutCount ?? 0) - (m0.LayoutCount ?? 0), styles: (m1.RecalcStyleCount ?? 0) - (m0.RecalcStyleCount ?? 0) };
+    const per = (prof.endTime - prof.startTime) / 1000 / Math.max(1, prof.samples.length);
+    const self = new Map();
+    for (const n of prof.nodes) {
+      const f = n.callFrame;
+      if (!n.hitCount || f.functionName === "(idle)") continue;
+      const k = `${f.functionName || "(anon)"} ${f.url.replace(/^.*\//, "")}:${f.lineNumber + 1}`;
+      self.set(k, (self.get(k) ?? 0) + n.hitCount * per);
+    }
+    s.result.top = [...self].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${Math.round(v)} ms ${k}`);
+    console.log("scrollbench:", JSON.stringify(s.result, null, 1));
+  }
+  else if (s.dumpview !== undefined) {
+    // (`{"dumpview": "name"}`: the ⚡ view as a standalone page, <out>/<name>.html (its styles,
+    // the glyph and image store, the stage with every page drawn), for scripts/scrollbench.mjs)
+    const html = await evalIn(`(() => { const r = document.querySelector("phitex-preview").shadowRoot; const css = [...r.querySelectorAll("style")].map((s) => s.textContent).join("\\n") + [...(r.adoptedStyleSheets ?? [])].map((sh) => [...sh.cssRules].map((c) => c.cssText).join("\\n")).join("\\n"); const store = r.getElementById("phx-glyphs")?.closest("svg")?.outerHTML ?? ""; const st = r.getElementById("stage"); return "<!doctype html><meta charset=utf-8><style>html,body{margin:0;height:100%} " + css + " #stage{height:100vh;overflow:auto}</style>" + store + st.outerHTML; })()`, true);
+    fs.writeFileSync(path.join(out, `${s.dumpview}.html`), html ?? "");
+    console.log(`dumpview → ${path.join(out, s.dumpview + ".html")}: ${(html ?? "").length} chars`);
   }
   else if (s.wait !== undefined) await sleep(s.wait);
   else if (s.parity !== undefined) await parity(s);

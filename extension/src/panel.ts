@@ -406,7 +406,13 @@ footer .msg.err { color: var(--danger); }
 .win.docked .viewer { min-height: 100%; }
 .win.docked .stage { background: transparent; padding: 0; overflow-y: scroll; overflow-x: auto; }
 .stage { overscroll-behavior: contain; will-change: scroll-position; }
-.slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); contain: layout paint; content-visibility: auto; }
+.slot { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); contain: layout paint; }
+/* (a page as a picture while it is unchanged, its live text over it; see page2.ts raster) */
+.slot > img.ras { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; user-select: none; }
+.slot > svg.page { position: relative; }
+.slot > svg.page.ras g.c > :not(text) { display: none; }
+.slot > svg.page.ras rect.paper { fill: none; }
+.stage .slot > svg.page.ras { background: transparent; }
 .load .btns { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
 .load .btns .btn { cursor: pointer; padding: 4px 12px; border-radius: 9999px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; font-weight: 600; }
 .report { display: none; position: absolute; inset: 12px; z-index: 6; padding: 12px; flex-direction: column; gap: 6px; background: var(--bg, #fff); color: var(--fg, #1b222c); border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.35); font-size: 12px; }

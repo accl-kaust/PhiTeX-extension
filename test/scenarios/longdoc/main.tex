@@ -1,0 +1,17 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{lipsum}
+\begin{document}
+\section{Start}
+\lipsum[1-40]
+\begin{equation} \int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2} \end{equation}
+\includegraphics[width=.6\linewidth]{fig-mpl.pdf}
+\section{More}
+\lipsum[41-90]
+\includegraphics[width=.5\linewidth]{fig-a.png}
+\begin{tikzpicture}\shade[left color=red,right color=blue] (0,0) rectangle (4,2);\end{tikzpicture}
+\section{End}
+\lipsum[91-150]
+\end{document}

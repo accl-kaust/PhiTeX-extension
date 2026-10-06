@@ -1,0 +1,2 @@
+{ "project": "test/scenarios/longdoc", "name": "longdoc",
+  "steps": [ { "idle": 4000 }, { "eval": "document.querySelector('phitex-preview').shadowRoot.querySelectorAll('.slot').length", "page": false }, { "scrollbench": 6000, "px": 60 } ] }

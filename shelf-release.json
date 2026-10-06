@@ -1,8 +1,8 @@
 {
  "schema": 3,
- "release": "tl2026.4",
- "index": "index-tl2026.4.tsv.gz",
- "min_extension": "0.3.0",
+ "release": "tl2026.5",
+ "index": "index-tl2026.5.tsv.gz",
+ "min_extension": "0.2.90",
  "notice": null,
  "packs": 6919,
  "deps": [

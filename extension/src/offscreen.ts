@@ -142,7 +142,8 @@ chrome.runtime.onConnect.addListener((port) => {
     // (an open carries the binary files given so far, figures and fonts: the first build has them)
     // (a new session: its pages from the build worker until its PDF reaches the drawer)
     if (m.op === "open") drawn.delete(client);
-    if (m.op === "png" && drawn.has(client)) return drawer.postMessage({ ...m, id, client } as Req);
+    // (the draw worker draws draw lists; a page from the PDF, dpi -1, is the build worker's)
+    if (m.op === "png" && m.dpi >= 0 && drawn.has(client)) return drawer.postMessage({ ...m, id, client } as Req);
     if (m.op === "open") {
       const bins = Object.fromEntries(binaries);
       const was = dual.get(client);

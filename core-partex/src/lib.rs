@@ -1898,7 +1898,8 @@ mod abi {
             *n += 1;
             *n - 1
         });
-        out_json(format!("{{\"handle\":{h},\"build_ms\":{},{}}}", s.build_ms, st.json()));
+        // (`how`: "plain: …" a first paint, the SSA program still to come)
+        out_json(format!("{{\"handle\":{h},\"build_ms\":{},\"how\":{},{}}}", s.build_ms, esc(&s.how), st.json()));
         SESSIONS.with_borrow_mut(|m| m.insert(h, s));
         h
     }

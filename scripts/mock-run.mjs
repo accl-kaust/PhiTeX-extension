@@ -28,6 +28,7 @@
 //       { "dbltext": "Every writer" }, // double-click the editor at that text: the page's highlight boxes after
 //       { "dbloutline": "Section 3" } // double-click that heading in the file outline
 //     ] }
+//   "storage": { "toured": false } // (top level) over the onboarded settings (scripts/onboarded.mjs)
 // --fresh: the package cache (IndexedDB) emptied first, as a new install.
 // --keep: Chromium and the mock left running after.
 import { spawn, execFileSync } from "node:child_process";
@@ -137,7 +138,11 @@ try {
   for (let i = 0; i < 40 && !contexts.some((c) => c.auxData?.isDefault); i++) await sleep(250);
   await sleep(1000);
   // (PHITEX_WORKERS=1: the one-worker start, to compare; else the two-worker start where it applies)
-  if ((await evalIn(onboardScript(version, { workers: process.env.PHITEX_WORKERS === "1" ? 1 : 2 }))) === "onboarded") {
+  // (each run from the same settings: the highlight and the page format as a
+  // new user has them, then the scenario's own `storage` over the onboarded state)
+  for (let i = 0; i < 20 && !contexts.some((c) => c.auxData?.type === "isolated"); i++) await sleep(250);
+  await evalIn(`chrome.storage.local.remove(["follow", "panel"])`, true);
+  if ((await evalIn(onboardScript(version, { workers: process.env.PHITEX_WORKERS === "1" ? 1 : 2, ...(sc.storage ?? {}) }))) === "onboarded") {
     await call("Page.reload");
     await sleep(1500);
   }

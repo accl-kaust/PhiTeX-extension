@@ -1,0 +1,9 @@
+{ "project": "test/scenarios/refs", "name": "pdfjs",
+  "storage": { "panel": { "format": "pdfjs" } },
+  "steps": [ { "idle": 3000 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; const s = r.querySelectorAll('.slot'); return s.length + ' pages | ' + r.querySelectorAll('.slot canvas').length + ' canvases | ' + r.querySelectorAll('.slot svg.page').length + ' svg | text layer: ' + [...(r.querySelector('.slot .textLayer')?.querySelectorAll('span') ?? [])].map((t) => t.textContent).join('').slice(0, 60); })()", "page": true },
+    { "dblpage": [0, 0.3, 0.4] },
+    { "type": " Edited.", "after": "Every writer knows the rhythm." }, { "idle": 2500 },
+    { "eval": "(() => { const r = document.querySelector('phitex-preview')?.shadowRoot; return r.querySelectorAll('.slot canvas').length + ' canvases, ' + r.querySelectorAll('.slot svg.page').length + ' svg | ' + [...(r.querySelector('.slot .textLayer')?.querySelectorAll('span') ?? [])].map((t) => t.textContent).join('').slice(0, 120); })()", "page": true },
+    { "cursor": "Every writer" },
+    { "shot": "pdfjs" } ] }

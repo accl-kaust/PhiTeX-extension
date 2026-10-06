@@ -1,0 +1,10 @@
+{ "project": "test/scenarios/refs", "name": "tour-highlight",
+  "steps": [ { "idle": 2000 },
+    { "eval": "(() => { document.querySelector('phitex-preview').shadowRoot.getElementById('tour').click(); return 1; })()", "page": true },
+    { "wait": 800 },
+    { "eval": "(() => { for (let i = 0; i < 4; i++) { const t = document.getElementById('phitex-tour'); if (!t || t.querySelector('[data-f]')) break; t.querySelector('[data-t=next]').click(); } const t = document.getElementById('phitex-tour'); return t ? t.querySelector('.popover-header span').textContent + ' | ' + [...t.querySelectorAll('[data-f]')].map((b) => b.dataset.f).join(',') : 'no tour'; })()", "page": true },
+    { "wait": 1200 },
+    { "shot": "tour-highlight" },
+    { "eval": "(() => { document.querySelector('#phitex-tour [data-f=select]').click(); return 1; })()", "page": true },
+    { "wait": 800 },
+    { "eval": "chrome.storage.local.get('follow').then((s) => 'follow=' + s.follow + ' | next step: ' + (document.querySelector('#phitex-tour .popover-header span')?.textContent ?? 'none'))" } ] }

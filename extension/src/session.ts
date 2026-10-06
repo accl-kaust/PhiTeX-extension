@@ -65,7 +65,7 @@ export interface Draws {
 
 /** A page to show: its draw list (vector), or a PNG. */
 /** A page: its draw list, or a PNG (PDF mode: rendered by pdf.js, `w`/`h` its size in PDF points). */
-export type PageImage = { draws: Draws } | { png: Uint8Array; w?: number; h?: number } | { canvas: HTMLCanvasElement; w: number; h: number };
+export type PageImage = { draws: Draws } | { png: Uint8Array; w?: number; h?: number } | { canvas: HTMLElement; w: number; h: number };
 
 export interface CoreRes {
   ok: boolean;
@@ -77,7 +77,7 @@ export interface CoreRes {
   text?: string | null;
   from?: string;
   /** (a page drawn from the PDF, in the tab: its canvas and size in PDF points) */
-  canvas?: HTMLCanvasElement;
+  canvas?: HTMLElement;
   size?: [number, number];
   /** (`package`: a binary file, handed to the core by the offscreen document) */
   delivered?: boolean;
@@ -147,6 +147,12 @@ export interface PreviewSink {
   busy?(on: boolean): void;
   /** The core readies its next rebuild (pages still draw; an edit waits for it). */
   preparing?(on: boolean): void;
+  /**
+   * Between the first paint (a plain build) and the SSA program: "preparing"
+   * since `since` (Date.now(): the detached tab's clock too), `slow` once an edit was typed in it
+   * (a plain rebuild); then "ready", once.
+   */
+  warmup?(w: { state: "preparing" | "ready"; since?: number; slow?: boolean }): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
   painted?(ms: number): void;
   /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
@@ -170,7 +176,7 @@ export interface Options {
   /** 1: the one-worker start (the offscreen document's two-worker start otherwise, where the machine allows it). */
   workers?: 1;
   /** Pages as draw lists (vector: real text, a few KB) or PNGs (PhiTeX's: a grey box a glyph). */
-  format: "vector" | "png";
+  format: "vector" | "pdfjs";
   dpi: number;
   checkEveryMs: number;
   /** Where files the project doesn't have come from (packages.ts; default: nowhere). */
@@ -372,8 +378,9 @@ export class PreviewSession {
     });
   }
 
+  /** The pages' request: 0 their draw lists (vector), -1 the PDF, drawn in the tab by pdf.js. */
   private dpi(): number {
-    return this.o.format === "vector" ? 0 : this.o.dpi;
+    return this.o.format === "pdfjs" ? -1 : 0;
   }
 
   setFormat(f: Options["format"]): Promise<void> {
@@ -465,6 +472,10 @@ export class PreviewSession {
     if (latex !== this.latex) this.lastWarned = 0;
     this.latex = latex;
     this.coreFetches = !!r.json.fetches;
+    // (a plain first paint: the SSA program is still to come, said until it is)
+    this.warming = typeof r.json.how === "string" && r.json.how.startsWith("plain") ? this.now() : 0;
+    this.warmSlow = false;
+    if (this.warming) this.sink.warmup?.({ state: "preparing", since: Date.now() });
     this.setPages(r.json.pages);
     this.noteError(r.json);
     this.status(r.json.pending, r.json.undefined_names);
@@ -475,6 +486,17 @@ export class PreviewSession {
     this.pkg.building = false;
     this.tellPackages();
     this.statusSoon();
+  }
+
+  /** When the plain first paint came, while the SSA program is still to come (0: not warming). */
+  private warming = 0;
+  private warmSlow = false;
+  /** A status said how the last build was: past a plain one, the SSA program is there. */
+  private warmCheck(how: unknown): void {
+    if (!this.warming || typeof how !== "string" || how.startsWith("plain")) return;
+    this.tr("warmup: ready", { ms: Math.round(this.now() - this.warming) });
+    this.warming = 0;
+    this.sink.warmup?.({ state: "ready" });
   }
 
   private lastWarned = 0;
@@ -1018,6 +1040,7 @@ export class PreviewSession {
       if (this.busy || !this.opened) return this.statusSoon();
       const r = await this.core.request({ op: "status" });
       if (r.ok && r.json) {
+        this.warmCheck(r.json.how);
         this.setPages(r.json.pages);
         this.noteError(r.json);
         this.status(r.json.pending, r.json.undefined_names);
@@ -1027,6 +1050,11 @@ export class PreviewSession {
   }
 
   private async send(file: string, b: Batch): Promise<boolean> {
+    // (typed before the SSA program: a plain rebuild, slower; said so)
+    if (this.warming && !this.warmSlow) {
+      this.warmSlow = true;
+      this.sink.warmup?.({ state: "preparing", since: Date.now() - (this.now() - this.warming), slow: true });
+    }
     const t0 = this.since.get(file) ?? this.now();
     const tSend = this.now();
     const edits = b.take();

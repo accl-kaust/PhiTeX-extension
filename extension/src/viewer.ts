@@ -271,6 +271,9 @@ export class Viewer {
       s.img.canvas.style.width = "100%";
       s.img.canvas.style.height = "100%";
       if (s.el.firstChild !== s.img.canvas) s.el.replaceChildren(s.img.canvas);
+      // (pdf.js's text layer, laid out at a CSS pixel per PDF point: scaled to the page)
+      const tl = s.img.canvas.querySelector<HTMLElement>(".textLayer");
+      if (tl) tl.style.transform = `scale(${s.el.getBoundingClientRect().width / s.img.w || parseFloat(s.el.style.width) / s.img.w})`;
       return;
     }
     if (!("png" in s.img)) return;

@@ -1,0 +1,9 @@
+{ "project": "test/scenarios/refs", "name": "speedchip",
+  "steps": [ { "idle": 2000 },
+    { "type": " x", "after": "Every writer knows the rhythm.", "keys": 120 }, { "idle": 1500 },
+    { "eval": "(() => { const c = document.querySelector('phitex-preview').shadowRoot.getElementById('speedchip'); const st = getComputedStyle(c); return c.textContent + ' | display ' + st.display + ', opacity ' + st.opacity; })()", "page": true },
+    { "wait": 4000 },
+    { "eval": "(() => { document.querySelectorAll('.phitex-toast').forEach((t) => t.remove()); const c = document.querySelector('phitex-preview').shadowRoot.getElementById('speedchip'); const st = getComputedStyle(c); const b = document.querySelector('phitex-preview').shadowRoot.getElementById('byline').getBoundingClientRect(), k = c.getBoundingClientRect(); return '4 s later: ' + c.textContent + ' | display ' + st.display + ', opacity ' + st.opacity + ' | byline clear of chip: ' + (b.right <= k.left); })()", "page": true },
+    { "shot": "speedchip" },
+    { "eval": "chrome.storage.local.set({ speedOff: true }).then(() => new Promise((ok) => setTimeout(ok, 300))).then(() => { const c = document.querySelector('phitex-preview').shadowRoot.getElementById('speedchip'); return 'off: display ' + getComputedStyle(c).display; })" },
+    { "eval": "chrome.storage.local.remove('speedOff').then(() => 'restored')" } ] }

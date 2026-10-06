@@ -1,0 +1,6 @@
+{ "project": "test/scenarios/refs", "name": "warmup", "noidle": true,
+  "steps": [
+    { "eval": "(() => { const w = document.querySelector('phitex-preview').shadowRoot.getElementById('warmup'); return 'at first page: ' + w.className + ' | ' + w.textContent; })()", "page": true },
+    { "idle": 3000 },
+    { "wait": 3000 },
+    { "eval": "(() => { const s = globalThis.__phitexSession; const w = document.querySelector('phitex-preview').shadowRoot.getElementById('warmup'); return 'after: ' + w.className + ' | ready after ' + JSON.stringify(s.trace.find((e) => e.k === 'warmup: ready')?.d ?? null) + ' | took over: ' + s.trace.some((e) => /took over/.test(e.k)); })()" } ] }

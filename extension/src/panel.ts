@@ -48,7 +48,7 @@ export interface PanelEvents {
   onReload(): void;
   /** Clean recompile: the project read again, typeset from the start. */
   onClean(): void;
-  onFormat(f: "vector" | "png"): void;
+  onFormat(f: PageFormat): void;
   onGoto(file: string, line: number): void;
   /** A double-click on page `k` at (x, y), PDF points from its top left: to the source. */
   onSyncSource?(k: number, x: number, y: number): void;
@@ -74,13 +74,18 @@ export interface Prefs {
   save(p: PanelPrefs): void;
 }
 
+/** How pages are drawn: vector (SVG from the draw lists) or pdfjs (our PDF, by pdf.js, with its text layer). */
+export type PageFormat = "vector" | "pdfjs";
+/** A stored format, an older version's "png" read as vector. */
+export const pageFormat = (f: unknown): PageFormat => (f === "pdfjs" ? "pdfjs" : "vector");
+
 export interface PanelPrefs {
   x: number | null;
   y: number | null;
   w: number;
   h: number;
   zoom: string;
-  format: "vector" | "png";
+  format: PageFormat;
   collapsed: boolean;
   details: boolean;
 }
@@ -267,6 +272,17 @@ button.btn:hover { background: var(--accent2); }
 .stage svg.page ::selection { fill: #fff; background: var(--info); }
 .stage svg.page, .stage img { background: #fff; box-shadow: 0 1px 3px rgba(27,34,44,.25); border-radius: 2px; }
 .stage img { max-width: 100%; }
+/* PDF.js pages: the canvas, and pdf.js's text layer over it (its own rules, the ones that place and hide the text) */
+.pdfjs-page { position: relative; width: 100%; height: 100%; background: #fff; }
+.pdfjs-page canvas { display: block; }
+.textLayer { position: absolute; inset: 0 auto auto 0; overflow: clip; line-height: 1; transform-origin: 0 0; z-index: 0;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height)); --scale-x: 1; --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.textLayer .markedContent { display: contents; }
+.textLayer ::selection { background: rgb(0 100 255 / 25%); }
 .stage.stale svg.page, .stage.stale img { opacity: .45; filter: grayscale(1); }
 .banner { position: sticky; top: -12px; z-index: 1; display: none; margin: -12px -12px 10px; padding: 6px 10px; text-align: left; font-size: 12px;
   background: var(--bg-warning-03, #fcf1e3); color: var(--warn); border-bottom: 1px solid var(--divider); }
@@ -352,8 +368,9 @@ footer .msg.err { color: var(--danger); }
 .win.docked.nospeed .speedchip { display: none; }
 /* who made this, always said (it looks native on purpose; it must never pass for Overleaf's) */
 .byline { display: none; position: absolute; left: 14px; bottom: 14px; z-index: 3; all: unset; }
-.win.docked .byline { display: inline-flex; position: absolute; left: 14px; bottom: 14px; z-index: 3; align-items: center; height: 22px; padding: 0 9px;
-  border-radius: 9999px; font: 600 11px "Noto Sans", system-ui, sans-serif; color: var(--fg2-dark); background: rgb(27 34 44 / 55%);
+.win.docked .byline { display: inline-block; position: absolute; left: 14px; bottom: 14px; z-index: 3; height: 22px; padding: 0 9px;
+  max-width: calc(100% - 160px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; /* clear of the ⚡ chip, now always on */
+  border-radius: 9999px; font: 600 11px/22px "Noto Sans", system-ui, sans-serif; color: var(--fg2-dark); background: rgb(27 34 44 / 55%);
   backdrop-filter: blur(4px); cursor: pointer; }
 .win.docked .byline:hover { color: var(--fg-dark); background: rgb(27 34 44 / 80%); }
 .win.docked.light .byline { color: var(--fg2); background: rgb(255 255 255 / 75%); }
@@ -364,9 +381,21 @@ footer .msg.err { color: var(--danger); }
 .about code { font-size: 11px; }
 .about a { color: var(--ok-dark); }
 .speedchip.slow { background: var(--bg-warning-01, #8f5514); }
-.speedchip.pop { animation: chip 1.8s cubic-bezier(.2,1.6,.4,1) forwards; }
-@keyframes chip { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 12% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .speedchip.pop { animation: none; opacity: 1; } }
+/* the chip: always there (the setting on), its number updated in place, a brief flash on each repaint */
+.speedchip { opacity: 1; transition: background-color .4s; }
+.speedchip.flash { animation: chipflash .5s ease-out; }
+@keyframes chipflash { 0% { filter: brightness(1.45); } 100% { filter: none; } }
+@media (prefers-reduced-motion: reduce) { .speedchip.flash { animation: none; } }
+/* startup: the first paint is in, the SSA program (instant typing) still coming */
+.warmup { display: none; position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 3; pointer-events: none; white-space: nowrap;
+  height: 24px; padding: 0 12px; border-radius: 9999px; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: #fff; background: rgb(27 34 44 / 82%); box-shadow: 0 4px 12px rgba(0,0,0,.3); backdrop-filter: blur(4px); }
+.warmup.on { display: inline-flex; }
+.warmup .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
+.warmup .slow { color: #ffd27a; font-weight: 500; }
+.warmup.ready { background: var(--accent); }
+.warmup.ready .dot { display: none; }
+@media (prefers-reduced-motion: reduce) { .warmup .dot { animation: none; } }
 .win.docked .sum { background: var(--dark2); color: var(--fg2-dark); border-bottom: 1px solid var(--dark); height: 26px; }
 .win.docked .sum:hover { background: var(--dark3); }
 .win.docked .sum .first { color: var(--fg-dark); }
@@ -450,7 +479,7 @@ export class Panel {
   <div class="bar">
     <label>Main <select id="main" title="The file PhiTeX typesets"></select></label>
     <label>Zoom <select id="zoom"><option value="fit">Fit</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
-    <label title="Vector: PhiTeX's positions and line breaks, the browser's glyphs. PNG: PhiTeX's own raster (a box per glyph).">View <select id="fmt"><option value="vector">Vector</option><option value="png">PNG</option></select></label>
+    <label title="Vector: drawn as SVG, updated in place as you type. PDF.js: our PDF drawn by pdf.js, as Overleaf's viewer draws a PDF.">View <select id="fmt"><option value="vector">Vector</option><option value="pdfjs">PDF.js</option></select></label>
     <span class="grow"></span>
     <label class="show-docked" title="Check against a fresh build every 5 s"><input type="checkbox" id="dbg2"> Debug check</label>
     <button class="ib show-docked" id="tour" title="Take the tour" aria-label="Take the tour" style="width:auto;padding:0 6px;font-size:12px;color:var(--info)">Take the tour</button>
@@ -468,7 +497,8 @@ export class Panel {
       <textarea id="reporttext" readonly spellcheck="false"></textarea>
       <div class="btns"><button class="btn" id="reportcopy">Copy</button><button class="btn" id="reportmail">Email</button><button class="btn" id="reportclose">Close</button></div>
     </div>
-    <div class="speedchip" id="speedchip" aria-live="off"></div>
+    <div class="speedchip" id="speedchip" aria-live="off">⚡ – ms</div>
+    <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
@@ -574,6 +604,8 @@ export class Panel {
     this.place();
     store?.load().then((p) => {
       this.prefs = { ...DEFAULTS, ...p };
+      // (an older version's "png", gone: vector)
+      this.prefs.format = pageFormat(this.prefs.format);
       // (a size saved while hidden, by an older version)
       if (this.prefs.w < 300 || this.prefs.h < 180) Object.assign(this.prefs, { w: DEFAULTS.w, h: DEFAULTS.h });
       this.place();
@@ -1099,10 +1131,31 @@ export class Panel {
     const chip = this.$("#speedchip");
     chip.textContent = `⚡ ${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`;
     chip.classList.toggle("slow", ms > 100);
-    chip.classList.remove("pop");
+    chip.classList.remove("flash");
     void chip.offsetWidth;
-    chip.classList.add("pop");
+    chip.classList.add("flash");
     this.emit();
+  }
+
+  private warmTimer?: ReturnType<typeof setInterval>;
+  /** Startup: the first paint is in, instant typing still being prepared (a pill over the page, the time going); then "ready", briefly. */
+  warmup(w: { state: "preparing" | "ready"; since?: number; slow?: boolean }): void {
+    const el = this.$("#warmup");
+    clearInterval(this.warmTimer);
+    if (w.state === "ready") {
+      el.className = "warmup on ready";
+      el.innerHTML = `<span class="dot"></span>⚡ Instant typing ready`;
+      this.warmTimer = setTimeout(() => (el.className = "warmup"), 2500) as unknown as ReturnType<typeof setInterval>;
+      return;
+    }
+    const since = w.since ?? Date.now();
+    const tick = () => {
+      const s = Math.round((Date.now() - since) / 1000);
+      el.innerHTML = `<span class="dot"></span>⚡ Preview ready · preparing instant typing… ${s} s${w.slow ? ` <span class="slow">· edits slower until ready</span>` : ""}`;
+    };
+    el.className = "warmup on";
+    tick();
+    this.warmTimer = setInterval(tick, 1000);
   }
 
   /** The diagnostics list: a drawer over the page, so it never takes the page's room. */

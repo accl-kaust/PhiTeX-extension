@@ -7,7 +7,7 @@ import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
-import { Panel, type PanelPrefs, type Prefs } from "./panel.ts";
+import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
 import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
 import { cached, DELIVERED } from "./packages.ts";
@@ -293,6 +293,19 @@ const DOCK_CSS = `
   #phitex-tour .phitex-tip-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; }
   #phitex-tour [data-t="skip"] { margin-right: auto; padding-left: 0; color: var(--content-placeholder-dark, #8d96a5); text-decoration: none; }
   #phitex-tour kbd { font-size: 11px; padding: 1px 4px; }
+  #phitex-tour .phitex-hl-demo { margin: 10px 0; padding: 8px; border-radius: 8px; background: rgb(0 0 0 / 22%); display: grid; gap: 8px; font-size: 12px; }
+  #phitex-tour .phitex-hl-ed { position: relative; font-family: "DM Mono", monospace; color: var(--green-30, #86caa5); }
+  #phitex-tour .phitex-hl-caret { position: absolute; top: 1px; left: 7ch; width: 2px; height: 1.2em; background: currentColor;
+    animation: phitex-caret 3.6s steps(1) infinite, phitex-blink .6s steps(1) infinite; }
+  #phitex-tour .phitex-hl-page { font-family: "Noto Serif", serif; color: #1b222c; background: #fff; border-radius: 3px; padding: 4px 8px; box-shadow: 0 2px 6px rgb(0 0 0 / 30%); }
+  #phitex-tour .phitex-hl-page span { border-radius: 2px; animation: phitex-hl 3.6s steps(1) infinite; }
+  #phitex-tour .phitex-hl-page .w2 { animation-delay: -2.4s; }
+  #phitex-tour .phitex-hl-page .w3 { animation-delay: -1.2s; }
+  @keyframes phitex-caret { 0% { left: 7ch; } 33.3% { left: 14ch; } 66.6% { left: 19ch; } }
+  @keyframes phitex-blink { 50% { opacity: .3; } }
+  @keyframes phitex-hl { 0% { background: rgb(255 214 0 / 70%); } 33.3% { background: transparent; } }
+  #phitex-tour .phitex-choice { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  #phitex-tour .phitex-choice small { opacity: .8; }
   .phitex-dots { display: flex; gap: 5px; justify-content: center; margin-top: 10px; }
   .phitex-dots span { width: 6px; height: 6px; border-radius: 50%; background: rgb(255 255 255 / 25%); transition: all .2s; }
   .phitex-dots span.on { width: 16px; border-radius: 3px; background: var(--green-40, #53b57f); }
@@ -337,8 +350,9 @@ const DOCK_CSS = `
   .phitex-pulse { background: rgb(83 181 127 / 25%); color: #fff !important; }
   @keyframes phitex-ring { 70% { box-shadow: 0 0 0 14px rgb(83 181 127 / 0%); } 100% { box-shadow: 0 0 0 0 rgb(83 181 127 / 0%); } }
   @media (prefers-reduced-motion: reduce) {
-    #phitex-tip, #phitex-tip *, #phitex-tour, #phitex-news, .phitex-ring, #phitex-tip .phitex-tip-clip::after, .phitex-pulse::after { animation: none !important; }
+    #phitex-tip, #phitex-tip *, #phitex-tour, #phitex-tour *, #phitex-news, .phitex-ring, #phitex-tip .phitex-tip-clip::after, .phitex-pulse::after { animation: none !important; }
     #phitex-tip .phitex-demo code { width: 9ch; } #phitex-tip .phitex-demo .phitex-mini { opacity: 1; }
+    #phitex-tour .phitex-hl-page .w1 { background: rgb(255 214 0 / 70%); }
   }`;
 
 /**
@@ -718,9 +732,16 @@ function dockInOverleaf(panel: Panel): Dock {
   }
 
   /** The walkthrough: Overleaf's popover, a step at a time, the thing it explains ringed. */
-  const STEPS: { at: () => Element | null; title: string; body: string; inside?: boolean }[] = [
+  /** The highlight step's choice: the "follow" setting's values, the first recommended. */
+  const FOLLOW: [string, string][] = [["cursor", "Cursor"], ["select", "Selection"], ["dblclick", "Double-click only"]];
+  // (a mini editor line, its caret going word to word, and a mini page whose same word turns yellow in step)
+  const HIGHLIGHT_DEMO = `<div class="phitex-hl-demo" aria-hidden="true">
+      <div class="phitex-hl-ed"><span>Instant typing here</span><i class="phitex-hl-caret"></i></div>
+      <div class="phitex-hl-page"><span class="w1">Instant</span> <span class="w2">typing</span> <span class="w3">here</span></div></div>`;
+  const STEPS: { at: () => Element | null; title: string; body: string; inside?: boolean; choice?: boolean }[] = [
     { at: () => document.getElementById("phitex-switch"), title: "Two previews, one click", body: "<b>PDF</b> is Overleaf's compiler, as always. <b>⚡ Instant</b> is added by the unofficial PhiTeX extension (not part of Overleaf), live. Switch any time, or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>." },
     { at: () => document.querySelector("phitex-preview"), inside: true, title: "Type, and watch", body: "Edit anything in the editor: this page repaints as you type, usually in a few milliseconds. The <b>⚡ chip</b> in the corner shows how fast. No Recompile." },
+    { at: () => document.querySelector("phitex-preview"), inside: true, choice: true, title: "The yellow highlight", body: `Where you are in the source is marked on the page in yellow.${HIGHLIGHT_DEMO}When should it move?` },
     { at: () => document.getElementById("phitex-logs"), title: "What PhiTeX couldn't read", body: "Diagnostics, with a count. Click one to jump to its line. Errors from the build, missing packages, and what LaTeX looked for and did not find." },
     { at: () => document.getElementById("phitex-dlgroup"), title: "Download what you see", body: "This downloads the <b>⚡ Instant</b> PDF (<code>…-instant.pdf</code>). The <b>▾</b> menu has Overleaf's compiled PDF too." },
     { at: () => document.getElementById("phitex-zoom"), title: "Zoom, and the details", body: "Zoom like Overleaf's viewer. At the bottom of this menu: settings and timings (main file, a debug check against a fresh build). Everything runs in your browser; nothing leaves it." },
@@ -744,9 +765,10 @@ function dockInOverleaf(panel: Panel): Dock {
     t.innerHTML = `<div class="phitex-tip-clip"><div class="popover-header"><span>${step.title}</span><span class="phitex-step">${k + 1} of ${STEPS.length}</span></div>
       <div class="popover-body">${step.body}
         <div class="phitex-dots">${STEPS.map((_, i) => `<span class="${i === k ? "on" : ""}"></span>`).join("")}</div>
+        ${step.choice ? `<div class="phitex-choice">${FOLLOW.map(([v, l], i) => `<button type="button" class="btn ${i ? "btn-secondary" : "btn-primary"} btn-sm" data-f="${v}">${l}${i ? "" : " <small>(recommended)</small>"}</button>`).join("")}</div>` : ""}
         <div class="phitex-tip-actions"><button type="button" class="btn btn-link btn-sm" data-t="skip">Skip</button>
           ${k ? `<button type="button" class="btn btn-secondary btn-sm" data-t="back">Back</button>` : ""}
-          <button type="button" class="btn btn-primary btn-sm" data-t="next">${k === STEPS.length - 1 ? "Done" : "Next"}</button></div></div></div>`;
+          ${step.choice ? "" : `<button type="button" class="btn btn-primary btn-sm" data-t="next">${k === STEPS.length - 1 ? "Done" : "Next"}</button>`}</div></div></div>`;
     document.body.append(t);
     // (placed again when the window resizes: it points at its target, wherever that went)
     const place = () => {
@@ -760,12 +782,15 @@ function dockInOverleaf(panel: Panel): Dock {
     place();
     addEventListener("resize", place);
     t.onclick = (e) => {
+      // (the highlight step: the choice saved, then on)
+      const f = (e.target as HTMLElement).closest<HTMLElement>("[data-f]")?.dataset.f;
+      if (f) return void chrome.storage.local.set({ follow: f }).then(() => tour(k + 1));
       const a = (e.target as HTMLElement).closest<HTMLElement>("[data-t]")?.dataset.t;
       if (a === "next") void tour(k + 1);
       if (a === "back") void tour(k - 1);
       if (a === "skip") endTour(true);
     };
-    t.querySelector<HTMLElement>('[data-t="next"]')!.focus();
+    t.querySelector<HTMLElement>('[data-t="next"], [data-f]')!.focus();
   }
 
   function endTour(done = false): void {
@@ -942,8 +967,8 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       }
     }
     if (c.panel) {
-      const p = c.panel.newValue as { format?: "vector" | "png"; zoom?: string } | undefined;
-      panel.formatTo(p?.format ?? "vector");
+      const p = c.panel.newValue as { format?: string; zoom?: string } | undefined;
+      panel.formatTo(pageFormat(p?.format));
       if (!p) panel.zoomTo("fit");
     }
   });
@@ -970,9 +995,10 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   // (when the page highlights the editor's place: "cursor" as it moves,
   // "select" what is selected, "dblclick" only on a double-click; the popup's)
   let highlightMode = "select";
-  void chrome.storage.local.get("follow").then(({ follow: f }) => (highlightMode = (f as string | undefined) ?? "select"));
+  // (the default: the highlight follows where you type)
+  void chrome.storage.local.get("follow").then(({ follow: f }) => (highlightMode = (f as string | undefined) ?? "cursor"));
   chrome.storage.onChanged.addListener((c) => {
-    if (c.follow) highlightMode = (c.follow.newValue as string | undefined) ?? "select";
+    if (c.follow) highlightMode = (c.follow.newValue as string | undefined) ?? "cursor";
   });
   // (a double-click in the editor or on the file outline: that place on the page)
   window.addEventListener("message", (e) => {
@@ -1045,7 +1071,7 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
         for (const n of SHIMS) out[n] = await (await fetch(chrome.runtime.getURL("shims/" + n))).text();
         return out;
       },
-      format: (saved as PanelPrefs | undefined)?.format ?? "vector",
+      format: pageFormat((saved as PanelPrefs | undefined)?.format),
       packages: cached({
         label: "TeX Live 2026",
         resolve: (name, engine) =>

@@ -504,9 +504,11 @@ function handle(r: Req): Res {
     }
     case "edit": {
       const f = new Frame().str(r.file).u32(r.start).u32(r.end).str(r.text);
-      const ok = call(f, (p, n) => core.ph_edit(h, p, n, r.page < 0 ? 0xffffffff : r.page, r.dpi));
+      const ok = call(f, (p, n) => core.ph_edit(h, p, n, r.page < 0 ? 0xffffffff : r.page, Math.max(r.dpi, 0)));
       const json = outJson();
       let png: Uint8Array | undefined;
+      // (dpi -1: the page from the PDF, drawn in the tab by pdf.js)
+      if (ok && r.page >= 0 && r.dpi < 0 && core.ph_assets) return { id: r.id, ok: true, json, ...pdfPage(h, Math.min(r.page, Math.max((json.pages ?? 1) - 1, 0)), 0) };
       if (ok && r.page >= 0) {
         core.ph_png_last();
         png = outBytes();
@@ -528,6 +530,7 @@ function handle(r: Req): Res {
       return { id: r.id, ok: ok === 1 };
     }
     case "png": {
+      if (r.dpi < 0 && core.ph_assets) return { id: r.id, ok: true, ...pdfPage(h, r.page, 0) };
       core.ph_png(h, r.page, r.dpi);
       const png = outBytes();
       if (!png.length && core.ph_assets) return { id: r.id, ok: true, ...pdfPage(h, r.page, r.dpi) };

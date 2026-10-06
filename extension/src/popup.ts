@@ -32,7 +32,7 @@ async function render(): Promise<void> {
     void chrome.storage.local.set({ view: v });
     $("viewnote").textContent = v === "phitex" && !accepted ? "⚡ Instant asks you to accept its terms first, in Overleaf." : "";
   });
-  seg("follow", (s.follow as string | undefined) ?? "select", (v) => void chrome.storage.local.set({ follow: v }));
+  seg("follow", (s.follow as string | undefined) ?? "cursor", (v) => void chrome.storage.local.set({ follow: v }));
   seg("engine", (s.engine as string | undefined) ?? "auto", (v) => void chrome.storage.local.set({ engine: v }));
   // (projects given their own engine, from the card's buttons: they keep it; cleared here)
   const own = Object.keys((s.engines as Record<string, string> | undefined) ?? {}).length;
@@ -49,7 +49,7 @@ async function render(): Promise<void> {
     note.append(b);
   }
   const panelPrefs = (s.panel ?? {}) as { format?: string };
-  seg("format", panelPrefs.format === "png" ? "png" : "vector", (v) => chrome.storage.local.set({ panel: { ...panelPrefs, format: v } }));
+  seg("format", panelPrefs.format === "pdfjs" ? "pdfjs" : "vector", (v) => chrome.storage.local.set({ panel: { ...panelPrefs, format: v } }));
   const tips = $<HTMLInputElement>("tips");
   tips.checked = !s.tipOff;
   tips.onchange = () => chrome.storage.local.set({ tipOff: !tips.checked });

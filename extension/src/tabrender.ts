@@ -18,8 +18,13 @@ const pdfjs = () =>
 /** Documents by the worker's key for their bytes: the last two. */
 const docs = new Map<string, Promise<any>>();
 
-/** Page `page` of the PDF under `key` (given as `pdf` when new) drawn at `scale` device pixels per PDF point. */
-export async function drawPage(key: string, page: number, scale: number, pdf?: Uint8Array): Promise<{ canvas: HTMLCanvasElement; w: number; h: number } | null> {
+/**
+ * Page `page` of the PDF under `key` (given as `pdf` when new) drawn at
+ * `scale` device pixels per PDF point: the canvas, and over it pdf.js's text
+ * layer (`.textLayer`, at one CSS pixel per PDF point: the viewer scales it
+ * to the page), for selecting and finding.
+ */
+export async function drawPage(key: string, page: number, scale: number, pdf?: Uint8Array): Promise<{ canvas: HTMLElement; w: number; h: number } | null> {
   const m = await pdfjs();
   if (pdf) {
     docs.set(key, m.getDocument({ data: pdf, isEvalSupported: false }).promise);
@@ -38,5 +43,19 @@ export async function drawPage(key: string, page: number, scale: number, pdf?: U
   canvas.height = Math.ceil(vp.height);
   await p.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: vp }).promise;
   const base = p.getViewport({ scale: 1 });
-  return { canvas, w: base.width, h: base.height };
+  const el = document.createElement("div");
+  el.className = "pdfjs-page";
+  canvas.style.width = canvas.style.height = "100%";
+  const text = document.createElement("div");
+  text.className = "textLayer";
+  text.style.width = `${base.width}px`;
+  text.style.height = `${base.height}px`;
+  text.style.setProperty("--total-scale-factor", "1");
+  el.append(canvas, text);
+  try {
+    await new m.TextLayer({ textContentSource: p.streamTextContent(), container: text, viewport: base }).render();
+  } catch (e) {
+    console.warn("[phitex] text layer", e);
+  }
+  return { canvas: el, w: base.width, h: base.height };
 }

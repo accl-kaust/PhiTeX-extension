@@ -271,7 +271,6 @@ econ-jet.bst
 econ-jie.bst
 econ-jpe.bst
 econ-no-sort.bst
-econ-old.bst
 econ-te.bst
 ecta.bst
 elsarticle-harv.bst
@@ -325,8 +324,6 @@ francaissc.bst
 frplainnat-letters.bst
 ftnright.sty
 gammas.bst
-gbt7714-2005-author-year.bst
-gbt7714-2005-numerical.bst
 gbt7714-author-year.bst
 gbt7714-numerical.bst
 geometry.sty

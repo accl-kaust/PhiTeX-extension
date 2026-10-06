@@ -13,7 +13,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
-partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-f3152b3}"
+partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-688f781}"
 # (Shelf's checkout, read-only: scripts/bundle-packs.sh takes the bundled
 # packs from its releases; keep-packs.txt is written outside the sandbox)
 shelf="${SHELF_REPO:-$HOME/code/flinner/shelf.PhiTeX.org}"

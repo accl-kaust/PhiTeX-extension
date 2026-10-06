@@ -1,135 +1,75 @@
 # Requests to partex-PhiTeX
 
-What the Overleaf preview needs from partex-PhiTeX, ordered by value. Each
-item says what the extension does meanwhile. Measured against main
-`cd9e6b6`, embedded as `core-partex/` (a wasm32-wasip1 reactor; an
-in-memory `Host`; the panel's draw list made from `pageir::Page`).
+What the Overleaf extension needs from the engine, open items first, in
+priority order. Rule: an engine gap is fixed in the engine, never worked
+around in the extension. Updated 2026-10-06 against engine `3459953`
+(extension branch `xetex`, 0.3.0).
 
-## 1. The incremental build, usable without the CLI
+## Open
 
-**Need.** `ssa::run_applying` and `ssa::rebuild_trips` are in
-`partex-core` and build for wasm. Turning a rebuild into files is not:
-`SsaLinker` (the spliced link, `link_full`, `write_full`, `names`) lives in
-`partex-cli/src/main.rs`, typed on `NativeHost`, and uses
-`std::time::Instant`, `HashMap` and the system zlib.
+### XeTeX (0.3.0, the launch video)
 
-**Shape.** A `partex_core::ssa::Linker` (or `effects::Linker`), generic over
-`H: Host`, with the link's state (`Splice`, the deflate cache, what was last
-written by name), `link(&mut Tex<H, SsaTracker>) -> LinkReport`, and the
-clock and deflate passed in (as `Trips::clock` already is). The CLI would
-keep only its reporting.
+1. **`\XeTeXlinebreaklocale`** (and `\XeTeXlinebreakskip`,
+   `\XeTeXlinebreakpenalty`): fatal today ("not implemented in partex
+   yet"). Every polyglossia `chinese`/`japanese` document hits it, and so do
+   `xeCJK` and `ctex` setups. Needed: ICU-style (UAX #14) break opportunities
+   in native-font text, matching xelatex on CJK first.
+2. **Type 1 / TFM glyphs in the glyph runs** (`GlyphSource::Type1`, agreed):
+   classic CM math under xelatex without `unicode-math` (`$\sum$`) has no
+   runs. xdvipdfmx embeds those fonts as CFF, and the viewer draws ∑ as "P".
+3. **`GlyphOrigin` per glyph run** (in progress): SyncTeX, meaning
+   double-click and cursor sync, for XeTeX documents. `tex.origins(page)` is
+   empty under `Flavor::XeTeX`.
+4. **HaranoAji**: `\newfontfamily\jafont{HaranoAji Mincho}` fetches
+   `HaranoAjiMincho.fontspec`, then fontspec errors. Real xelatex with TeX
+   Live's fonts.conf loads it (file-name lookup from a `.fontspec`, or the
+   index's names?).
+5. **Text of RTL and complex scripts in the runs**: the selectable text over
+   Arabic, Hebrew and Devanagari is scrambled. Needed: each run's or
+   cluster's Unicode text in logical order (what ToUnicode / ActualText
+   give).
+6. **Colour stack and CTM on the runs** (agreed): `\textcolor` draws black;
+   `\rotatebox` and TikZ-transformed text are misplaced.
+7. **xdvipdfmx errors as `Result`** (branch `xdvipdfmx-result`): a fatal
+   driver error aborts the wasm worker today.
 
-**Meanwhile.** Every edit is a cold build (`Untracked`): about 80 ms native,
-150 to 280 ms in wasm for a one-page article. A long document is unusable.
+### Embedding
 
-## 2. Edits as edits, and a page to see first
+8. **The incremental link in `partex-core`**: `SsaLinker` (spliced link,
+   `link_full`, `Resolver`) lives in `partex-cli`, typed on `NativeHost`.
+   The extension carries its own port (`core-partex` `link_spliced`,
+   `link_full`), which has to follow every engine change. Wanted: a
+   `Linker` generic over `H: Host`, with the clock and deflate passed in.
+9. **The page in view first**: a rebuild that reports (or stops) once page
+   `k` has shipped, so a long document paints the page under the cursor
+   before the fixed point.
+10. **A format contract**: a format header the engine checks (engine commit
+    or format version, and the sizes), with a clear error on a mismatch; and
+    `Params::texlive()` instead of each embedder copying `texmf.cnf`'s sizes
+    (`core-partex` `texlive_params`).
+11. **Byte-exact deflate in `partex-core`**: wasm has no system zlib, so the
+    extension deflates with `miniz_oxide`. Its PDF is valid but not
+    byte-identical to pdflatex's.
+12. **A wasm job in the gate**: `xtask check` builds the core for
+    `wasm32-unknown-unknown` but never runs it. One job under
+    `wasm32-wasip1` (an INITEX page, or a LaTeX article from a format) would
+    catch a `std`-only API before an embedder does.
+13. **A stable embedding API** (`partex_core::embed`: open a job, edit,
+    rebuild, take pages and files) that the extension pins to instead of a
+    commit.
 
-**Need.** The host knows what changed: a byte range in one file, many times
-a second. Today a rebuild finds changes by reloading every loaded file and
-comparing (`Host::unchanged` can only answer "same"). DESIGN 4.3 item 3
-sets the target (16.7 ms for a word, rebuild and link).
+## Done
 
-**Shape.**
-- `ssa::edit(tex, file, bytes: Range<usize>, text)`, or `Host::unchanged`
-  with the changed line ranges, so a rebuild costs what the edit reaches.
-- The page in view first: `rebuild` that stops once page `k` shipped (or
-  reports when it did, through `Host::page_written` in DVI mode), then the
-  rest. The panel paints the page under the cursor before the fixed point.
-- Pages changed by a rebuild: the shipped pages with a version or hash, so
-  the host redraws only those (it hashes `Page` itself today).
-
-## 3. Pages to the host in PDF mode too
-
-**Need.** The preview draws pages from `pageir::Page`, which reaches the
-host only in DVI mode (`Host::page_written` from `dvi.rs`). So the build
-runs with `\pdfoutput=0`, which is not Overleaf's build: `graphicx`,
-`hyperref` and `l3backend` take their dvips paths, and the page size is
-lost (only a `papersize` special gives it).
-
-**Shape.** `Host::page_shipped(&Page, PageGeometry)` at `ship_out` in both
-modes, where `PageGeometry` holds `\pdfpagewidth` and `\pdfpageheight` (or
-`\paperwidth`), and the offsets. Then the preview builds in PDF mode, and
-the PDF download is the same job (item 4).
-
-## 4. A PDF in wasm: deflate without the system zlib
-
-**Need.** pdfTeX's PDF needs `Host::deflate`, and partex gets byte-exact
-streams from the system zlib by FFI (`partex-cli/src/zlib.rs`), which does
-not exist in wasm32-wasip1. Without it, streams are stored, and the PDF is
-valid but large.
-
-**Shape.** A pure-Rust deflate that matches zlib's output (partex's own
-deflate, if it is byte-exact at pdfTeX's levels), behind a `partex-core`
-function that any host can call.
-
-**Meanwhile.** `ph_pdf` returns nothing, and the PDF button is dead with the
-partex core.
-
-## 5. A file found later, without stopping the job
-
-**Need.** A missing `\input`, `.sty` or `.tfm` is fatal with no terminal
-(`term_read_line` → `None`). The host learns names one at a time, and each
-name costs a build: 14 builds for article + amsmath + graphicx, about 20 for
-a one-page test.
-
-**Shape.** Either of:
-- `Host::read_file` able to say "not yet" (`Pending`), so the job
-  records every name it needs in one run and the host fetches them in
-  parallel; or
-- a dependency pre-pass: the `\documentclass`, `\usepackage` and
-  `\RequirePackage` graph from `phitex-doc` (DESIGN 4.3 item 6), so the host
-  fetches the closure first.
-
-With item 1, a file that arrives should wake only its loads (a rebuild), not
-a cold build.
-
-## 6. A format built in, or a documented `.fmt` contract
-
-**Need.** The extension ships `pdflatex.fmt` (15.6 MB, 0.79 MB gzipped),
-made by `core-partex`'s `mkfmt` with the same engine and TeX Live's
-`texmf.cnf` sizes (`texlive_params`). A format made by a different partex
-commit, or with other sizes, is undefined behaviour from the extension's
-side.
-
-**Shape.** A format header that partex checks (engine commit or format
-version, and the sizes), with a clear error on a mismatch. Also: the sizes
-`texmf.cnf` sets, as one `Params::texlive()` instead of each embedder
-copying them.
-
-## 7. Glyphs: fonts for the screen
-
-**Need.** The draw list names TeX fonts (`cmr10`, `cmmi10`, `tcrm1000`, …).
-The panel paints them with the browser's Times, and maps math characters
-by hand (`draws.rs`, `glyph`).
-
-**Shape.** A character's Unicode meaning by font encoding (OT1, OML, OMS,
-OMX, T1, TS1: pdfTeX's `glyphtounicode` and the `.enc` files say it), in
-`partex-core` or `pageir`. Better still, each page's Type 1 glyphs as paths
-(what `writet1` already parses), so the host can draw TeX's own glyphs.
-
-## 8. SyncTeX
-
-**Need.** Selecting in the editor should highlight on the page, and
-clicking the page should jump to the source. pdfTeX has `\synctex`.
-
-**Shape.** Each `Item::Char` and `Item::Rule` (or each box) in the page IR
-with its input position (file, line, and better a byte offset), as SyncTeX
-records them. Or the `.synctex` records through the host.
-
-## 9. A wasm build in partex's gate
-
-`partex-core` is `no_std` and `cargo check`s for wasm32-unknown-unknown,
-but nothing runs it as wasm. `core-partex` does: an INITEX page, a LaTeX
-article from `pdflatex.fmt` under `node:wasi` (`test/partex-harness.mjs`,
-`test/partex-latex.mjs`). A gate step that builds partex-core for
-wasm32-wasip1 and runs one job would catch a `std`-only API or an
-`Instant` before an embedder does.
-
-## 10. A stable embedding API
-
-partex is mid-rewrite (DESIGN 4.3: windows, records, the link), and
-`core-partex` uses `Tex::new`, `Tex::run`, `host_mut`, `Params`, `pageir`
-and, next, `ssa::run_applying`, `rebuild_trips`, `step_effects` and
-`take_step_changes`. Wanted: a small `partex_core::embed` (open a job, edit,
-rebuild, take pages and files) that stays stable while the internals
-change. The extension would pin to it instead of to a commit.
+- Pages in PDF mode: the build is Overleaf's (PDF mode), and the viewer reads
+  the PDF back.
+- Files found mid-build: the Host fetches from Shelf inside `read_file`; no
+  rebuild per missing name.
+- Edits: `Host::unchanged` per load, with keystrokes rebuilding only what
+  they reach.
+- pdfTeX glyphs from the PDF's Type 1 outlines, and SyncTeX for pdfTeX
+  (`set_origins`, `tex.origins`).
+- A trip that ends fatally keeps the last complete streams (`keep_complete`,
+  `withheld_streams`, `fatal_pdf`, `cbc95ab`).
+- XeTeX: `Flavor::XeTeX`, fonts through the Host (`FontIndex`, `OpenType`),
+  harfrust shaping, xdvipdfmx in process, glyph runs (`3459953`).
+- `\write18` (restricted) through `Host::system`, for minted.

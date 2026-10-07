@@ -17,6 +17,9 @@
   h2 { margin: 0 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--fg2); }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; }
   .row span small { display: block; color: var(--fg2); font-size: 11px; }
+  /* (a choice of more than two, or a long explanation: the choices under the label, not squeezed beside it) */
+  .row.stack { flex-direction: column; align-items: stretch; gap: 5px; }
+  .row.stack .seg { align-self: flex-start; }
   .seg { display: inline-flex; background: var(--bg2); border-radius: 9999px; padding: 2px; }
   .seg button { all: unset; cursor: pointer; padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; color: var(--fg2); }
   .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
@@ -49,12 +52,12 @@
   <h2>Preview</h2>
   <div class="row"><span>Opens with</span>
     <span class="seg" id="view"><button data-v="pdf">PDF</button><button data-v="phitex">⚡ Instant</button></span></div>
-  <div class="row"><span>Engine<small>Auto: what the project's preamble needs. LuaLaTeX: coming</small></span>
+  <div class="row stack"><span>Engine<small>Auto: what the project's preamble needs. LuaLaTeX: coming</small></span>
     <span class="seg" id="engine"><button data-v="auto">Auto</button><button data-v="pdflatex">pdfLaTeX</button><button data-v="xelatex">XeLaTeX</button><button data-v="lualatex">LuaLaTeX</button></span></div>
   <p class="note" id="enginenote" style="margin:0"></p>
-  <div class="row"><span>PDF highlight<small>In yellow. Cursor: the word you're at, always. Selection: what you select. Double-click: only on a double-click</small></span>
+  <div class="row stack"><span>PDF highlight<small>In yellow. Cursor: the word you're at, always. Selection: what you select. Double-click: only on a double-click</small></span>
     <span class="seg" id="follow"><button data-v="cursor">Cursor</button><button data-v="select">Selection</button><button data-v="dblclick">Double-click</button></span></div>
-  <div class="row"><span>Page<small>Vector: drawn as SVG, updated in place as you type · PDF.js: our PDF drawn by pdf.js, as Overleaf's viewer draws a PDF</small></span>
+  <div class="row stack"><span>Page<small>Vector: drawn as SVG, updated in place as you type · PDF.js: our PDF drawn by pdf.js, as Overleaf's viewer draws a PDF</small></span>
     <span class="seg" id="format"><button data-v="vector">Vector</button><button data-v="pdfjs">PDF.js</button></span></div>
   <div class="row"><span>Show the ⚡ ms chip<small>How long each repaint took, after a keystroke</small></span>
     <label class="switch"><input type="checkbox" id="speed"><i></i></label></div>

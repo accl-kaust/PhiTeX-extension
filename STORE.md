@@ -24,15 +24,19 @@ upload with `scripts/package.sh` (→ `store/phitex-instant-<version>.zip`).
 > • Switch between PDF and ⚡ Instant with one click (or Alt+Shift+P)
 > • The page repaints as you type; a small chip shows how fast
 > • Diagnostics for what the engine could not read, with a click to the line
-> • Selectable text, zoom, and a PDF of the instant preview
+> • XeLaTeX projects (fontspec, unicode-math, polyglossia): TeX Live's
+>   OpenType fonts or your own, Arabic, Hebrew, Chinese
+> • Figures (PNG, JPEG, PDF, matplotlib), TikZ, and minted listings in colour
+> • Selectable text, clickable links, zoom, and a PDF of the instant preview
 > • Real LaTeX: TeX Live's packages are downloaded once, when a document
 >   first needs them, and kept in your browser (see and clear the cache in
 >   the settings)
-> • Settings behind the extension's icon: turn it off, choose what opens, reset
+> • Settings behind the extension's icon: turn it off, choose what opens,
+>   the engine, the highlight, how pages are drawn, reset
 >
 > This is an UNOFFICIAL extension. It is not made, endorsed or supported by
-> Overleaf. It is experimental: PhiTeX runs LaTeX (pdfTeX, with TeX Live's
-> packages) in your browser, but for anything that matters, use Overleaf's
+> Overleaf. It is experimental: PhiTeX runs LaTeX (pdfTeX and XeTeX, with TeX
+> Live's packages) in your browser, but for anything that matters, use Overleaf's
 > own PDF, one click away. Before its first use it asks you to accept that it is
 > provided as is, without warranty.
 >
@@ -46,7 +50,7 @@ upload with `scripts/package.sh` (→ `store/phitex-instant-<version>.zip`).
   1. `screenshot-1-instant.png`: the Instant preview, as you type
   2. `screenshot-2-tip.png`: the tip on Overleaf's PDF
   3. `screenshot-3-consent.png`: the terms, before first use
-  4. `screenshot-4-tour.png`: the guided tour
+  4. `screenshot-4-tour.png`: the guided tour (choosing the highlight)
   5. `screenshot-5-diagnostics.png`: diagnostics, with jump to line
   6. `screenshot-6-settings.png`: the settings
 - Small promo tile: `promo-small-440x280.png` (440×280)

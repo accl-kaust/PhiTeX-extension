@@ -3,8 +3,8 @@
 // page is drawn again only when its box changed (each page's hash, from the
 // core). The page most in view is the one an edit paints first.
 
-import type { PageImage } from "./session.ts";
-import { patch, type Draws2 } from "./page2.ts";
+import type { PageImage } from "./types.ts";
+import { patch, type Draws2, type Link } from "./page2.ts";
 
 export interface ViewerHost {
   /** Draw page `k` (the viewer wants it: in view, and not drawn at its hash). */
@@ -19,6 +19,8 @@ export interface ViewerHost {
   selected?(sel: { k: number; rects: [number, number, number, number][] }[]): void;
   /** A double-click at (x, y) on page `k`, in PDF points from its top left. */
   dbl?(k: number, x: number, y: number): void;
+  /** A click on a link to a web address (http, https or mailto): opened by the host (absent: in a new tab). */
+  link?(uri: string): void;
   /** A page box's CSS size at `cssWidth` (pdf.js's rounding). */
   box(d: { w: number; h: number }, cssWidth: number): [number, number];
 }
@@ -83,6 +85,48 @@ export class Viewer {
       const k = Number(el.dataset.k);
       host.dbl?.(k, ((e.clientX - r.left) / r.width) * this.size.w, ((e.clientY - r.top) / r.height) * this.size.h);
     });
+    // (a click on a link: a place in the document scrolled to; a web
+    // address given to the host, or opened in a new tab: http, https and
+    // mailto only, a PDF's javascript: and the like never followed)
+    root.addEventListener("click", (e) => {
+      const hit = this.linkAt(e);
+      if (!hit) return;
+      e.preventDefault();
+      const to = hit[4];
+      if (typeof to === "string") {
+        if (!/^(https?:|mailto:)/i.test(to)) return;
+        if (host.link) host.link(to);
+        else window.open(to, "_blank", "noopener");
+        return;
+      }
+      this.goToPlace(to, hit[5] ?? null);
+    });
+    root.addEventListener("mousemove", (e) => {
+      const el = (e.target as Element).closest<HTMLElement>(".slot");
+      if (el) el.style.cursor = this.linkAt(e) ? "pointer" : "";
+    });
+  }
+
+  /** The link under a pointer event (its page's draw list's `L`), if any. */
+  private linkAt(e: MouseEvent): Link | null {
+    const el = (e.target as Element).closest<HTMLElement>(".slot");
+    if (!el) return null;
+    const img = this.slots[Number(el.dataset.k)]?.img;
+    if (!img || !("draws" in img)) return null;
+    const d = img.draws as unknown as Draws2;
+    if (!d.L?.length) return null;
+    const r = el.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * d.w;
+    const y = ((e.clientY - r.top) / r.height) * d.h;
+    return d.L.find((l) => x >= l[0] && x <= l[2] && y >= l[1] && y <= l[3]) ?? null;
+  }
+
+  /** Scroll to page `k`, `top` points from its top (null: its top). */
+  goToPlace(k: number, top: number | null): void {
+    const s = this.slots[k];
+    if (!s) return;
+    const at = top == null ? 0 : (top / this.size.h) * s.el.offsetHeight;
+    this.scroller.scrollTo({ top: s.el.offsetTop + at - 12, behavior: "auto" });
   }
 
   /**

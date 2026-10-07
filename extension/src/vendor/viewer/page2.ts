@@ -35,7 +35,12 @@ export interface Draws2 {
   I?: Record<string, string>;
   /** How many of the page's drawing operators this list leaves out (none: absent). */
   x?: number;
+  /** Links: [x0, y0, x1, y1, uri] or [x0, y0, x1, y1, page (from 0), top | null], in points from the page's top left. */
+  L?: Link[];
 }
+
+/** A link on a page (`Draws2`'s `L`). */
+export type Link = [number, number, number, number, string | number, (number | null)?];
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -59,11 +64,17 @@ const FILES: [string, string][] = [
 ];
 
 let fonts: Promise<void> | undefined;
+/** Where the text fonts are (the host's: the extension's `chrome.runtime.getURL("fonts/")`, the CLI page's `fonts/`). */
+let fontBase = "fonts/";
+/** Set where the text fonts are loaded from (before the first page is drawn). */
+export const setFontBase = (url: string) => {
+  fontBase = url;
+};
 /** The fonts, once: as FontFaces from their bytes (a stylesheet's @font-face is not seen in a shadow root, and Overleaf's CSP governs URLs). */
 export const loadFonts = () =>
   (fonts ??= Promise.all(
     FILES.map(async ([family, file]) => {
-      const r = await fetch(chrome.runtime.getURL("fonts/" + file));
+      const r = await fetch(fontBase + file);
       const f = new FontFace(family, await r.arrayBuffer());
       document.fonts.add(await f.load());
     }),

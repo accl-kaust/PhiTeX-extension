@@ -18,7 +18,7 @@ const preambleOf = (t: string | undefined) => {
   return end < 0 ? (t ?? "") : t!.slice(0, end);
 };
 const usesMinted = (t: string) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t);
-import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./sync.ts";
+import { boxes, from, glyphs, lineAt, nearest, wordBytes, type Glyph } from "./vendor/viewer/sync.ts";
 import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
 import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
 
@@ -51,21 +51,9 @@ export type CoreReq =
   /** (answered by the offscreen document, shelf.ts: not the core) */
   | { op: "package"; name: string; engine?: string };
 
-/** A page as PhiTeX draws it, in PDF points from the top left (core's draws_json). */
-export interface Draws {
-  w: number;
-  h: number;
-  /** Font names (Times-Roman, ...), indexed by `t`'s font. */
-  f: string[];
-  /** Words: x, y (baseline), size, font, text, and the width PhiTeX laid it out with. */
-  t: [number, number, number, number, string, number?][];
-  /** Rules: x, y (top), width, height. */
-  r: [number, number, number, number][];
-}
-
-/** A page to show: its draw list (vector), or a PNG. */
-/** A page: its draw list, or a PNG (PDF mode: rendered by pdf.js, `w`/`h` its size in PDF points). */
-export type PageImage = { draws: Draws } | { png: Uint8Array; w?: number; h?: number } | { canvas: HTMLElement; w: number; h: number };
+// (the page types the renderer shares: PhiTeX's viewer/src, vendored)
+import type { Draws, PageImage } from "./vendor/viewer/types.ts";
+export type { Draws, PageImage };
 
 export interface CoreRes {
   ok: boolean;

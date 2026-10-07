@@ -2,6 +2,7 @@
 // page's world) for the editor, the project ZIP for the files, a chrome
 // port to the offscreen document's worker for the core, and the panel.
 
+import { setFontBase } from "./vendor/viewer/page2.ts";
 import type { Edit } from "./edits.ts";
 import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
@@ -12,6 +13,9 @@ import { channel, follow, tee, type Ask } from "./mirror.ts";
 import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
 import { cached, DELIVERED } from "./packages.ts";
 import { drawPage } from "./tabrender.ts";
+
+// (the pages' text fonts: the extension's own, Latin Modern)
+setFontBase(chrome.runtime.getURL("fonts/"));
 
 /** The panel's preferences, in the extension's own storage (not the page's). */
 const prefs: Prefs = {

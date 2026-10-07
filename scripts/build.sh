@@ -66,6 +66,8 @@ rm -rf extension/texmf && cp -r texmf extension/texmf
 # (SHELF_INDEX, SHELF_RELEASE: another release's, a local Shelf's for a --dev build)
 cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
 cp "${SHELF_RELEASE:-shelf-release.json}" extension/shelf-release.json
+# (the page renderer: PhiTeX's viewer/src at the pinned engine commit)
+scripts/vendor-viewer.sh
 scripts/sandbox npx tsc -p .
 # Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
 lm=/usr/share/texmf-dist/fonts/opentype/public
@@ -111,8 +113,9 @@ scripts/sandbox node -e '
   const seen = new Set(), todo = ["dist/content-main.js"];
   while (todo.length) {
     const f = todo.pop(); if (seen.has(f)) continue; seen.add(f);
-    for (const [, dep] of fs.readFileSync("extension/" + f, "utf8").matchAll(/^import [^;]*? from "\.\/([^"]+)";/gm)) todo.push("dist/" + dep);
+    for (const [, dep] of fs.readFileSync("extension/" + f, "utf8").matchAll(/^import [^;]*? from "(\.\.?\/[^"]+)";/gm)) todo.push(require("path").posix.join(require("path").posix.dirname(f), dep));
   }
-  const missing = [...seen].filter((f) => !listed.has(f));
+  const glob = (p) => [...listed].some((l) => l === p || (l.endsWith("/*.js") && p.startsWith(l.slice(0, -4)) && !p.slice(l.length - 4).includes("/")));
+  const missing = [...seen].filter((f) => !glob(f));
   if (missing.length) { console.error("not in web_accessible_resources:", missing.join(" ")); process.exit(1); }'
 ls -la extension/dist/core.wasm

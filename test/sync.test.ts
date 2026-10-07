@@ -1,7 +1,7 @@
 // Source ↔ page from glyph origins (sync.ts), and the UTF-8 ↔ UTF-16 offsets it uses.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boxes, from, glyphs, lineAt, nearest } from "../extension/src/sync.ts";
+import { boxes, from, glyphs, lineAt, nearest } from "../extension/src/vendor/viewer/sync.ts";
 import { byteOffset, charOffset } from "../extension/src/edits.ts";
 
 // "main" (the job's name for main.tex) and a file not in the project; one glyph with no source.

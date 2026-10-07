@@ -19,6 +19,15 @@ export const SUPPORT: { label: string; href: string } | null = null;
 
 export const NEWS: News[] = [
   {
+    version: "0.4.1",
+    date: "2026-10-07",
+    title: "Firefox: projects with figures open again",
+    items: [
+      "In Firefox, a project with figures or other binary files no longer stops at \"Unpacking the project\".",
+      "If a project can't be opened, the panel now says why instead of waiting.",
+    ],
+  },
+  {
     version: "0.4.0",
     date: "2026-10-07",
     title: "XeLaTeX, figures, and a faster, clearer preview",

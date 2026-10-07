@@ -45,7 +45,11 @@ if (!(await up())) {
   const profile = path.join(root, "target/fx-profile");
   fs.mkdirSync(profile, { recursive: true });
 
-  spawn("firefox", ["--profile", profile, "--no-remote", "--remote-debugging-port", String(PORT), "about:blank"], { detached: true, stdio: "ignore" }).unref();
+  // (PHITEX_FXLOG=file: every console, the background page's and its workers' too, mirrored to Firefox's stdout, kept there)
+  const log = process.env.PHITEX_FXLOG;
+  if (log) fs.writeFileSync(path.join(profile, "user.js"), 'user_pref("devtools.console.stdout.content", true);\nuser_pref("devtools.console.stdout.chrome", true);\nuser_pref("browser.dom.window.dump.enabled", true);\n');
+  const out = log ? fs.openSync(log, "a") : "ignore";
+  spawn("firefox", ["--profile", profile, "--no-remote", "--remote-debugging-port", String(PORT), "about:blank"], { detached: true, stdio: ["ignore", out, out] }).unref();
   for (let i = 0; i < 40 && !(await up()); i++) await sleep(250);
 }
 

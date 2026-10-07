@@ -5,7 +5,13 @@ const TEXT = /\.(tex|ltx|sty|cls|def|cfg|clo|fd|bib|bbl|bst|bbx|cbx|dbx|lbx|ind|
 
 async function inflate(b: Uint8Array): Promise<Uint8Array> {
   const s = new Blob([b as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(s).arrayBuffer());
+  const out = new Uint8Array(await new Response(s).arrayBuffer());
+  // (copied into this script's own memory: in Firefox the Response is the
+  // page's, and its bytes refuse this script's reads, e.g. a subarray's
+  // "Permission denied to access property constructor")
+  const own = new Uint8Array(out.length);
+  own.set(out);
+  return own;
 }
 
 /** The text files of a ZIP, by path; others are listed in `skipped`. */

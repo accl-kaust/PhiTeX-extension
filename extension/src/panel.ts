@@ -1249,6 +1249,21 @@ export class Panel {
 
   error(t: string): void {
     this.msg(t, true);
+    // (before any page: the loading card says it stopped, and why, not "Reading" forever)
+    if (!this.last && !this.pkgBusy) {
+      clearInterval(this.loadTick);
+      this.loadTick = undefined;
+      const empty = this.$("#empty");
+      empty.innerHTML = `<div class="load"><h3>Couldn't open the project</h3><div class="count"></div><div class="note">Overleaf's PDF is one click away. Reload the tab to try again.</div></div>`;
+      empty.querySelector(".count")!.textContent = t;
+      if (this.ev.onReport) {
+        const b = document.createElement("button");
+        b.className = "reportbtn";
+        b.textContent = "Report a problem…";
+        b.onclick = () => void this.report();
+        empty.querySelector(".load")!.append(b);
+      }
+    }
     // (an error line opens the debug report, to send)
     if (this.ev.onReport) {
       const m = this.$("#msg");

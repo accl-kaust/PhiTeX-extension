@@ -1,0 +1,27 @@
+{
+  "name": "phitex-instant",
+  "displayName": "PhiTeX ⚡ Instant",
+  "description": "Instant LaTeX preview: pages update as you type, typeset by PhiTeX in VS Code itself.",
+  "version": "0.5.2",
+  "publisher": "accl-kaust",
+  "license": "AGPL-3.0-only",
+  "repository": { "type": "git", "url": "https://github.com/accl-kaust/PhiTeX-frontends" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Visualization", "Other"],
+  "keywords": ["latex", "tex", "preview", "pdf"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onLanguage:latex"],
+  "contributes": {
+    "commands": [
+      { "command": "phitex.preview", "title": "Open Preview", "category": "PhiTeX", "icon": "$(zap)" }
+    ],
+    "menus": {
+      "editor/title": [{ "command": "phitex.preview", "when": "editorLangId == latex", "group": "navigation" }]
+    },
+    "keybindings": [{ "command": "phitex.preview", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorLangId == latex" }]
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.85.0"
+  }
+}

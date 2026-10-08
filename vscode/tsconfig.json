@@ -1,0 +1,9 @@
+{
+  "//": "The VS Code extension: src/ and common/'s sources, type-checked only (scripts/build-vscode.sh bundles them with esbuild).",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vscode"]
+  },
+  "include": ["src", "test"]
+}

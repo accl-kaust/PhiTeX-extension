@@ -2,24 +2,26 @@
 // origin: no Overleaf CSP, and Shelf allows any origin, so no host
 // permission). A name is looked up in order:
 //
-//   1. the extension's own texmf/ (the LaTeX kernel and the common packages);
-//   2. IndexedDB (fetched before: once per browser, not per project);
+//   1. the extension's own texmf/ (the LaTeX kernel) and packs/ (the packs
+//      of the packages arXiv papers use most);
+//   2. the packs kept in this browser (packstore.ts: fetched before, by a
+//      project or ahead of one by prefetch.ts; no request);
 //   3. Shelf (shelf-phitex.pages.dev): TeX Live's files in packs, one per
 //      package (or per part of a big one), fetched whole: a .sty comes with
-//      the .def, .cfg and .fd files it reads, and every file of the pack is
-//      kept in IndexedDB.
+//      the .def, .cfg and .fd files it reads, and the pack is kept.
 //
 // Which file a name is, for the project's engine, and which pack holds it,
 // is in an index the extension holds (shipped, and newer releases of it
 // fetched daily, release.ts; the rule is resolve.ts's, the worker's too):
 // no request to learn it, and a name the index lacks (a project's own file
-// it doesn't have) never leaves the browser. Files are kept by texmf path.
+// it doesn't have) never leaves the browser.
 
 // (Cloudflare Pages' own address until there is a domain: shelf.phitex.org)
 export const SHELF = "https://shelf-phitex.pages.dev/tl2026/";
 
 import { indexBytes, packUrl } from "./release.ts";
 import { Index, formatOf, shelfEngine } from "./resolve.ts";
+import { evict, getPack, putPack } from "./packstore.ts";
 
 const once = <T>(f: () => Promise<T>) => {
   let p: Promise<T> | undefined;
@@ -34,43 +36,10 @@ const bundled = once(async () => names(await (await fetch(chrome.runtime.getURL(
 const inCore = once(async () => names(await (await fetch(chrome.runtime.getURL("dist/assets-names.txt"))).text()));
 
 /** Path → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
-const index = once(async () => {
+export const index = once(async () => {
   const { gz, meta } = await indexBytes((n) => fetch(chrome.runtime.getURL(n)));
   return new Index(await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text(), meta);
 });
-
-const db = once(
-  () =>
-    new Promise<IDBDatabase>((res, rej) => {
-      // (2: files as bytes, from packs; 1 held text from Shelf's flat files)
-      const o = indexedDB.open("phitex-shelf", 2);
-      o.onupgradeneeded = () => {
-        if (o.result.objectStoreNames.contains("files")) o.result.deleteObjectStore("files");
-        o.result.createObjectStore("files");
-      };
-      o.onsuccess = () => res(o.result);
-      o.onerror = () => rej(o.error);
-    }),
-);
-
-async function idbGet(name: string): Promise<Uint8Array | undefined> {
-  const s = (await db()).transaction("files", "readonly").objectStore("files");
-  const r = s.get(SHELF + name);
-  return new Promise((res, rej) => {
-    r.onsuccess = () => res(r.result instanceof Uint8Array ? r.result : undefined);
-    r.onerror = () => rej(r.error);
-  });
-}
-
-async function idbPutAll(files: [string, Uint8Array][]): Promise<void> {
-  const t = (await db()).transaction("files", "readwrite");
-  const s = t.objectStore("files");
-  for (const [n, b] of files) s.put(b, SHELF + n);
-  return new Promise((res, rej) => {
-    t.oncomplete = () => res();
-    t.onerror = () => rej(t.error);
-  });
-}
 
 /** A pack's files: gzip of `u32 n, (u32 len, name, u32 len, bytes) × n`. */
 function unpack(b: Uint8Array): [string, Uint8Array][] {
@@ -89,33 +58,45 @@ function unpack(b: Uint8Array): [string, Uint8Array][] {
   return out;
 }
 
-/** Each pack fetched once (in flight or done), its files kept. */
-const packs = new Map<string, Promise<Map<string, Uint8Array>>>();
+/** Each pack read once per document (in flight or done): its files, and where it came from. */
+const packs = new Map<string, Promise<{ files: Map<string, Uint8Array>; from: "bundled" | "cache" | "shelf" }>>();
 /** Shelf packs the extension ships (packs/list.txt): read from it, not Shelf. */
-const shipped = once(async () => {
+export const shipped = once(async () => {
   const r = await fetch(chrome.runtime.getURL("packs/list.txt")).catch(() => null);
   return new Set(r?.ok ? (await r.text()).split("\n").filter(Boolean) : []);
 });
 
-function pack(id: string): Promise<Map<string, Uint8Array>> {
+const isGzip = (b: Uint8Array) => b[0] === 0x1f && b[1] === 0x8b;
+
+/** A pack Shelf serves, as is (gzip). */
+export async function fetchPack(id: string): Promise<Uint8Array> {
+  const get = async (cache: RequestCache) => {
+    const r = await fetch(packUrl(id), { cache });
+    return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
+  };
+  // (a pack Shelf doesn't have comes back as its home page, 200, and the
+  // browser keeps that a year (packs are immutable): asked again past the
+  // cache, as a pack deployed since then is there)
+  let raw = await get("default");
+  if (!isGzip(raw)) raw = await get("reload");
+  if (!raw.length) throw new Error(`Shelf has no pack "${id}" (HTTP error)`);
+  if (!isGzip(raw)) throw new Error(`Shelf has no pack "${id}" (the package server is older than this extension)`);
+  return raw;
+}
+
+function pack(id: string) {
   let p = packs.get(id);
   if (!p) {
     p = (async () => {
-      const url = (await shipped()).has(id) ? chrome.runtime.getURL(`packs/${id}.pack`) : packUrl(id);
-      const get = async (cache: RequestCache) => {
-        const r = await fetch(url, { cache });
-        return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
-      };
-      // (a pack Shelf doesn't have comes back as its home page, 200, and the
-      // browser keeps that a year (packs are immutable): asked again past the
-      // cache, as a pack deployed since then is there)
-      let raw = await get("default");
-      if (raw[0] !== 0x1f || raw[1] !== 0x8b) raw = await get("reload");
-      if (!raw.length) throw new Error(`Shelf has no pack "${id}" (HTTP error)`);
-      if (raw[0] !== 0x1f || raw[1] !== 0x8b) throw new Error(`Shelf has no pack "${id}" (the package server is older than this extension)`);
-      const files = unpack(await gunzip(new Response(raw)));
-      await idbPutAll(files).catch(() => undefined);
-      return new Map(files);
+      if ((await shipped()).has(id)) {
+        const r = await fetch(chrome.runtime.getURL(`packs/${id}.pack`));
+        return { files: new Map(unpack(await gunzip(r))), from: "bundled" as const };
+      }
+      // (kept in this browser: no request; else Shelf's, kept, and the cache kept under its cap)
+      const kept = await getPack(id).catch(() => undefined);
+      const raw = kept ?? (await fetchPack(id));
+      if (!kept) await putPack(id, raw).then(() => evict(new Set(packs.keys()))).catch(() => undefined);
+      return { files: new Map(unpack(await gunzip(new Response(raw as BlobPart)))), from: kept ? ("cache" as const) : ("shelf" as const) };
     })();
     p.catch(() => packs.delete(id));
     packs.set(id, p);
@@ -156,12 +137,12 @@ export async function resolve(name: string, engine?: string): Promise<(Resolved 
   if ((await bundled()).has(name) && !(path && /^tex\/(xe|lua)(la)?tex\//.test(path)))
     return { text: await (await fetch(chrome.runtime.getURL("texmf/" + name))).text(), from: "bundled" };
   if (!path) return null;
-  const hit = await idbGet(path).catch(() => undefined);
   const [own, ...deps] = ix.packs(path, e);
   const ids = [own, ...deps].filter((id) => !given.has(id));
   for (const id of ids) given.add(id);
-  const got = await Promise.all(ids.map((id) => pack(id).catch(() => new Map<string, Uint8Array>())));
+  const got = await Promise.all(ids.map((id) => pack(id).then((p) => p.files, () => new Map<string, Uint8Array>())));
   const extra: [string, Uint8Array][] = got.flatMap((m) => [...m].filter(([n]) => n !== path));
-  const b = hit ?? (await pack(own)).get(path);
-  return b ? { ...asFile(name, b), from: hit ? "cache" : "shelf", extra } : null;
+  const p = await pack(own);
+  const b = p.files.get(path);
+  return b ? { ...asFile(name, b), from: p.from === "shelf" ? "shelf" : "cache", extra } : null;
 }

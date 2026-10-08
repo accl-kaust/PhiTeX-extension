@@ -374,6 +374,32 @@ for (const s of sc.steps ?? []) {
     // (an expression in the content script's world, for debugging)
     s.result = await evalIn(s.eval, !s.page);
     console.log("eval →", JSON.stringify(s.result));
+  } else if (s.offscreen !== undefined) {
+    // (an expression in the offscreen document: the extension's origin, its IndexedDB)
+    const off = (await (await fetch(`http://localhost:${PORT}/json`)).json()).find((t) => t.url.endsWith("/offscreen.html"));
+    const ow = new WebSocket(off.webSocketDebuggerUrl);
+    await new Promise((r) => ow.addEventListener("open", r));
+    s.result = await new Promise((r) => {
+      ow.addEventListener("message", (m) => { const d = JSON.parse(m.data); if (d.id === 1) r(d.result?.result?.value ?? d.result?.exceptionDetails?.exception?.description); });
+      ow.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: s.offscreen, awaitPromise: true, returnByValue: true } }));
+    });
+    ow.close();
+    console.log("offscreen →", JSON.stringify(s.result));
+  } else if (s.extpage !== undefined) {
+    // (an extension page, popup.html, opened in a tab of its own: its text after a moment, and a screenshot)
+    const off = (await (await fetch(`http://localhost:${PORT}/json`)).json()).find((t) => t.url.endsWith("/offscreen.html"));
+    const url = off.url.replace(/offscreen\.html$/, s.extpage);
+    const t = await (await fetch(`http://localhost:${PORT}/json/new?${encodeURIComponent(url)}`, { method: "PUT" })).json();
+    const pw = new WebSocket(t.webSocketDebuggerUrl);
+    await new Promise((r) => pw.addEventListener("open", r));
+    let pid = 0;
+    const pcall = (method, params = {}) => new Promise((r) => { const i = ++pid; const f = (m) => { const d = JSON.parse(m.data); if (d.id === i) { pw.removeEventListener("message", f); r(d.result); } }; pw.addEventListener("message", f); pw.send(JSON.stringify({ id: i, method, params })); });
+    await sleep(2500);
+    s.result = (await pcall("Runtime.evaluate", { expression: "document.body.innerText", returnByValue: true }))?.result?.value;
+    const shot = await pcall("Page.captureScreenshot", { format: "png" });
+    if (shot?.data) fs.writeFileSync(path.join(out, `${s.extpage.replace(/\W/g, "-")}.png`), Buffer.from(shot.data, "base64"));
+    pw.close();
+    console.log("extpage →", JSON.stringify(s.result));
   } else if (s.dblpage) {
     const [k, fx, fy] = s.dblpage;
     await evalIn(`(() => { const root = document.querySelector('phitex-preview')?.shadowRoot ?? document, all = root.querySelectorAll('.slot'); const el = ${k} < 0 ? all[all.length + ${k}] : root.querySelector('.slot[data-k="${k}"]'); if (!el) return; el.scrollIntoView(); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true, clientX: r.left + r.width * ${fx}, clientY: r.top + r.height * ${fy} })); })()`, true);

@@ -42,36 +42,57 @@ export function shelfEngine(e: string | undefined): string {
 }
 
 export class Index {
-  /** path → [pack, deps by engine (release.json's `deps` order)]. */
-  readonly rows = new Map<string, { pack: string; deps: string[][] }>();
-  /** basename → its paths, sorted. */
-  private readonly byBase = new Map<string, string[]>();
+  /** basename → the offsets of its rows in the TSV (one pass, nothing split: a row is read when asked). */
+  private readonly byBase = new Map<string, number | number[]>();
+  /** basename → its rows' paths, sorted, with their offsets (made when first asked). */
+  private readonly sorted = new Map<string, [string, number][]>();
+  private readonly tsv: string;
   readonly search: Search;
   readonly engines: string[];
 
   constructor(tsv: string, meta: ReleaseMeta) {
+    this.tsv = tsv;
     this.search = meta.search ?? {};
     this.engines = meta.deps ?? [];
-    for (const l of tsv.split("\n")) {
-      const [path, pack, ...deps] = l.split("\t");
-      if (!path || !pack) continue;
-      this.rows.set(path, { pack, deps: deps.map((d) => (d ? d.split(",") : [])) });
-      const base = path.slice(path.lastIndexOf("/") + 1);
-      const list = this.byBase.get(base);
-      if (list) list.push(path);
-      else this.byBase.set(base, [path]);
+    for (let at = 0; at < tsv.length; ) {
+      let end = tsv.indexOf("\n", at);
+      if (end < 0) end = tsv.length;
+      const tab = tsv.indexOf("\t", at);
+      // (a row has a path and a pack)
+      if (tab > at && tab + 1 < end && tsv[tab + 1] !== "\t") {
+        const base = tsv.slice(Math.max(tsv.lastIndexOf("/", tab) + 1, at), tab);
+        const had = this.byBase.get(base);
+        if (had === undefined) this.byBase.set(base, at);
+        else if (typeof had === "number") this.byBase.set(base, [had, at]);
+        else had.push(at);
+      }
+      at = end + 1;
     }
-    for (const list of this.byBase.values()) list.sort();
+  }
+
+  private rowsOf(base: string): [string, number][] {
+    let r = this.sorted.get(base);
+    if (!r) {
+      const had = this.byBase.get(base);
+      const at = had === undefined ? [] : typeof had === "number" ? [had] : had;
+      r = at.map((o): [string, number] => [this.tsv.slice(o, this.tsv.indexOf("\t", o)), o]).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+      this.sorted.set(base, r);
+    }
+    return r;
+  }
+
+  private rowAt(path: string): number | undefined {
+    return this.rowsOf(path.slice(path.lastIndexOf("/") + 1)).find(([p]) => p === path)?.[1];
   }
 
   /** `name`'s path for `engine` (Shelf's name: pdftex, xetex) and kpathsea format `format`, or null. */
   resolve(name: string, format: string, engine: string): string | null {
     if (name.includes("/")) {
       const p = name.startsWith(TL) ? name.slice(TL.length) : name.replace(/^\.\//, "");
-      return this.rows.has(p) ? p : null;
+      return this.rowAt(p) === undefined ? null : p;
     }
-    const paths = this.byBase.get(name);
-    if (!paths) return null;
+    const paths = this.rowsOf(name).map(([p]) => p);
+    if (!paths.length) return null;
     const prefixes = this.search[engine]?.[format];
     if (!prefixes) return paths[0];
     for (const pre of prefixes) {
@@ -83,10 +104,14 @@ export class Index {
 
   /** The packs to fetch for `path` with `engine`: its own, then what its loading reads. */
   packs(path: string, engine: string): string[] {
-    const r = this.rows.get(path);
-    if (!r) return [];
+    const at = this.rowAt(path);
+    if (at === undefined) return [];
+    let end = this.tsv.indexOf("\n", at);
+    if (end < 0) end = this.tsv.length;
+    const [, pack, ...deps] = this.tsv.slice(at, end).split("\t");
     const k = this.engines.indexOf(engine);
-    return [r.pack, ...(k >= 0 ? (r.deps[k] ?? []) : [])];
+    const d = k >= 0 ? deps[k] : undefined;
+    return [pack, ...(d ? d.split(",") : [])];
   }
 }
 

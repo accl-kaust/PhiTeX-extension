@@ -66,8 +66,12 @@
 
 <section>
   <h2>Package cache</h2>
-  <div class="row"><span>TeX Live files kept in this browser<small id="cachestats">Counting…</small></span>
+  <div class="row"><span>TeX Live packages kept in this browser<small id="cachestats">Counting…</small></span>
     <button class="btn" id="cacheclear" disabled>Clear</button></div>
+  <div class="row"><span>Keep at most<small>Past it, the least recently used go first</small></span>
+    <span class="seg" id="cachecap"><button data-v="100">100 MB</button><button data-v="300">300 MB</button><button data-v="1000">1 GB</button></span></div>
+  <div class="row"><span>Fetch common packages ahead<small id="aheadnote"></small><small>The ones most arXiv papers use, in the background: a first open needs no wait</small></span>
+    <label class="switch"><input type="checkbox" id="ahead"><i></i></label></div>
 </section>
 
 <section>

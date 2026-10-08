@@ -31,6 +31,8 @@ export interface Release extends ReleaseMeta {
   schema: number;
   min_extension?: string;
   notice?: string | null;
+  /** The files to fetch ahead (prefetch.ts), most papers' first: "name" or "name<TAB>engine" (Shelf's: xetex). */
+  prefetch?: string[];
 }
 
 const DAY = 24 * 3600 * 1000;
@@ -108,6 +110,11 @@ export async function refresh(force = false): Promise<Release | undefined> {
   }
   await put(entries).catch(() => undefined);
   return r;
+}
+
+/** The release as last seen (refresh), if any. */
+export async function latest(): Promise<Release | undefined> {
+  return (await get<{ r: Release }>("seen").catch(() => undefined))?.r;
 }
 
 /** A pack's address: by its content, under h/. */

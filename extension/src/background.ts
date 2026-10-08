@@ -1,5 +1,8 @@
-// The service worker: only makes sure the offscreen document (which runs
-// the core's worker) exists. Content scripts then connect to it directly.
+// The service worker: makes sure the offscreen document (which runs the
+// core's worker) exists, and fetches packs ahead. Content scripts then
+// connect to the offscreen document directly.
+
+import { prefetch } from "./prefetch.ts";
 
 let creating: Promise<void> | null = null;
 
@@ -34,4 +37,17 @@ chrome.runtime.onMessage.addListener((m, _sender, reply) => {
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   const version = chrome.runtime.getManifest().version;
   if (reason === "install") void chrome.storage.local.set({ newsSeen: version });
+});
+
+// Packs fetched ahead (prefetch.ts): after an install or update, at each
+// browser start, and every few hours (a new Shelf release; a run the
+// service worker's stop cut short). Progress goes to chrome.storage, for
+// the popup (and, each pack, keeps the service worker going).
+const ahead = () => void prefetch((a) => void chrome.storage.local.set({ ahead: a })).catch(() => undefined);
+chrome.runtime.onInstalled.addListener(ahead);
+chrome.runtime.onStartup.addListener(ahead);
+void chrome.alarms.create("prefetch", { periodInMinutes: 360 });
+chrome.alarms.onAlarm.addListener((a) => a.name === "prefetch" && ahead());
+chrome.runtime.onMessage.addListener((m) => {
+  if (m?.type === "prefetch") ahead();
 });

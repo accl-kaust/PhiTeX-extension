@@ -8,6 +8,8 @@
   "permissions": [
     "offscreen",
     "storage",
+    "unlimitedStorage",
+    "alarms",
     "activeTab"
   ],
   "background": {

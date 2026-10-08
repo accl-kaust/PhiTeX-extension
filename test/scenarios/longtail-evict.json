@@ -1,0 +1,18 @@
+{
+ "project": "test/scenarios/longtail",
+ "name": "longtail-evict",
+ "steps": [
+  {
+   "idle": 2000
+  },
+  {
+   "shot": "page"
+  },
+  {
+   "offscreen": "(async () => { const m = await import(chrome.runtime.getURL(\"dist/packstore.js\")); const all = await m.allMeta(); let b = 0, ahead = 0, used = 0; for (const v of all.values()) { b += v.bytes; if (v.ahead) ahead++; if (v.uses) used++; } return JSON.stringify({ packs: all.size, mb: +(b / 1048576).toFixed(1), ahead, used, usedIds: [...all].filter(([, v]) => v.uses).map(([k, v]) => k.replace(/-[0-9a-f]{12}$/, \"\") + \":\" + v.uses) }); })()"
+  },
+  {
+   "offscreen": "(async () => { const m = await import(chrome.runtime.getURL(\"dist/packstore.js\")); const n = await m.evict(new Set(), 2 * 1048576); const all = await m.allMeta(); let b = 0; for (const v of all.values()) b += v.bytes; return JSON.stringify({ evicted: n, left: all.size, mb: +(b / 1048576).toFixed(2), kept: [...all.keys()].map((k) => k.replace(/-[0-9a-f]{12}$/, \"\")).slice(0, 12) }); })()"
+  }
+ ]
+}

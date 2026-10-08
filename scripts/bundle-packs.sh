@@ -27,6 +27,8 @@ while read -r id; do
   fi
   echo "$h" >> extension/packs/list.txt
 done < data/bundled-packs.txt
+# (and what is fetched ahead: data/ahead.txt, bench/arxiv/coverage.py --ahead)
+cp data/ahead.txt extension/packs/ahead.txt
 # (in scripts/sandbox the checkout is read-only: run once outside it to write the list)
 if [ -d "$repo" ]; then cp extension/packs/list.txt "$repo/keep-packs.txt" 2>/dev/null || echo "keep-packs.txt: $repo read-only here, not written" >&2; fi
 echo "extension/packs: $(wc -l < extension/packs/list.txt) packs, $(du -sh extension/packs | cut -f1)"

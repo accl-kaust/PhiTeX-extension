@@ -1,6 +1,9 @@
 // The toolbar popup: the extension's settings, in chrome.storage.local (the
 // content script follows changes live), and actions on the open Overleaf tab.
 
+import { type PackMeta, DEFAULT_CAP_MB, allMeta, capBytes, clearPacks, evict, kvGet, kvSet } from "./packstore.ts";
+import { type Ahead, setAheadOff } from "./prefetch.ts";
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const TERMS = 1;
 
@@ -104,50 +107,29 @@ async function render(): Promise<void> {
   };
 }
 
-/** The package cache (shelf.ts's IndexedDB, this extension's origin): files, bytes, and a clear. */
-function cacheDb(): Promise<IDBDatabase | null> {
-  return new Promise((res) => {
-    const o = indexedDB.open("phitex-shelf");
-    // (none yet: nothing made here, shelf.ts makes it at its version)
-    o.onupgradeneeded = () => {
-      o.transaction!.abort();
-      res(null);
-    };
-    o.onsuccess = () => res(o.result.objectStoreNames.contains("files") ? o.result : (o.result.close(), null));
-    o.onerror = () => res(null);
-  });
-}
-
+/** The packs kept in this browser (packstore.ts): how many, how big, the cap, the ones fetched ahead (prefetch.ts), and a clear. */
 async function cacheStats(): Promise<void> {
-  const out = $("cachestats"), btn = $<HTMLButtonElement>("cacheclear");
-  const db = await cacheDb();
-  let n = 0, bytes = 0;
-  if (db) {
-    await new Promise<void>((res) => {
-      const c = db.transaction("files", "readonly").objectStore("files").openCursor();
-      c.onsuccess = () => {
-        const k = c.result;
-        if (!k) return res();
-        n++;
-        const v = k.value as Uint8Array | string;
-        bytes += typeof v === "string" ? v.length : v.byteLength;
-        k.continue();
-      };
-      c.onerror = () => res();
-    });
-  }
-  const mb = bytes / 1048576;
-  out.textContent = n ? `${n} files, ${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · fetched once, reused offline` : "Empty: packages are fetched as documents need them";
-  btn.disabled = !n;
+  const out = $("cachestats"), btn = $<HTMLButtonElement>("cacheclear"), aheadNote = $("aheadnote");
+  const all = await allMeta().catch(() => new Map<string, PackMeta>());
+  let bytes = 0;
+  for (const m of all.values()) bytes += m.bytes;
+  const mb = (b: number) => (b < 10 * 1048576 ? (b / 1048576).toFixed(1) : String(Math.round(b / 1048576)));
+  const cap = await capBytes().catch(() => DEFAULT_CAP_MB * 1048576);
+  out.textContent = all.size ? `${all.size} packs, ${mb(bytes)} of ${mb(cap)} MB · fetched once, reused offline` : "Empty: packages are fetched as documents need them";
+  seg("cachecap", String(Math.round(cap / 1048576)), (v) => void kvSet("capMB", +v).then(() => evict()).then(cacheStats));
+  const sw = $<HTMLInputElement>("ahead");
+  sw.checked = !(await kvGet<boolean>("aheadOff").catch(() => false));
+  sw.onchange = async () => {
+    await setAheadOff(!sw.checked);
+    if (sw.checked) void chrome.runtime.sendMessage({ type: "prefetch" });
+    void cacheStats();
+  };
+  const { ahead: a } = (await chrome.storage.local.get("ahead")) as { ahead?: Ahead };
+  aheadNote.textContent = !sw.checked || !a?.total ? "" : a.state === "full" ? `${a.have} of ${a.total} fetched: the rest past the cap` : a.have >= a.total ? `All ${a.total} ready` : `${a.have} of ${a.total} ready${a.state === "running" ? ", fetching…" : ""}`;
+  btn.disabled = !all.size;
   btn.onclick = async () => {
-    if (!db) return;
     btn.disabled = true;
-    await new Promise<void>((res) => {
-      const t = db.transaction("files", "readwrite");
-      t.objectStore("files").clear();
-      t.oncomplete = t.onerror = () => res();
-    });
-    db.close();
+    await clearPacks().catch(() => undefined);
     void cacheStats();
   };
 }

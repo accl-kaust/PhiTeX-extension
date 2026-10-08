@@ -34,7 +34,8 @@ tmp="$PWD/target/fx-pack"; rm -rf "$tmp"; mkdir -p "$tmp"
 scripts/sandbox python3 - "$tmp/manifest.json" <<'PY'
 import json, sys
 p = sys.argv[1]; m = json.load(open(p))
-m["permissions"] = [x for x in m["permissions"] if x != "offscreen"]
+# (unlimitedStorage: no prompt in Chrome, one in Firefox, whose add-ons' storage is kept anyway)
+m["permissions"] = [x for x in m["permissions"] if x not in ("offscreen", "unlimitedStorage")]
 m.pop("minimum_chrome_version", None)
 m["background"] = {"page": "firefox-bg.html"}
 m["browser_specific_settings"] = {"gecko": {"id": "phitex-instant@phitex.org", "strict_min_version": "142.0",

@@ -4,7 +4,7 @@
 // back base64: runtime ports carry JSON.
 
 import type { Req, Res } from "./worker.ts";
-import { resolve } from "./shelf.ts";
+import { index, resolve } from "./shelf.ts";
 import { refresh, type Release } from "./release.ts";
 
 /** Shelf's release as last read (release.ts): each tab is told on connecting. */
@@ -16,6 +16,9 @@ const told = (r: Release | undefined) => {
 // (at most once a day; a newer index is used by the next worker)
 void refresh().then(told, () => undefined);
 setInterval(() => void refresh().then(told, () => undefined), 3600 * 1000);
+// (Shelf's index read now, half a second of parsing, while the tab still
+// fetches its project: ready by the first package asked)
+void index().catch(() => undefined);
 
 const worker = new Worker(new URL("worker.js", import.meta.url), { type: "module" });
 /**

@@ -18,6 +18,21 @@ import { REPORT_TO } from "./report.ts";
 /** How long a build may ship no page before the last good one is dimmed (typing through `{`). */
 const STALE_GRACE_MS = 1000;
 
+/** The diff bar's state (Panel.diffBar). */
+export interface DiffBar {
+  /** The version compared against: "Submitted v1", or an update's files. */
+  title: string;
+  /** "3 h ago · Ammar". */
+  when: string;
+  changes: number;
+  /** The change shown (1-based; 0: none yet). */
+  at: number;
+  showing: "diff" | "current";
+  /** What it is doing, until it is done ("Fetching version 42…"). */
+  busy?: string;
+}
+export type DiffBarActions = Partial<Record<"prev" | "next" | "toggle" | "pdf" | "tex" | "close", () => void>>;
+
 /** What the panel shows, for controls that live outside it (a host's own toolbar). */
 export interface ViewState {
   page: number;
@@ -392,6 +407,21 @@ footer .msg.err { color: var(--danger); }
   min-height: 24px; box-sizing: border-box; padding: 4px 12px; border-radius: 12px; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; line-height: 16px; text-align: center;
   font-variant-numeric: tabular-nums; color: #fff; background: rgb(27 34 44 / 82%); box-shadow: 0 4px 12px rgba(0,0,0,.3); backdrop-filter: blur(4px); }
 .warmup.on { display: inline-flex; }
+/* a diff shown: what against, the changes, and its controls (a pill over the page, above the warmup) */
+.diffbar { display: none; position: absolute; left: 12px; right: 12px; margin: 0 auto; width: fit-content; max-width: calc(100% - 24px); top: 10px; z-index: 4;
+  box-sizing: border-box; padding: 3px 4px 3px 12px; border-radius: 14px; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; line-height: 16px;
+  font-variant-numeric: tabular-nums; color: #fff; background: rgb(27 34 44 / 88%); box-shadow: 0 4px 12px rgba(0,0,0,.3); backdrop-filter: blur(4px); }
+.diffbar.on { display: inline-flex; }
+.diffbar.on ~ .warmup, .diffbar.on ~ .pkgs { top: 46px; }
+.diffbar .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.diffbar .what small { font-weight: 400; opacity: .75; }
+.diffbar .n { white-space: nowrap; padding: 0 4px; }
+.diffbar .busy::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
+.diffbar button { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 10px; color: #fff; white-space: nowrap; }
+.diffbar button:hover:not(:disabled) { background: rgb(255 255 255 / 16%); }
+.diffbar button:disabled { opacity: .4; cursor: default; }
+.diffbar button.cur { background: rgb(255 255 255 / 22%); }
+.diffbar .sep { width: 1px; align-self: stretch; margin: 2px 2px; background: rgb(255 255 255 / 25%); }
 .pkgs.on ~ .warmup { top: 56px; } /* below the strip, both said */
 .warmup .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
 .warmup .slow { color: #ffd27a; font-weight: 500; }
@@ -501,6 +531,7 @@ export class Panel {
       <div class="btns"><button class="btn" id="reportcopy">Copy</button><button class="btn" id="reportmail">Email</button><button class="btn" id="reportclose">Close</button></div>
     </div>
     <div class="speedchip" id="speedchip" aria-live="off">⚡ – ms</div>
+    <div class="diffbar" id="diffbar" role="toolbar" aria-label="Diff"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
@@ -1204,6 +1235,33 @@ export class Panel {
     void chip.offsetWidth;
     chip.classList.add("flash");
     this.emit();
+  }
+
+  /**
+   * The diff's bar over the page (null: none): against which version, the
+   * changes and the one at, and its controls. `showing` "diff" or "current":
+   * which of the two the page is (toggled with "d").
+   */
+  diffBar(d: DiffBar | null, on?: DiffBarActions): void {
+    const el = this.$("#diffbar");
+    if (!d) {
+      el.className = "diffbar";
+      el.innerHTML = "";
+      return;
+    }
+    const esc = (t: string) => t.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const n = d.busy ? `<span class="n busy">${esc(d.busy)}</span>` : `<span class="n">${d.changes ? `${d.at > 0 ? `${d.at} / ` : ""}${d.changes} change${d.changes === 1 ? "" : "s"}` : "no changes"}</span>`;
+    el.innerHTML =
+      `<span class="what" title="${esc(d.title)}">Diff vs ${esc(d.title)} <small>${esc(d.when)}</small></span>` +
+      `<button data-a="prev" title="Previous change (Shift+N)" ${d.busy || !d.changes ? "disabled" : ""}>‹</button>${n}<button data-a="next" title="Next change (N)" ${d.busy || !d.changes ? "disabled" : ""}>›</button>` +
+      `<span class="sep"></span><button data-a="toggle" class="${d.showing === "current" ? "cur" : ""}" title="Show the ${d.showing === "diff" ? "current version" : "diff"} (D)">${d.showing === "diff" ? "Current" : "Diff"}</button>` +
+      `<button data-a="pdf" title="Download the diff PDF" ${d.busy ? "disabled" : ""}>⬇ PDF</button><button data-a="tex" title="Download diff.tex" ${d.busy ? "disabled" : ""}>⬇ .tex</button>` +
+      `<button data-a="close" title="Stop comparing" aria-label="Stop comparing">✕</button>`;
+    el.className = "diffbar on";
+    el.onclick = (e) => {
+      const a = (e.target as HTMLElement).closest<HTMLElement>("button[data-a]")?.dataset.a as keyof DiffBarActions | undefined;
+      if (a) on?.[a]?.();
+    };
   }
 
   private warmTimer?: ReturnType<typeof setInterval>;

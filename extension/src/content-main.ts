@@ -7,6 +7,8 @@ import type { Edit } from "./edits.ts";
 import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./session.ts";
 import { readZip } from "./zip.ts";
+import { type DiffRunner, compareButton } from "./diffui.ts";
+import { filesAt } from "./history.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
 import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
@@ -268,6 +270,23 @@ class ChromeTransport implements CoreTransport {
 }
 
 const ZOOMS: [string, string][] = [["fit", "Fit width"], ["0.75", "75%"], ["1", "100%"], ["1.5", "150%"], ["2", "200%"]];
+
+/**
+ * The diff's runner (diffui.ts). For now: the version's files fetched, and
+ * said; the marked-up pages come with phitex-diff in the core.
+ */
+const diffRunner: DiffRunner = {
+  async start(v, say) {
+    say(`Fetching version ${v.v}…`);
+    const { files, binaries } = await filesAt(project(), v.v, pageFetch);
+    say(`Version ${v.v}: ${Object.keys(files).length} files, ${Object.keys(binaries).length} binary · the diff engine is being connected`);
+    return new Promise(() => undefined);
+  },
+  show: () => undefined,
+  goto: () => undefined,
+  download: () => undefined,
+  stop: () => undefined,
+};
 
 /** Styles for what we add to Overleaf's own DOM (the switch, the toolbar controls, the tip). */
 const DOCK_CSS = `
@@ -656,6 +675,8 @@ function dockInOverleaf(panel: Panel): Dock {
       if (which === "compiled") compiledLink()?.click();
     };
     document.addEventListener("click", () => menu.classList.remove("show"));
+    // (compare with a past version: diffui.ts)
+    compareButton(l, panel, project, pageFetch, diffRunner);
     const group = left.querySelector(".compile-button-group");
     if (group) group.after(l);
     else left.prepend(l);

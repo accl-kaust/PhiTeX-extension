@@ -52,6 +52,8 @@
         "dist/mirror.js",
         "dist/packages.js",
         "dist/news.js",
+        "dist/diffui.js",
+        "dist/history.js",
         "LICENSE.txt",
         "dist/tabrender.js",
         "dist/pdfjs/pdf.min.mjs",

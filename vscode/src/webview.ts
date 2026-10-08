@@ -40,6 +40,7 @@ const pane = document.createElement("div");
 pane.style.cssText = "position:fixed;inset:0";
 document.body.append(pane);
 panel.dock(pane);
+panel.shown(true);
 
 addEventListener("message", (e: MessageEvent<Told>) => apply(panel, e.data));
 ask({ t: "hello" });

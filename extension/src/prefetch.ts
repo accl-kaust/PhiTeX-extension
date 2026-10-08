@@ -75,7 +75,7 @@ async function run(tell: (a: Ahead) => void): Promise<void> {
     if (kept.has(id)) continue;
     let raw: Uint8Array;
     try {
-      raw = await fetchPack(id);
+      raw = await fetchPack(id, "low");
     } catch (e) {
       // (one pack Shelf lacks: the rest still come)
       a.error = e instanceof Error ? e.message : String(e);

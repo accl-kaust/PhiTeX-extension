@@ -19,6 +19,18 @@ export const SUPPORT: { label: string; href: string } | null = null;
 
 export const NEWS: News[] = [
   {
+    version: "0.5.0",
+    date: "2026-10-08",
+    title: "Faster start, packages kept in your browser",
+    items: [
+      "After install, the TeX Live packages and fonts most arXiv papers use (about 60 MB) download in the background, so opening a project rarely waits on downloads.",
+      "Packages already downloaded are reused straight from your browser on every start, without downloading them again.",
+      "The package cache has a size limit (300 MB by default; 100 MB or 1 GB in the toolbar popup). Past it, the least recently used packages are removed first. The background download can be turned off there too.",
+      "Startup does less work: the package index loads about four times faster, and the typesetter starts its steps in parallel.",
+      "This update clears the old package cache once: packages download again the first time they're needed.",
+    ],
+  },
+  {
     version: "0.4.1",
     date: "2026-10-07",
     title: "Firefox: projects with figures open again",

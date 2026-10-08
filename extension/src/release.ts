@@ -98,9 +98,12 @@ export async function refresh(force = false): Promise<Release | undefined> {
     return seen?.r;
   }
   const entries: [string, unknown][] = [["seen", { at: Date.now(), r }]];
-  const have = await get<{ release: string }>("index").catch(() => undefined);
+  // (none fetched yet: the shipped one's release, not fetched again)
+  const have =
+    (await get<{ release: string }>("index").catch(() => undefined))?.release ??
+    (await fetch(chrome.runtime.getURL("shelf-release.json")).then((x) => x.json() as Promise<{ release?: string }>).then((m) => m.release, () => undefined));
   // (schema 3 only: an index of another schema is not this extension's to read)
-  if (r.schema === SCHEMA && r.release !== have?.release) {
+  if (r.schema === SCHEMA && r.release !== have) {
     const gz = await fetch(SHELF + r.index).then((x) => (x.ok ? x.blob() : null), () => null);
     // (an index is gzip: one that isn't, a 404 page served as 200, is not kept)
     if (gz && gz.size > 2) {

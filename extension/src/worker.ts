@@ -411,9 +411,12 @@ const xetexClients = new Set<string>();
 const DRAW = (self as unknown as { name?: string }).name === "draw";
 
 async function load(): Promise<void> {
+  // (the compile, Shelf's index and the assets at once: none waits on another)
+  const shelf = DRAW ? undefined : loadShelf().catch(() => undefined);
+  if (!DRAW) loadAssets().catch(() => undefined);
   module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
   let memory: WebAssembly.Memory | undefined;
-  if (!DRAW) await loadShelf().catch(() => undefined);
+  await shelf;
   const inst = await WebAssembly.instantiate(module, {
     wasi_snapshot_preview1: wasi(() => memory!),
     phitex: { ...shelfImports(() => memory!), ...systemImports(() => memory!) },

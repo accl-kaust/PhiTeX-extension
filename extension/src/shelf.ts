@@ -68,10 +68,10 @@ export const shipped = once(async () => {
 
 const isGzip = (b: Uint8Array) => b[0] === 0x1f && b[1] === 0x8b;
 
-/** A pack Shelf serves, as is (gzip). */
-export async function fetchPack(id: string): Promise<Uint8Array> {
+/** A pack Shelf serves, as is (gzip); `priority` "low" for one fetched ahead (a project's own go first). */
+export async function fetchPack(id: string, priority: RequestPriority = "auto"): Promise<Uint8Array> {
   const get = async (cache: RequestCache) => {
-    const r = await fetch(packUrl(id), { cache });
+    const r = await fetch(packUrl(id), { cache, priority });
     return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
   };
   // (a pack Shelf doesn't have comes back as its home page, 200, and the

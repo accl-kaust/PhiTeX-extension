@@ -13,6 +13,8 @@
 //   restart  the browser restarted on that profile: IndexedDB and HTTP cache warm,
 //            a new offscreen document and workers (the next day's first open)
 //   reload   the tab reloaded in the same browser (offscreen document and its workers alive)
+//   installed  a fresh profile left until the packs fetched ahead (prefetch.ts) are in,
+//            then the browser restarted and the project opened: the first open after install
 // --slow: every target's network emulated at 10 Mbit/s down, 5 up, 80 ms RTT
 // (extension resources, chrome-extension://, are local and not throttled).
 // --xelatex: the project's engine set to XeLaTeX (else "auto": a fontspec
@@ -238,7 +240,7 @@ async function measure(phase) {
     if (w) workers.push({ attached: s.t - T0, ...JSON.parse(w) });
   }
   const off = [...sessions.values()].find((s) => s.url.endsWith("/offscreen.html"));
-  const offData = off ? await evalIn(off.id, `(async () => JSON.stringify({ origin: performance.timeOrigin, phx: globalThis.__phx || null, idbCount: await new Promise((ok) => { const o = indexedDB.open("phitex-shelf", 2); o.onsuccess = () => { try { const r = o.result.transaction("files").objectStore("files").count(); r.onsuccess = () => ok(r.result); r.onerror = () => ok(-1); } catch { ok(-2); } }; o.onerror = () => ok(-3); }) }))()`) : null;
+  const offData = off ? await evalIn(off.id, `(async () => JSON.stringify({ origin: performance.timeOrigin, phx: globalThis.__phx || null, idbCount: await new Promise((ok) => { const o = indexedDB.open("phitex-shelf"); o.onsuccess = () => { try { const st = o.result.objectStoreNames.contains("packs") ? "packs" : "files"; const r = o.result.transaction(st).objectStore(st).count(); r.onsuccess = () => ok(r.result); r.onerror = () => ok(-1); } catch { ok(-2); } }; o.onerror = () => ok(-3); }) }))()`) : null;
   const rec = {
     phase, T0, slow: SLOW, xelatex: XE, paint: paintAt ? { host: pageO + paintAt.host - T0, paint: pageO + paintAt.paint - T0 } : null,
     offscreenAttached: off ? off.t - T0 : null,
@@ -257,7 +259,22 @@ await new Promise((r) => mock.stdout.once("data", r));
 fs.rmSync(profile, { recursive: true, force: true });
 try {
   for (const phase of PHASES) {
-    if (phase !== "reload" || !ws) {
+    if (phase === "installed") {
+      if (ws) await quit();
+      fs.rmSync(profile, { recursive: true, force: true });
+      await launch();
+      const sw = [...sessions.values()].find((s) => s.type === "service_worker" && s.url.startsWith("chrome-extension://"));
+      const t = Date.now();
+      let a;
+      for (let i = 0; i < 1200; i++) {
+        await sleep(500);
+        a = await evalIn(sw.id, `chrome.storage.local.get("ahead").then((x) => JSON.stringify(x.ahead ?? null))`).then(JSON.parse, () => null);
+        if (a && a.state !== "running") break;
+      }
+      console.log(`${tag} installed: ahead ${JSON.stringify(a)} after ${Math.round((Date.now() - t) / 1000)} s`);
+      await quit();
+      await launch();
+    } else if (phase !== "reload" || !ws) {
       if (ws) await quit();
       await launch();
     }

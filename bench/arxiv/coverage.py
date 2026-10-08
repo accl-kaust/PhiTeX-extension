@@ -48,13 +48,15 @@ for l in gzip.open(os.path.join(root, "shelf-index.tsv.gz"), "rt"):
 for v in by_base.values(): v.sort()
 have = set(open(os.path.join(root, "extension/texmf/names.txt")).read().split()) | set(open(os.path.join(root, "extension/dist/assets-names.txt")).read().split())
 bundled = set(open(os.path.join(root, "extension/packs/list.txt")).read().split())
-FMT = {"bst": "bst", "tfm": "tfm"}
+# (src/resolve.ts formatOf: the kpathsea format by extension)
+FMT = {"tfm": "tfm", "vf": "vf", "pfb": "type1", "pfa": "type1", "enc": "enc", "map": "map", "otf": "opentype", "ttf": "truetype",
+       "ttc": "truetype", "bst": "bst", "csf": "bst", "bib": "bib", "ist": "ist", "tec": "misc"}
 
 
 def resolve(name, eng):
     paths = by_base.get(name)
     if not paths: return None
-    pre = meta["search"].get(eng, {}).get(FMT.get(name.rsplit(".", 1)[-1], "tex"))
+    pre = meta["search"].get(eng, {}).get(FMT.get(name.rsplit(".", 1)[-1].lower(), "tex"))
     if not pre: return paths[0]
     for x in pre:
         x = x if x.endswith("/") else x + "/"
@@ -117,7 +119,11 @@ with gzip.open(papers_path, "rt") as f:
         packs, unknown = needs(names, r["engine"], per)
         # (what the core's build read, fonts included: added when the paper was built)
         bp = set(x for x in r.get("built_packs", "").split(",") if x)
-        P.append({"id": r["id"], "engine": r["engine"], "packs": packs | bp, "closure": packs, "built": r.get("built", "-"), "unknown": unknown, "per": per})
+        # (a .bst TeX Live lacks: the paper ships its .bbl (arXiv's tarballs do), not needed to build)
+        unknown = [n for n in unknown if not n.endswith(".bst")]
+        # (built with pages out: what that build read is what the paper needs, fonts included; else the closure of its names)
+        built_ok = r.get("built", "-").startswith("ok")
+        P.append({"id": r["id"], "engine": r["engine"], "packs": bp if built_ok else packs, "closure": packs, "built": r.get("built", "-"), "unknown": unknown, "per": per})
 N = len(P)
 ok = [p for p in P if not p["unknown"]]
 NB = len(ok)
@@ -128,7 +134,8 @@ print(f"papers: {N}; buildable from TeX Live (every name in Shelf's index): {len
 nb = sum(1 for p in P if p["built"].startswith("ok"))
 print(f"built by the core (build-packs.mjs, pages out): {nb} ({100*nb/N:.1f}%); for the rest only the index's closure counts (fonts the text is set in not seen)")
 extra = [len(p["packs"] - p["closure"]) for p in P if p["built"].startswith("ok")]
-if extra: print(f"packs a build read beyond the index's closure: median {sorted(extra)[len(extra)//2]}, mean {sum(extra)/len(extra):.1f} (fonts, mostly)")
+less = [len(p["closure"] - p["packs"]) for p in P if p["built"].startswith("ok")]
+if extra: print(f"a build against the closure of its names: read {sum(extra)/len(extra):.1f} packs more (fonts, mostly; median {sorted(extra)[len(extra)//2]}), {sum(less)/len(less):.1f} fewer (loaded only under options, or after an error); the build's set is used")
 cov = sum(1 for p in ok if p["packs"] <= bundled)
 cov_cl = sum(1 for p in ok if p["closure"] <= bundled)
 print(f"covered by the bundle by the closure alone (no build): {cov_cl} ({100*cov_cl/N:.1f}%)")
@@ -144,27 +151,59 @@ for p in P:
 print("names not in TeX Live (top): " + ", ".join(f"{k} ({v})" for k, v in sorted(un.items(), key=lambda kv: -kv[1])[:15]))
 
 
+# The best small additions to the bundle: each step the pack that completes the
+# most papers per MB (papers missing only it, given the steps before)
+print("\n## Small additions to the bundle, best first\n")
+print("| + pack | KB | fonts | papers it completes | covered after (of the buildable) | added MB |")
+print("|---|---|---|---|---|---|")
+S2, tot = set(bundled), 0
+base_cov = sum(1 for p in ok if p["packs"] <= S2)
+for step in range(25):
+    cnt = {}
+    for p in ok:
+        m = p["packs"] - S2
+        if len(m) == 1:
+            x = next(iter(m)); cnt[x] = cnt.get(x, 0) + 1
+    if not cnt: break
+    x = max(cnt, key=lambda k: (cnt[k] / max(size(k), 20000), cnt[k]))
+    S2.add(x); tot += size(x)
+    cov2 = sum(1 for p in ok if p["packs"] <= S2)
+    print(f"| {x.rsplit('-', 1)[0]} | {size(x)/1e3:.0f} | {'yes' if is_font(x) else ''} | {cnt[x]} | {100*cov2/NB:.1f}% | {MB(tot):.2f} |")
+
+
 def greedy(start):
-    """[(MB, papers covered, packs added)] adding each step the cheapest paper (MB of its missing packs)."""
+    """[(MB, papers covered, packs added)]: each step adds what completes the most papers per MB:
+    either the one pack some papers lack alone, or the cheapest paper's missing packs."""
     S = set(start)
     rem = [set(p["packs"]) - S for p in ok]
     cost = [sum(size(x) for x in r) for r in rem]
     inv = {}
     for i, r in enumerate(rem):
         for x in r: inv.setdefault(x, []).append(i)
+    ones = {}
+    for r in rem:
+        if len(r) == 1: x = next(iter(r)); ones[x] = ones.get(x, 0) + 1
     done = [not r for r in rem]
     base = sum(size(x) for x in S)
     cur, curve, order, papers = base, [(MB(base), sum(done), 0)], [], []
+    def add(x):
+        nonlocal cur
+        S.add(x); order.append(x); cur += size(x)
+        for j in inv.get(x, []):
+            if x in rem[j]:
+                if len(rem[j]) == 1: ones[x] -= 1
+                rem[j].discard(x); cost[j] -= size(x)
+                if len(rem[j]) == 1:
+                    y = next(iter(rem[j])); ones[y] = ones.get(y, 0) + 1
+                if not rem[j] and not done[j]:
+                    done[j] = True; papers.append(j)
     while not all(done):
         i = min((j for j in range(len(ok)) if not done[j]), key=lambda j: (cost[j], -len(rem[j])))
-        for x in list(rem[i]):
-            S.add(x); order.append(x); cur += size(x)
-            for j in inv[x]:
-                if x in rem[j]:
-                    rem[j].discard(x); cost[j] -= size(x)
-                    if not rem[j]: done[j] = True
-        done[i] = True
-        papers.append(i)
+        best1 = max((k for k in ones if ones[k] > 0), key=lambda k: ones[k] / max(size(k), 1), default=None)
+        if best1 is not None and ones[best1] / max(size(best1), 1) >= 1 / max(cost[i], 1):
+            add(best1)
+        else:
+            for x in sorted(rem[i]): add(x)
         curve.append((MB(cur), sum(done), len(order)))
     greedy.papers = papers
     return curve, order

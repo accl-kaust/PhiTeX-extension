@@ -102,9 +102,14 @@ def scan(texs, files):
     def take(text, top_level):
         for m in LOAD.finditer(text):
             cls = "lass" in m.group(1)
-            # (a load only if the file is there: \IfFileExists{mtpro2.sty}{\usepackage{mtpro2}}{}, \IfPackageAvailableTF…)
-            if re.search(r"\\(IfFileExists|IfPackageAvailable\w*|IfClassAvailable\w*|ifpackageavailable)\s*\{[^{}]*\}\s*\{[^{}]*$", text[max(0, m.start() - 200):m.start()]):
-                opt.extend(n.strip() for n in m.group(2).split(",") if n.strip())
+            # (a load only if the file is there: \IfFileExists{mtpro2.sty}{…\RequirePackage{mtpro2}}{}, \IfPackageAvailableTF{x}…)
+            win = text[max(0, m.start() - 300):m.start()]
+            # (in a class or package the paper ships: a load inside a definition or an option runs only when that does)
+            if not top_level and re.search(r"\\(def|gdef|edef|newcommand|renewcommand|providecommand|DeclareOption)\b", text[text.rfind("\n", 0, m.start()) + 1:m.start()]):
+                continue
+            names = [n.strip() for n in m.group(2).split(",") if n.strip()]
+            if any(re.search(r"\\(IfFileExists|IfPackageAvailable\w*|IfClassAvailable\w*|ifpackageavailable)\s*\{\s*" + re.escape(n) + r"(\.sty|\.cls)?\s*\}", win) for n in names):
+                opt.extend(names)
                 continue
             for n in m.group(2).split(","):
                 n = n.strip()

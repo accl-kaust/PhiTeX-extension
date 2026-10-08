@@ -107,9 +107,11 @@ def texts(data):
 def cmd_get(out, ids, k, n, gap):
     os.makedirs(os.path.join(out, "src"), exist_ok=True)
     st = os.path.join(out, "status-%d.tsv" % k)
+    # (done by any shard, of this or an earlier split: the split can change between runs)
     done = set()
-    if os.path.exists(st):
-        done = {l.split("\t")[0] for l in open(st)}
+    for f in os.listdir(out):
+        if f.startswith("status-") and f.endswith(".tsv"):
+            done |= {l.split("\t")[0] for l in open(os.path.join(out, f))}
     rows = [l.split("\t") for l in open(ids) if l.strip()]
     mine = [r for i, r in enumerate(rows) if i % n == k and r[0] not in done]
     print("shard %d/%d: %d to fetch" % (k, n, len(mine)), flush=True)

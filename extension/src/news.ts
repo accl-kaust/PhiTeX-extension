@@ -19,6 +19,14 @@ export const SUPPORT: { label: string; href: string } | null = null;
 
 export const NEWS: News[] = [
   {
+    version: "0.5.2",
+    date: "2026-10-08",
+    title: "A smaller download",
+    items: [
+      "The extension is about half the size: the TeX Live packages it used to include now download in the background after install, with the others most papers use.",
+    ],
+  },
+  {
     version: "0.5.1",
     date: "2026-10-08",
     title: "Edits in files inside folders show again",

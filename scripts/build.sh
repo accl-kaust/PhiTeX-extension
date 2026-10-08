@@ -53,7 +53,7 @@ else
   cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
 fi
 # (the full license, shipped in the extension, where its links point)
-# (the Shelf packs most documents load, shipped: data/bundled-packs.txt)
+# (packs/: the list fetched ahead, and any Shelf packs shipped: data/bundled-packs.txt, none now)
 scripts/bundle-packs.sh
 cp LICENSE extension/LICENSE.txt
 cp NOTICE extension/NOTICE.txt

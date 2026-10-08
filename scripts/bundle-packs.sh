@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The Shelf packs the extension ships (data/bundled-packs.txt: the packs of
-# the 100 packages and 15 classes arXiv papers use most, with what they load
-# and their fonts; scripts/bundle-packs.py makes the list from the survey in
-# data/arxiv-*.tsv) into extension/packs/, with list.txt. From a Shelf
+# The Shelf packs the extension ships (data/bundled-packs.txt; empty since
+# 0.5.2: the packs arXiv papers use most are fetched in the background after
+# install, prefetch.ts, data/ahead.txt; scripts/bundle-packs.py still makes a
+# list from the survey in data/arxiv-*.tsv) into extension/packs/, with
+# list.txt, and the list fetched ahead (packs/ahead.txt). From a Shelf
 # checkout's releases (SHELF_RELEASES; default SHELF_REPO/releases, e.g.
 # SHELF_RELEASES=$SHELF_REPO/releases-s3 for a local schema-3 release; the
 # sandbox binds SHELF_REPO read-only), else downloaded from the live Shelf

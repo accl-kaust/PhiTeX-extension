@@ -9,15 +9,16 @@
 // offline and on first run); at most once a day it reads release.json, and
 // a newer release whose schema it reads (3: every file by its texmf path,
 // resolved per engine by `search`, resolve.ts) has its index fetched and
-// kept in IndexedDB with its release.json: the next worker reads those. The
+// kept (the platform's store: IndexedDB, VS Code's global storage) with its
+// release.json: the next worker reads those. The
 // shipped index comes with its release.json (shelf-release.json). `min_extension` and `notice` go to
 // the tabs (an update asked for, a line shown); the extension keeps
 // working either way (its index's packs stay on Shelf).
 //
-// Used by the offscreen document and the workers (the extension's origin,
-// one IndexedDB).
+// Used by the core's host and the workers (corehost.ts, worker.ts: one store).
 
 import { SHELF } from "./shelf.ts";
+import { platform } from "./platform.ts";
 export { older } from "./version.ts";
 
 import type { ReleaseMeta } from "./resolve.ts";
@@ -37,41 +38,20 @@ export interface Release extends ReleaseMeta {
 
 const DAY = 24 * 3600 * 1000;
 
-function meta(): Promise<IDBDatabase> {
-  return new Promise((res, rej) => {
-    const o = indexedDB.open("phitex-release", 1);
-    o.onupgradeneeded = () => o.result.createObjectStore("kv");
-    o.onsuccess = () => res(o.result);
-    o.onerror = () => rej(o.error);
-  });
-}
-
-async function get<T>(k: string): Promise<T | undefined> {
-  const s = (await meta()).transaction("kv", "readonly").objectStore("kv");
-  return new Promise((res, rej) => {
-    const r = s.get(k);
-    r.onsuccess = () => res(r.result as T | undefined);
-    r.onerror = () => rej(r.error);
-  });
-}
-
-async function put(entries: [string, unknown][]): Promise<void> {
-  const t = (await meta()).transaction("kv", "readwrite");
-  for (const [k, v] of entries) t.objectStore("kv").put(v, k);
-  await new Promise<void>((res, rej) => {
-    t.oncomplete = () => res();
-    t.onerror = () => rej(t.error);
-  });
-}
+const KV = "release.kv";
+const get = <T>(k: string) => platform().kv.get<T>(KV, k);
+const put = (entries: [string, unknown][]) => platform().kv.write(entries.map(([k, v]) => [KV, k, v]));
 
 /**
  * The index to use (gzipped TSV) and its release.json: the newest release
- * fetched, else the one shipped (`shipped(name)`: the extension's file).
+ * fetched, else the one shipped (the extension's file).
  */
-export async function indexBytes(shipped: (name: string) => Promise<Response>): Promise<{ gz: ReadableStream; release: string; meta: ReleaseMeta }> {
+export async function indexBytes(): Promise<{ gz: ReadableStream; release: string; meta: ReleaseMeta }> {
+  const shipped = (name: string) => platform().asset(name);
   try {
-    const have = await get<{ release: string; gz: Blob; meta?: ReleaseMeta }>("index");
-    if (have?.meta?.schema === SCHEMA) return { gz: have.gz.stream(), release: have.release, meta: have.meta };
+    // (gz: bytes; an older version kept a Blob)
+    const have = await get<{ release: string; gz: Uint8Array | Blob; meta?: ReleaseMeta }>("index");
+    if (have?.meta?.schema === SCHEMA) return { gz: (have.gz instanceof Blob ? have.gz : new Blob([have.gz as BlobPart])).stream(), release: have.release, meta: have.meta };
   } catch {
     // (no IndexedDB: a private window's limits; the shipped one)
   }
@@ -91,7 +71,7 @@ export async function refresh(force = false): Promise<Release | undefined> {
   if (!force && seen && Date.now() - seen.at < DAY) return seen.r;
   let r: Release;
   try {
-    const res = await fetch(SHELF + "release.json", { cache: "no-cache" });
+    const res = await platform().fetch(SHELF + "release.json", { cache: "no-cache" });
     if (!res.ok) return seen?.r;
     r = (await res.json()) as Release;
   } catch {
@@ -101,15 +81,12 @@ export async function refresh(force = false): Promise<Release | undefined> {
   // (none fetched yet: the shipped one's release, not fetched again)
   const have =
     (await get<{ release: string }>("index").catch(() => undefined))?.release ??
-    (await fetch(chrome.runtime.getURL("shelf-release.json")).then((x) => x.json() as Promise<{ release?: string }>).then((m) => m.release, () => undefined));
+    (await platform().asset("shelf-release.json").then((x) => x.json() as Promise<{ release?: string }>).then((m) => m.release, () => undefined));
   // (schema 3 only: an index of another schema is not this extension's to read)
   if (r.schema === SCHEMA && r.release !== have) {
-    const gz = await fetch(SHELF + r.index).then((x) => (x.ok ? x.blob() : null), () => null);
+    const gz = await platform().fetch(SHELF + r.index).then(async (x) => (x.ok ? new Uint8Array(await x.arrayBuffer()) : null), () => null);
     // (an index is gzip: one that isn't, a 404 page served as 200, is not kept)
-    if (gz && gz.size > 2) {
-      const head = new Uint8Array(await gz.slice(0, 2).arrayBuffer());
-      if (head[0] === 0x1f && head[1] === 0x8b) entries.push(["index", { release: r.release, gz, meta: r }]);
-    }
+    if (gz && gz.length > 2 && gz[0] === 0x1f && gz[1] === 0x8b) entries.push(["index", { release: r.release, gz, meta: r }]);
   }
   await put(entries).catch(() => undefined);
   return r;

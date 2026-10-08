@@ -10,14 +10,16 @@
 // One pack at a time; at most AHEAD_SHARE of the cache's cap, so the packs
 // projects ask for keep room (and the oldest of those, prefetched or not,
 // go first past the cap, packstore.ts). Not on a Save-Data connection, nor
-// with the popup's switch off. Run by the background (install, browser
-// start, and every few hours: a run cut short, the service worker stopped,
-// goes on from where it was, as packs kept are skipped).
+// with the popup's switch off (VS Code's setting). Run by the background
+// (install, browser start, and every few hours: a run cut short, the
+// service worker stopped, goes on from where it was, as packs kept are
+// skipped); in VS Code, by the extension once it is active, as often.
 
 import { formatOf } from "./resolve.ts";
 import { latest } from "./release.ts";
 import { fetchPack, index, shipped } from "./shelf.ts";
 import { allMeta, capBytes, kvGet, kvSet, putPack } from "./packstore.ts";
+import { platform } from "./platform.ts";
 
 const AHEAD_SHARE = 0.8;
 
@@ -35,7 +37,7 @@ export interface Ahead {
 async function names(): Promise<string[]> {
   const r = await latest();
   if (r?.prefetch?.length) return r.prefetch;
-  const t = await fetch(chrome.runtime.getURL("packs/ahead.txt")).then((x) => (x.ok ? x.text() : ""), () => "");
+  const t = await platform().asset("packs/ahead.txt").then((x) => (x.ok ? x.text() : ""), () => "");
   return t.split("\n").filter((l) => l && !l.startsWith("#"));
 }
 
@@ -48,7 +50,7 @@ export function prefetch(tell: (a: Ahead) => void = () => undefined): Promise<vo
 
 async function run(tell: (a: Ahead) => void): Promise<void> {
   if (await kvGet<boolean>("aheadOff").catch(() => false)) return tell({ have: 0, total: 0, bytes: 0, state: "off" });
-  if ((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData) return;
+  if (platform().saveData?.()) return;
   const ix = await index();
   const ids = new Set<string>();
   for (const line of await names()) {

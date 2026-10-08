@@ -1,8 +1,9 @@
 // The toolbar popup: the extension's settings, in chrome.storage.local (the
 // content script follows changes live), and actions on the open Overleaf tab.
 
-import { type PackMeta, DEFAULT_CAP_MB, allMeta, capBytes, clearPacks, evict, kvGet, kvSet } from "./packstore.ts";
-import { type Ahead, setAheadOff } from "./prefetch.ts";
+import "./platform.ts";
+import { type PackMeta, DEFAULT_CAP_MB, allMeta, capBytes, clearPacks, evict, kvGet, kvSet } from "./common/packstore.ts";
+import { type Ahead, setAheadOff } from "./common/prefetch.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const TERMS = 1;

@@ -1,12 +1,12 @@
 {
-  "name": "phitex-overleaf",
+  "name": "phitex-frontends",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "scripts/build.sh",
     "//": "run through scripts/sandbox: scripts/sandbox npm test",
     "test": "node --test test/",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p overleaf"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.10.1",

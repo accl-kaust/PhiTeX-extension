@@ -1,7 +1,8 @@
 // A ZIP reader for Overleaf's project download: stored and deflated
 // entries (DecompressionStream, native), text files only.
 
-const TEXT = /\.(tex|ltx|sty|cls|def|cfg|clo|fd|bib|bbl|bst|bbx|cbx|dbx|lbx|ind|idx|ist|txt|aux|dtx|ins|mf|mp)$/i;
+/** The files read as text (the rest are binary: figures, fonts); VS Code's project reading takes the same. */
+export const TEXT = /\.(tex|ltx|sty|cls|def|cfg|clo|fd|bib|bbl|bst|bbx|cbx|dbx|lbx|ind|idx|ist|txt|aux|dtx|ins|mf|mp)$/i;
 
 async function inflate(b: Uint8Array): Promise<Uint8Array> {
   const s = new Blob([b as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));

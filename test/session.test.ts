@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PreviewSession, diff, type CoreReq, type CoreRes, type EditorHost } from "../extension/src/session.ts";
-import { apply, type Edit } from "../extension/src/edits.ts";
+import { PreviewSession, diff, type CoreReq, type CoreRes, type EditorHost } from "../common/src/session.ts";
+import { apply, type Edit } from "../common/src/edits.ts";
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 

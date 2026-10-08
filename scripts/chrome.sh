@@ -11,5 +11,5 @@ pkill -f -- "--user-data-dir=$profile( |$)" && sleep 2
 # (PHITEX_HEADLESS=1: no window, as in scripts/sandbox, which has no display)
 headless=(); [ -n "${PHITEX_HEADLESS:-}" ] && headless=(--headless=new)
 nohup chromium "${headless[@]}" --user-data-dir="$profile" --remote-debugging-port="$port" --no-first-run \
-  --disable-features=DisableLoadExtensionCommandLineSwitch --load-extension="$PWD/extension" \
+  --disable-features=DisableLoadExtensionCommandLineSwitch --load-extension="$PWD/overleaf" \
   "${1:-http://localhost:8123/project/mock}" > /dev/null 2>&1 &

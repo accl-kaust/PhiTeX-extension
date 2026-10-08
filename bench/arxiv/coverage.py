@@ -6,7 +6,7 @@ smallest pack sets that would cover more (dev only; stdlib).
 
 A paper (data/arxiv-papers.tsv.gz, bench/arxiv/: fetch.py, extract.py,
 papers.py) needs its class, packages and bibliography style, each resolved
-by the extension's rule (src/resolve.ts: the engine's search prefixes in
+by the extension's rule (common/src/resolve.ts: the engine's search prefixes in
 shelf-release.json, then the smallest path) to a file of Shelf's index
 (shelf-index.tsv.gz), which needs its pack and the packs its loading reads
 with that engine (the index's deps column: pdftex or xetex; LuaLaTeX's taken
@@ -18,9 +18,9 @@ unbuildable by any set: such papers are counted apart.
 Covered by a set of packs: every pack a paper needs is in it. Sizes are the
 .pack files' (gzip, what is shipped or downloaded), from SHELF_RELEASES
 (default ~/code/flinner/shelf.PhiTeX.org/releases-s3/tl2026/h), else
-extension/packs/, else a HEAD request to Shelf.
+overleaf/packs/, else a HEAD request to Shelf.
 
-Prints: the share covered by the bundled packs (extension/packs/list.txt);
+Prints: the share covered by the bundled packs (overleaf/packs/list.txt);
 the greedy curve (papers covered against MB, adding each step the paper
 whose missing packs weigh least) from nothing and from the current bundle;
 the sets reaching 90/95/98/99% with their size, font share and closure.
@@ -46,9 +46,9 @@ for l in gzip.open(os.path.join(root, "shelf-index.tsv.gz"), "rt"):
     by_base.setdefault(p[0].rsplit("/", 1)[-1], []).append(p[0])
     pack_paths.setdefault(p[1], []).append(p[0])
 for v in by_base.values(): v.sort()
-have = set(open(os.path.join(root, "extension/texmf/names.txt")).read().split()) | set(open(os.path.join(root, "extension/dist/assets-names.txt")).read().split())
-bundled = set(open(os.path.join(root, "extension/packs/list.txt")).read().split())
-# (src/resolve.ts formatOf: the kpathsea format by extension)
+have = set(open(os.path.join(root, "overleaf/texmf/names.txt")).read().split()) | set(open(os.path.join(root, "overleaf/dist/assets-names.txt")).read().split())
+bundled = set(open(os.path.join(root, "overleaf/packs/list.txt")).read().split())
+# (common/src/resolve.ts formatOf: the kpathsea format by extension)
 FMT = {"tfm": "tfm", "vf": "vf", "pfb": "type1", "pfa": "type1", "enc": "enc", "map": "map", "otf": "opentype", "ttf": "truetype",
        "ttc": "truetype", "bst": "bst", "csf": "bst", "bib": "bib", "ist": "ist", "tec": "misc"}
 
@@ -90,7 +90,7 @@ def needs(names, engine, per=None):
 _size = {}
 def size(pid):
     if pid in _size: return _size[pid]
-    for d in (REL, os.path.join(root, "extension/packs")):
+    for d in (REL, os.path.join(root, "overleaf/packs")):
         f = os.path.join(d, pid + ".pack")
         if os.path.exists(f):
             _size[pid] = os.path.getsize(f); return _size[pid]

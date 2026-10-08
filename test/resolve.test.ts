@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Index, formatOf, shelfEngine } from "../extension/src/resolve.ts";
+import { Index, formatOf, shelfEngine } from "../common/src/resolve.ts";
 
 const tsv = [
   "tex/latex/foo/foo.sty\tfoo-aaaaaaaaaaaa\tbar-aaaaaaaaaaaa\t",

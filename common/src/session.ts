@@ -4,8 +4,9 @@
 //
 // An editor is an EditorHost (Overleaf: the page hook + the ZIP; VS Code:
 // its workspace API), the core is reached through a CoreTransport (a chrome
-// port to the offscreen worker; a Node worker; a sidecar), and the preview
-// is drawn by a PreviewSink (the shadow-DOM panel; a webview).
+// port to the offscreen document's core host; VS Code's, in process:
+// corehost.ts), and the preview is drawn by a PreviewSink (the shadow-DOM
+// panel; in VS Code the same panel in a webview, told over messages).
 
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
 import type { DiffReq } from "./diff.ts";
@@ -413,7 +414,17 @@ export class PreviewSession {
     this.sink.mains?.(Object.keys(this.files).filter((f) => f.endsWith(".tex")), this.main);
     await this.reopen();
     this.host.ready?.();
-    if (this.o.checkEveryMs > 0) setInterval(() => this.debug && this.check(), this.o.checkEveryMs);
+    if (this.o.checkEveryMs > 0) this.checkTimer = setInterval(() => this.debug && this.check(), this.o.checkEveryMs);
+  }
+
+  private checkTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** The session ends (its view closed): its timers stop and it sends nothing more; the core's side is its transport's to close. */
+  stop(): void {
+    clearInterval(this.checkTimer);
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.opened = false;
+    this.paused = true;
   }
 
   /** Files changed outside the editor (e.g. a project reloaded): each diffed in. */

@@ -1,7 +1,8 @@
-import { indexBytes, packUrl } from "./release.ts";
-import { Index } from "./resolve.ts";
 // The PhiTeX core in a dedicated worker: the wasm (wasm32-wasip1) on a
-// minimal WASI shim, one session per client (an Overleaf tab).
+// minimal WASI shim, one session per client (an Overleaf tab, a VS Code
+// preview). Where it runs is the entry point's (overleaf/src/worker.ts: a
+// browser's module worker; vscode/src/worker.ts: a Node worker thread): it
+// starts this with its WorkerHost, the platform set (platform.ts).
 //
 // Threads, later: a wasm32-wasip1-threads build imports its memory (shared)
 // and `wasi.thread-spawn`; this worker would then create the
@@ -10,6 +11,26 @@ import { Index } from "./resolve.ts";
 // context: why this worker is started from the offscreen document (an
 // extension page, isolated by the manifest's COOP/COEP) and never from the
 // Overleaf page.
+
+import { indexBytes } from "./release.ts";
+import { Index } from "./resolve.ts";
+import { platform } from "./platform.ts";
+
+/** What the worker needs of its thread. */
+export interface WorkerHost {
+  /** The worker's name ("draw": the draw worker). */
+  name: string;
+  post(m: unknown, transfer?: ArrayBuffer[]): void;
+  listen(f: (r: Req) => void): void;
+  /**
+   * A file's bytes, synchronously (the core waits, mid-build): one of the
+   * extension's own (`asset`, its path from the root), or a Shelf pack by
+   * id; null if it could not be had.
+   */
+  readSync(what: { asset: string } | { pack: string }): Uint8Array | null;
+}
+
+let host: WorkerHost;
 
 export type Req =
   /**
@@ -96,11 +117,11 @@ class Exit extends Error {}
  * its texmf path, per the session's engine and the file's kpathsea format
  * (resolve.ts, release.json's `search`), then its pack and the packs its
  * loading reads (the engine's deps column) fetched there and then (a
- * synchronous request, as a worker may make), so the job never stops at a
- * file TeX Live has. The core keeps files by path, and each name's path,
- * so it asks again for neither. The browser's cache keeps the packs
- * (Shelf's are immutable). The extension's bundled texmf/ files (flat, by
- * name) go as a pack of one.
+ * synchronous read, WorkerHost.readSync), so the job never stops at a file
+ * TeX Live has. The core keeps files by path, and each name's path, so it
+ * asks again for neither. The browser's HTTP cache keeps the packs (Shelf's
+ * are immutable); VS Code's, its package cache (packstore.ts). The
+ * extension's bundled texmf/ files (flat, by name) go as a pack of one.
  */
 let shelfIndex: Index | undefined;
 let bundledNames: Set<string> | undefined;
@@ -112,11 +133,11 @@ let fetched: Uint8Array | undefined;
 async function loadShelf(): Promise<void> {
   if (shelfIndex) return;
   // (Shelf's newest release this extension has, else its own copy: release.ts)
-  const { gz, meta } = await indexBytes((n) => fetch(new URL("../" + n, import.meta.url)));
+  const { gz, meta } = await indexBytes();
   const tsv = await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text();
-  const names = await (await fetch(new URL("../texmf/names.txt", import.meta.url))).text();
+  const names = await (await platform().asset("texmf/names.txt")).text();
   bundledNames = new Set(names.split("\n").filter(Boolean));
-  const packs = await fetch(new URL("../packs/list.txt", import.meta.url)).then((r) => (r.ok ? r.text() : ""), () => "");
+  const packs = await platform().asset("packs/list.txt").then((r) => (r.ok ? r.text() : ""), () => "");
   bundledPacks = new Set(packs.split("\n").filter(Boolean));
   shelfIndex = new Index(tsv, meta);
 }
@@ -130,18 +151,6 @@ function resolveName(engine: string, format: string, name: string): string | nul
   const p = shelfIndex?.resolve(name, format, engine) ?? null;
   if (!name.includes("/") && bundledNames?.has(name) && !(p && /^tex\/(xe|lua)(la)?tex\//.test(p))) return name;
   return p;
-}
-
-function getSync(url: string): Uint8Array | null {
-  const x = new XMLHttpRequest();
-  x.open("GET", url, false);
-  x.responseType = "arraybuffer";
-  try {
-    x.send();
-  } catch {
-    return null;
-  }
-  return x.status === 200 ? new Uint8Array(x.response as ArrayBuffer) : null;
 }
 
 /** `u32 n, (u32 len, bytes) × n`, little-endian. */
@@ -178,13 +187,13 @@ export function usesMinted(files: Record<string, string>): boolean {
 function loadMinted(): Promise<void> {
   mintedLoading ??= (async () => {
     const t0 = performance.now();
-    const at = (p: string) => new URL(p, import.meta.url).href;
-    const { loadPyodide } = await import(/* @vite-ignore */ at("pyodide/pyodide.mjs"));
-    const { createMintedRunner } = await import(/* @vite-ignore */ at("minted/runner.mjs"));
-    const names = (await (await fetch(at("../minted/wheels.txt"))).text()).split("\n").filter(Boolean);
-    const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await fetch(at("../minted/" + n + ".data"))).arrayBuffer())]));
+    const at = (p: string) => platform().assetUrl(p);
+    const { loadPyodide } = await import(/* @vite-ignore */ at("dist/pyodide/pyodide.mjs"));
+    const { createMintedRunner } = await import(/* @vite-ignore */ at("dist/minted/runner.mjs"));
+    const names = (await (await platform().asset("minted/wheels.txt")).text()).split("\n").filter(Boolean);
+    const wheels = await Promise.all(names.map(async (n) => [n, new Uint8Array(await (await platform().asset("minted/" + n + ".data")).arrayBuffer())]));
     // (stdlib and wheels named .data: Edge's store refuses archives in a package)
-    minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("pyodide/"), stdLibURL: at("pyodide/python_stdlib.data") }, wheels });
+    minted = await createMintedRunner({ loadPyodide, pyodideOptions: { indexURL: at("dist/pyodide/"), stdLibURL: at("dist/pyodide/python_stdlib.data") }, wheels });
     core.ph_set_system?.(1);
     mintedStats.load_ms = Math.round(performance.now() - t0);
   })();
@@ -257,7 +266,7 @@ function shelfImports(mem: () => WebAssembly.Memory) {
       const [engine, name] = str(ptr, len).split("\t");
       const parts: Uint8Array[] = [];
       if (!name.includes("/") && bundledNames?.has(name)) {
-        const b = getSync(new URL("../texmf/" + name, import.meta.url).href);
+        const b = host.readSync({ asset: "texmf/" + name });
         if (b) {
           // (a pack of one file: its count 1, then the name and the bytes, each with its length)
           const one = framed([enc.encode(name), b]);
@@ -277,14 +286,14 @@ function shelfImports(mem: () => WebAssembly.Memory) {
           // few ms, it is not, and the tab's card said "Fetching LaTeX
           // packages" on every open; said after, as files arriving)
           const t = performance.now();
-          const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));
-          if (!here && performance.now() - t > 40) (self as unknown as Worker).postMessage({ fetching: id, name });
+          const b = host.readSync(here ? { asset: `packs/${id}.pack` } : { pack: id });
+          if (!here && performance.now() - t > 40) host.post({ fetching: id, name });
           if (b && b[0] === 0x1f && b[1] === 0x8b) {
             parts.push(b);
             given?.add(id);
           }
           // (a pack that did not come: said, not taken for fetched)
-          else (self as unknown as Worker).postMessage({ fetching: id, name, failed: true });
+          else host.post({ fetching: id, name, failed: true });
         }
       }
       if (!parts.length) return 0;
@@ -385,7 +394,7 @@ let assets: Promise<Uint8Array> | undefined;
 
 /** The partex core's assets (the format, the fonts' metrics), fetched and gunzipped once. */
 const loadAssets = () =>
-  (assets ??= fetch(new URL("assets.bin.gzdata", import.meta.url)).then(async (r) => {
+  (assets ??= platform().asset("dist/assets.bin.gzdata").then(async (r) => {
     if (!r.ok) throw new Error(`assets: ${r.status}`);
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));
@@ -401,7 +410,7 @@ let xeCore: Core | undefined;
  */
 async function loadXe(): Promise<void> {
   if (xeCore === core || !core.ph_assets) return;
-  const a = await (xeAssets ??= fetch(new URL("assets-xelatex.bin.gzdata", import.meta.url)).then(async (r) => {
+  const a = await (xeAssets ??= platform().asset("dist/assets-xelatex.bin.gzdata").then(async (r) => {
     if (!r.ok) throw new Error(`xelatex assets: ${r.status}`);
     return new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   }));
@@ -421,13 +430,13 @@ const xetexClients = new Set<string>();
  * draws pages from the PDF the build worker links, so pages draw while a
  * build, or readying the next one, runs there.
  */
-const DRAW = (self as unknown as { name?: string }).name === "draw";
+let DRAW = false;
 
 async function load(): Promise<void> {
   // (the compile, Shelf's index and the assets at once: none waits on another)
   const shelf = DRAW ? undefined : loadShelf().catch(() => undefined);
   if (!DRAW) loadAssets().catch(() => undefined);
-  module ??= await WebAssembly.compileStreaming(fetch(new URL("core.wasm", import.meta.url)));
+  module ??= await WebAssembly.compileStreaming(platform().asset("dist/core.wasm"));
   let memory: WebAssembly.Memory | undefined;
   await shelf;
   const inst = await WebAssembly.instantiate(module, {
@@ -617,7 +626,7 @@ function handle(r: Req): Res {
   }
 }
 
-const ready = load();
+let ready: Promise<void>;
 
 /**
  * PhiTeX's PNGs are stored, not deflated (~0.9 MB a page at 96 dpi), and a
@@ -653,7 +662,7 @@ function shipFor(client: string): void {
   shipped.set(client, key);
   core.ph_pdf(h);
   const pdf = outBytes();
-  if (pdf.length) (self as unknown as Worker).postMessage({ drawPdf: true, client, pdf }, [pdf.buffer]);
+  if (pdf.length) host.post({ drawPdf: true, client, pdf }, [pdf.buffer as ArrayBuffer]);
 }
 
 // ---- the draw worker ----
@@ -754,8 +763,7 @@ function panicText(): string {
  */
 let idleTrap: string | undefined;
 
-self.onmessage = async (ev: MessageEvent<Req>) => {
-  const r = ev.data;
+async function onRequest(r: Req): Promise<void> {
   let res: Res;
   if (!DRAW && idleTrap) {
     await ready;
@@ -765,7 +773,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     packsGiven.clear();
     shipped.clear();
     await load().catch(() => undefined);
-    (self as unknown as Worker).postMessage({ id: r.id, ok: false, error: `core trapped: ${why}` } as Res);
+    host.post({ id: r.id, ok: false, error: `core trapped: ${why}` } as Res);
     return;
   }
   if (DRAW) {
@@ -775,7 +783,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     } catch (e) {
       res = { id: r.id, ok: false, error: `draw worker: ${e}` };
     }
-    (self as unknown as Worker).postMessage(res);
+    host.post(res);
     return;
   }
   try {
@@ -813,26 +821,34 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }
   const transfer = [res.png?.buffer, res.pdf?.buffer].filter((b): b is ArrayBuffer => !!b);
-  (self as unknown as Worker).postMessage(res, transfer);
+  host.post(res, transfer);
   // (after the reply: the engine readied for its first rebuild, so the
   // first keystroke after a cold build doesn't pay it; a message arriving
   // meanwhile waits that long, once per cold build)
   setTimeout(() => {
     try {
       // (readying the next rebuild: the tab says so, not "Typesetting", while it runs)
-      (self as unknown as Worker).postMessage({ preparing: true });
+      host.post({ preparing: true });
       const did = core?.ph_idle?.() ?? 0;
-      (self as unknown as Worker).postMessage({ preparing: false });
+      host.post({ preparing: false });
       // (the idle work changed the output, the trips that settle references
       // after one-trip keystrokes: the drawer gets the PDF, the tabs lay out again)
       if (did) {
         for (const c of sessions.keys()) shipFor(c);
-        (self as unknown as Worker).postMessage({ settled: true });
+        host.post({ settled: true });
       }
     } catch (e) {
-      (self as unknown as Worker).postMessage({ preparing: false });
+      host.post({ preparing: false });
       // (told to the next request: see idleTrap)
       idleTrap = `${e} (readying the rebuilds)${panicText()}`;
     }
   }, 50);
-};
+}
+
+/** Run the worker on `h`: the core loads now, requests are served in order as they come. */
+export function startWorker(h: WorkerHost): void {
+  host = h;
+  DRAW = h.name === "draw";
+  ready = load();
+  h.listen((r) => void onRequest(r));
+}

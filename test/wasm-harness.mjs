@@ -1,7 +1,7 @@
 // The built core.wasm under node:wasi, through the same framing as the worker.
 import { WASI } from "node:wasi";
 import fs from "node:fs";
-export async function core(path = new URL("../extension/dist/core.wasm", import.meta.url)) {
+export async function core(path = new URL("../overleaf/dist/core.wasm", import.meta.url)) {
   const wasi = new WASI({ version: "preview1", args: [], env: {} });
   const { instance } = await WebAssembly.instantiate(fs.readFileSync(path), { wasi_snapshot_preview1: wasi.wasiImport });
   wasi.initialize(instance);

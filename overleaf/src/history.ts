@@ -5,7 +5,7 @@
 // editor's text, or two past ones). Nothing leaves the browser but these
 // requests to Overleaf itself.
 
-import { readZip } from "./zip.ts";
+import { readZip } from "./common/zip.ts";
 
 /** One version a picker lists: a label (named by its author) or an update (a burst of edits). */
 export interface Version {

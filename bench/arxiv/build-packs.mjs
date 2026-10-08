@@ -8,7 +8,7 @@
 //   node bench/arxiv/build-packs.mjs EXT_DIR PACKS_DIR SRC(dir|.tar.gz) MAIN ENGINE [FUEL]
 //
 // EXT_DIR: the built extension (dist/core.wasm, dist/assets*.gzdata, texmf/,
-// shelf-index.tsv.gz… as in extension/, or a copy). Prints one JSON line:
+// shelf-index.tsv.gz… as in overleaf/, or a copy). Prints one JSON line:
 // { ok, ms, pages, error, packs: [ids, in the order asked], unresolved: [names] }.
 // Figures are not in the sources (the survey keeps text only): a missing
 // figure is an error the build goes on past, as Overleaf's nonstop mode does.
@@ -23,7 +23,7 @@ const FUEL = +(fuelArg ?? 400_000_000);
 const enc = new TextEncoder(), dec = new TextDecoder();
 const t0 = performance.now();
 
-// ---- the index and the rule (src/resolve.ts) ----
+// ---- the index and the rule (common/src/resolve.ts) ----
 const meta = JSON.parse(fs.readFileSync(path.join(extDir, "shelf-release.json"), "utf8"));
 const indexFile = fs.existsSync(path.join(extDir, "shelf-index.tsv.gz")) ? path.join(extDir, "shelf-index.tsv.gz") : path.join(extDir, "shelf-index.tsv.gzdata");
 const rows = new Map(), byBase = new Map();

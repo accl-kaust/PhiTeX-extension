@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareVersions, unseen, type News } from "../extension/src/news.ts";
+import { compareVersions, unseen, type News } from "../overleaf/src/news.ts";
 
 const news: News[] = ["0.3.0", "0.2.1", "0.2.0", "0.1.0"].map((version) => ({ version, date: "", title: version, items: [] }));
 

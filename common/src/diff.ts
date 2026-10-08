@@ -1,7 +1,8 @@
 // PhiTeX's latexdiff (phitex-diff, built as dist/diff.wasm: diff-wasm/):
 // two versions' files in, the marked-up .tex (latexdiff's markup, flattened)
-// and its changes out. Run in the offscreen document (an extension page: wasm
-// allowed), for the compare (diffui.ts). Offsets are UTF-8 bytes.
+// and its changes out. Run in the core's host (corehost.ts: the offscreen
+// document, an extension page where wasm is allowed; VS Code's extension
+// host), for the compare (compare.ts). Offsets are UTF-8 bytes.
 
 export interface DiffLoc {
   file: string;

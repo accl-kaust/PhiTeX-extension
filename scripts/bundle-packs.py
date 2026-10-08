@@ -8,7 +8,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 N, M = (int(a) for a in (sys.argv[1:] + ["100", "15"])[:2])
 idx = {}
-for l in gzip.open(root / "extension/shelf-index.tsv.gz", "rt"):
+for l in gzip.open(root / "shelf-index.tsv.gz", "rt"):
     p = l.rstrip("\n").split("\t")
     if len(p) >= 2:
         idx[p[0]] = [p[1]] + (p[2].split(",") if len(p) > 2 and p[2] else [])

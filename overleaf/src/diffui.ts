@@ -1,35 +1,16 @@
 // Compare with a past version: the toolbar's Compare button (beside the
 // download, Overleaf's own dropdown markup), its menu of versions (the
-// labels, then the history, older on demand: history.ts), and the diff bar
-// over the page (Panel.diffBar) with its keys: d (diff / current), n and
-// Shift+N (next / previous change), Escape (stop). What a diff is made of
-// (the phitex-diff markup, typeset) is the runner's: `start` gets the
-// version picked.
+// labels, then the history, older on demand: history.ts), and the tip that
+// shows it. The diff bar over the page, its state and keys, are
+// common/src/compare.ts's DiffControls; what a diff is made of (the
+// phitex-diff markup, typeset) is the runner's: `start` gets the version
+// picked.
 
-import type { DiffBar, DiffBarActions, DiffLook, Panel } from "./panel.ts";
+import type { Panel } from "./common/panel.ts";
+import { DiffControls, type DiffRunner as Runner } from "./common/compare.ts";
 import { type Version, versions } from "./history.ts";
 
-export interface DiffRunner {
-  /** Diff the version against the editor's text: its changes; `say` while it works, `count` as edits change them. */
-  start(v: Version, say: (busy: string) => void, count: (n: number) => void): Promise<{ changes: number }>;
-  /** Show the diff or the current version. */
-  show(which: "diff" | "current"): void;
-  /** Go to change `k` (1-based). */
-  goto(k: number): void;
-  download(what: "pdf" | "tex"): void;
-  /** The diff's look changed: diffed again with it. */
-  restyle(look: DiffLook): void;
-  stop(): void;
-}
-
-/** latexdiff's own: UNDERLINE, SAFE, xcolor's blue and red. */
-export const LATEXDIFF_LOOK: DiffLook = { markup: "underline", subtype: "safe", add_color: "#0000ff", del_color: "#ff0000" };
-
-/** The diff's look as the user left it (chrome.storage: every project, every device's browser profile). */
-export async function savedLook(): Promise<DiffLook> {
-  const { diffLook } = (await chrome.storage.local.get("diffLook")) as { diffLook?: Partial<DiffLook> };
-  return { ...LATEXDIFF_LOOK, ...diffLook };
-}
+export type DiffRunner = Runner<Version>;
 
 const ago = (t: number) => {
   const s = (Date.now() - t) / 1000;
@@ -161,7 +142,6 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     menu = g.querySelector<HTMLElement>("#phitex-cmpmenu")!;
   let list: Version[] = [];
   let more: number | undefined;
-  let state: DiffBar | null = null;
 
   const item = (v: Version) =>
     `<li><button type="button" class="dropdown-item" data-v="${v.v}" style="display:flex;flex-direction:column;align-items:flex-start;gap:0;white-space:normal">` +
@@ -171,7 +151,7 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     const labels = list.filter((v) => v.label),
       ups = list.filter((v) => !v.label);
     menu.innerHTML =
-      (state ? `<li><button type="button" class="dropdown-item" data-stop="1">✕ Stop comparing</button></li><li><hr class="dropdown-divider"></li>` : "") +
+      (controls.active ? `<li><button type="button" class="dropdown-item" data-stop="1">✕ Stop comparing</button></li><li><hr class="dropdown-divider"></li>` : "") +
       `<li><h6 class="dropdown-header">Compare the current version with…</h6></li>` +
       (labels.length ? `<li><h6 class="dropdown-header">Labels</h6></li>${labels.map(item).join("")}` : "") +
       `<li><h6 class="dropdown-header">History</h6></li>${ups.map(item).join("") || `<li><span class="dropdown-item-text text-muted small">No history yet</span></li>`}` +
@@ -211,84 +191,14 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
   document.addEventListener("click", close);
   compareTip(btn);
 
-  const bar = () => panel.diffBar(state, actions);
-  let lookOpen = false;
-  const closeLook = () => {
-    lookOpen = false;
-    panel.diffSettings(null);
-  };
-  const actions: DiffBarActions = {
-    prev: () => step(-1),
-    next: () => step(1),
-    toggle: () => {
-      if (!state || state.busy) return;
-      state.showing = state.showing === "diff" ? "current" : "diff";
-      run.show(state.showing);
-      bar();
-    },
-    pdf: () => run.download("pdf"),
-    tex: () => run.download("tex"),
-    settings: async () => {
-      if (lookOpen) return closeLook();
-      lookOpen = true;
-      panel.diffSettings(await savedLook(), (l) => {
-        void chrome.storage.local.set({ diffLook: l });
-        run.restyle(l);
-      }, LATEXDIFF_LOOK);
-    },
-    close: () => stop(),
-  };
-  const step = (d: number) => {
-    if (!state || state.busy || !state.changes) return;
-    state.at = ((Math.max(state.at, d > 0 ? 0 : 1) - 1 + d + state.changes) % state.changes) + 1;
-    if (state.showing === "current") actions.toggle!();
-    run.goto(state.at);
-    bar();
-  };
+  const controls = new DiffControls(panel, run);
   const start = async (v: Version) => {
     // (used: the tip never again)
     void chrome.storage.local.set({ cmpUsed: true });
     document.getElementById("phitex-cmptip")?.remove();
-    state = { title: v.title, when: `${ago(v.at)} · v${v.v}`, changes: 0, at: 0, showing: "diff", busy: "Fetching that version…" };
-    bar();
-    try {
-      const r = await run.start(
-        v,
-        (busy) => {
-          if (state) (state.busy = busy), bar();
-        },
-        (n) => {
-          if (!state || state.busy) return;
-          state.changes = n;
-          state.at = Math.min(state.at, n);
-          bar();
-        },
-      );
-      if (!state) return;
-      state.busy = undefined;
-      state.changes = r.changes;
-    } catch (err) {
-      if (!state) return;
-      state.busy = `Couldn't compare: ${(err as Error).message ?? err}`;
-    }
-    bar();
+    await controls.start(v, v.title, `${ago(v.at)} · v${v.v}`);
   };
-  const stop = () => {
-    closeLook();
-    state = null;
-    run.stop();
-    bar();
-  };
+  const stop = () => controls.stop();
   // (keys while comparing: not in the editor or a field)
-  addEventListener("keydown", (e) => {
-    if (!state || e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target as HTMLElement | null;
-    if (t?.closest("input, textarea, [contenteditable=true], .cm-editor")) return;
-    if (e.key === "d" || e.key === "D") actions.toggle!();
-    else if (e.key === "n") step(1);
-    else if (e.key === "N") step(-1);
-    else if (e.key === "Escape") lookOpen ? closeLook() : stop();
-    else return;
-    e.preventDefault();
-  });
+  addEventListener("keydown", (e) => controls.key(e));
 }

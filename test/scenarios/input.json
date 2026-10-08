@@ -1,0 +1,7 @@
+{ "project": "test/scenarios/input", "name": "input",
+  "steps": [ { "idle": 3000 },
+    { "open": "chapter.tex" },
+    { "type": "Typed in the chapter. ", "after": "\\section{Chapter}\n" }, { "idle": 2000 }, { "pdfsave": "a-chapter-typed" },
+    { "open": "main.tex" },
+    { "replace": "Back in the main file.", "with": "Back in main, edited." }, { "idle": 2000 }, { "pdfsave": "b-main-edited" },
+    { "eval": "(async () => JSON.stringify(await globalThis.__phitexSession.check()))()" } ] }

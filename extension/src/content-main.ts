@@ -7,12 +7,12 @@ import type { Edit } from "./edits.ts";
 import { older } from "./version.ts";
 import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost, type PreviewSink } from "./session.ts";
 import { readZip } from "./zip.ts";
-import { type DiffRunner, compareButton } from "./diffui.ts";
+import { type DiffRunner, compareButton, savedLook } from "./diffui.ts";
 import { filesAt } from "./history.ts";
-import type { DiffChange } from "./diff.ts";
+import type { DiffChange, DiffMarkup, DiffSubtype } from "./diff.ts";
 import { charOffset } from "./edits.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
-import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./panel.ts";
+import { Panel, pageFormat, type DiffLook, type PanelPrefs, type Prefs } from "./panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
 import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
 import { cached, DELIVERED } from "./packages.ts";
@@ -287,6 +287,7 @@ const diffRunner: DiffRunner = {
   show: (w) => diffImpl?.show(w),
   goto: (k) => diffImpl?.goto(k),
   download: (w) => diffImpl?.download(w),
+  restyle: (l) => diffImpl?.restyle(l),
   stop: () => diffImpl?.stop(),
 };
 
@@ -1064,26 +1065,31 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
    */
   function compareWith(host: OverleafHost, core: ChromeTransport, opts: ConstructorParameters<typeof PreviewSession>[3]): DiffRunner {
     const base = (session.main ?? "main.tex").replace(/\.tex$/, "").replace(/.*\//, "");
+    let look: DiffLook | undefined;
     const diffOf = async (old: Record<string, string>): Promise<{ tex: string; changes: DiffChange[] }> => {
-      const r = await core.request({ op: "latexdiff", req: { old, new: session.texts(), main: session.main ?? "main.tex" } });
+      look ??= await savedLook();
+      const style = { markup: look.markup as DiffMarkup, subtype: look.subtype as DiffSubtype, add_color: look.add_color, del_color: look.del_color };
+      const r = await core.request({ op: "latexdiff", req: { old, new: session.texts(), main: session.main ?? "main.tex", ...style } });
       if (!r.ok) throw new Error(r.error ?? "latexdiff failed");
       if ("error" in r.json) throw new Error(r.json.error);
       return r.json;
     };
     let again: ReturnType<typeof setTimeout> | undefined;
     let counted: ((n: number) => void) | undefined;
+    /** The compare diffed again (an edit, a new look): the marked-up document's session given the new text. */
+    const rediff = async () => {
+      const c = compare;
+      const d = c && (await diffOf(c.base).catch(() => null));
+      if (!d || compare !== c) return;
+      c.tex = d.tex;
+      c.changes = d.changes;
+      c.session.sync("diff.tex", d.tex);
+      counted?.(d.changes.length);
+    };
     host.onChanges(() => {
       if (!compare) return;
       clearTimeout(again);
-      again = setTimeout(async () => {
-        const c = compare;
-        const d = c && (await diffOf(c.base).catch(() => null));
-        if (!d || compare !== c) return;
-        c.tex = d.tex;
-        c.changes = d.changes;
-        c.session.sync("diff.tex", d.tex);
-        counted?.(d.changes.length);
-      }, 400);
+      again = setTimeout(rediff, 400);
     });
     const save = (bytes: BlobPart, type: string, name: string) => {
       const url = URL.createObjectURL(new Blob([bytes], { type }));
@@ -1141,6 +1147,10 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
         const pdf = await compare.session.pdf();
         if (pdf?.length) save(pdf as BlobPart, "application/pdf", `${base}-diff.pdf`);
         else panel.msg("No diff PDF yet: the marked-up document's build stopped (see ⓘ diagnostics).", true);
+      },
+      restyle(l) {
+        look = l;
+        void rediff();
       },
       stop,
     };

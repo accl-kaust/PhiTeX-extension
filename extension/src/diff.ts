@@ -20,12 +20,23 @@ export interface DiffChange {
   out: [number, number];
 }
 
-export interface DiffReq {
+/** latexdiff's --type: how a change is marked. */
+export type DiffMarkup = "underline" | "ctraditional" | "traditional" | "cfont" | "fontstrike" | "bold" | "changebar" | "culinechbar" | "invisible";
+/** latexdiff's --subtype: what else marks it. */
+export type DiffSubtype = "safe" | "color" | "marker";
+
+/** How the diff looks: latexdiff's type and subtype, and the colors (an xcolor name or #RRGGBB). */
+export interface DiffStyle {
+  markup?: DiffMarkup;
+  subtype?: DiffSubtype;
+  add_color?: string;
+  del_color?: string;
+}
+
+export interface DiffReq extends DiffStyle {
   old: Record<string, string>;
   new: Record<string, string>;
   main: string;
-  markup?: "underline" | "cfont";
-  subtype?: "safe" | "color";
 }
 
 export type DiffReply = { tex: string; changes: DiffChange[] } | { error: string };

@@ -6,7 +6,7 @@
 // (the phitex-diff markup, typeset) is the runner's: `start` gets the
 // version picked.
 
-import type { DiffBar, DiffBarActions, Panel } from "./panel.ts";
+import type { DiffBar, DiffBarActions, DiffLook, Panel } from "./panel.ts";
 import { type Version, versions } from "./history.ts";
 
 export interface DiffRunner {
@@ -17,7 +17,18 @@ export interface DiffRunner {
   /** Go to change `k` (1-based). */
   goto(k: number): void;
   download(what: "pdf" | "tex"): void;
+  /** The diff's look changed: diffed again with it. */
+  restyle(look: DiffLook): void;
   stop(): void;
+}
+
+/** latexdiff's own: UNDERLINE, SAFE, xcolor's blue and red. */
+export const LATEXDIFF_LOOK: DiffLook = { markup: "underline", subtype: "safe", add_color: "#0000ff", del_color: "#ff0000" };
+
+/** The diff's look as the user left it (chrome.storage: every project, every device's browser profile). */
+export async function savedLook(): Promise<DiffLook> {
+  const { diffLook } = (await chrome.storage.local.get("diffLook")) as { diffLook?: Partial<DiffLook> };
+  return { ...LATEXDIFF_LOOK, ...diffLook };
 }
 
 const ago = (t: number) => {
@@ -201,6 +212,11 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
   compareTip(btn);
 
   const bar = () => panel.diffBar(state, actions);
+  let lookOpen = false;
+  const closeLook = () => {
+    lookOpen = false;
+    panel.diffSettings(null);
+  };
   const actions: DiffBarActions = {
     prev: () => step(-1),
     next: () => step(1),
@@ -212,6 +228,14 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     },
     pdf: () => run.download("pdf"),
     tex: () => run.download("tex"),
+    settings: async () => {
+      if (lookOpen) return closeLook();
+      lookOpen = true;
+      panel.diffSettings(await savedLook(), (l) => {
+        void chrome.storage.local.set({ diffLook: l });
+        run.restyle(l);
+      }, LATEXDIFF_LOOK);
+    },
     close: () => stop(),
   };
   const step = (d: number) => {
@@ -250,6 +274,7 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     bar();
   };
   const stop = () => {
+    closeLook();
     state = null;
     run.stop();
     bar();
@@ -262,7 +287,7 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     if (e.key === "d" || e.key === "D") actions.toggle!();
     else if (e.key === "n") step(1);
     else if (e.key === "N") step(-1);
-    else if (e.key === "Escape") stop();
+    else if (e.key === "Escape") lookOpen ? closeLook() : stop();
     else return;
     e.preventDefault();
   });

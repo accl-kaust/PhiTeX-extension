@@ -19,6 +19,16 @@ export const SUPPORT: { label: string; href: string } | null = null;
 
 export const NEWS: News[] = [
   {
+    version: "0.5.1",
+    date: "2026-10-08",
+    title: "Edits in files inside folders show again",
+    items: [
+      "Editing a file inside a folder (sections/intro.tex, …) updates the ⚡ preview again; before, the edit was built but the page never changed.",
+      "Clicking a folder in the file tree no longer stops the open file's edits from reaching the preview.",
+      "Jumping from the preview to a file in a closed folder opens the folder first.",
+    ],
+  },
+  {
     version: "0.5.0",
     date: "2026-10-08",
     title: "Faster start, packages kept in your browser",

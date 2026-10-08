@@ -35,13 +35,28 @@
       if (uniq.length) return uniq.join("/");
     }
     const sel = document.querySelector('.file-tree-list [role="treeitem"][aria-selected="true"], .file-tree [role="treeitem"][aria-selected="true"]');
-    if (!sel) return null;
+    // (a folder selected, clicked open or shut: not the file in the editor)
+    if (!sel || sel.querySelector(":scope > .entity")?.getAttribute("data-file-type") === "folder") return null;
+    return pathOf(sel) || null;
+  }
+
+  const TREE = '.file-tree-list [role="treeitem"], .file-tree [role="treeitem"]';
+
+  /**
+   * A tree item's path: its name under its folders'. A folder's children
+   * are in the list right after its item (Overleaf now), or inside
+   * it (before): a file in a folder named by its name alone was a file the
+   * project doesn't have, and its edits went nowhere.
+   */
+  function pathOf(li: Element): string {
     const names: string[] = [];
-    for (let li: Element | null = sel; li; li = li.parentElement?.closest('[role="treeitem"]') ?? null) {
-      const n = li.getAttribute("aria-label") ?? li.querySelector(".item-name-button span, .item-name")?.textContent;
+    for (let e: Element | null = li; e; ) {
+      const n = e.getAttribute("aria-label") ?? e.querySelector(".item-name-button span, .item-name")?.textContent;
       if (n) names.unshift(n.trim());
+      const prev = e.parentElement?.closest("ul")?.previousElementSibling;
+      e = prev?.matches('[role="treeitem"]') ? prev : (e.parentElement?.closest('[role="treeitem"]') ?? null);
     }
-    return names.join("/") || null;
+    return names.join("/");
   }
 
   function changesOf(tr: any): number[][] | null {
@@ -108,7 +123,11 @@
   setInterval(() => {
     const v = findView();
     if (v && v !== view) hook(v);
-    else if (v && file !== null && openFile() !== file) identify();
+    else if (v && file !== null) {
+      // (no name now, a folder selected: the open file is still the one it was)
+      const now = openFile();
+      if (now !== null && now !== file) identify();
+    }
   }, 500);
 
   /** Put the cursor at the start of `line` (1-based) and scroll to it. */
@@ -119,21 +138,28 @@
     view.focus();
   }
 
-  /** Open `path` in the editor (its file tree item), then `then`. */
+  /** Open `path` in the editor (its file tree item, its folders opened first), then `then`. */
   function openThen(path: string, then: () => void): void {
-    const name = path.split("/").at(-1)!;
-    const items = [...document.querySelectorAll('.file-tree-list [role="treeitem"], .file-tree [role="treeitem"]')];
-    const item = items.find((li) => li.getAttribute("aria-label") === name);
-    const target = item?.querySelector<HTMLElement>(".entity, .item-name-button, .entity-name") ?? (item as HTMLElement | undefined);
-    if (!target) return;
-    target.click();
-    let tries = 0;
-    const wait = setInterval(() => {
-      if (file === path || ++tries > 30) {
-        clearInterval(wait);
-        if (file === path) then();
-      }
-    }, 100);
+    const items = () => [...document.querySelectorAll(TREE)];
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const dir = items().find((li) => pathOf(li) === parts.slice(0, i).join("/"));
+      if (dir?.getAttribute("aria-expanded") === "false") dir.querySelector<HTMLElement>(".folder-expand-collapse-button")?.click();
+    }
+    // (a folder opened: its items drawn on the next frame)
+    setTimeout(() => {
+      const item = items().find((li) => pathOf(li) === path);
+      const target = item?.querySelector<HTMLElement>(".entity, .item-name-button, .entity-name") ?? (item as HTMLElement | undefined);
+      if (!target) return;
+      target.click();
+      let tries = 0;
+      const wait = setInterval(() => {
+        if (file === path || ++tries > 30) {
+          clearInterval(wait);
+          if (file === path) then();
+        }
+      }, 100);
+    }, parts.length > 1 ? 150 : 0);
   }
 
   /** Select [from, to) of the open file (UTF-16 offsets) and scroll to it. */

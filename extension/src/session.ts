@@ -353,17 +353,34 @@ export class PreviewSession {
     };
     this.sink = sink;
     this.o = { ...defaults, ...opts };
-    host.onOpen((f, t) => {
+    host.onOpen((f0, t) => {
+      const f = this.known(f0);
       this.open = f;
       this.sync(f, t);
       this.status();
     });
-    host.onChanges((f, es) => this.queue(f, es));
+    host.onChanges((f, es) => this.queue(this.known(f), es));
     core.onLost?.(() => {
       this.opened = false;
       this.sink.error("core lost; reopening");
       this.reopen();
     });
+  }
+
+  /**
+   * The project's file the editor's name is: itself, else the one file
+   * whose path ends with it (a name read from Overleaf's page without its
+   * folders: edits to a new, empty file the build never reads, the page
+   * never changing while the chip said they were built).
+   */
+  private known(f: string): string {
+    if (f in this.files) return f;
+    const like = Object.keys(this.files).filter((p) => p.endsWith("/" + f));
+    if (like.length === 1) {
+      this.tr("file: named by its path", { from: f, to: like[0] });
+      return like[0];
+    }
+    return f;
   }
 
   /** The pages' request: 0 their draw lists (vector), -1 the PDF, drawn in the tab by pdf.js. */

@@ -4,10 +4,12 @@
 // encoding one cost ~1 s a page in the offscreen document, and the canvas is
 // swapped in only once drawn, so a redraw never blanks the page.
 
+import { platform } from "./platform.ts";
+
 let lib: Promise<any> | undefined;
 const pdfjs = () =>
   (lib ??= (async () => {
-    const base = chrome.runtime.getURL("dist/pdfjs/");
+    const base = platform().assetUrl("dist/pdfjs/");
     // (pdf.js's worker code on this thread: its "fake worker", taken from here)
     (globalThis as any).pdfjsWorker = await import(base + "pdf.worker.min.mjs");
     const m = await import(base + "pdf.min.mjs");

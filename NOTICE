@@ -16,11 +16,11 @@ Overleaf, and "Overleaf" is used only to say which site it works with.
 
 Third-party material:
 
-- extension/dist/core.wasm: the PhiTeX engine (partex: a pdfTeX-compatible
+- dist/core.wasm: the PhiTeX engine (partex: a pdfTeX-compatible
   engine, and PhiTeX's SSA crates), by the copyright holder above, and the
   Rust crates miniz_oxide (MIT OR Zlib OR Apache-2.0) and adler2 (0BSD OR
   MIT OR Apache-2.0).
-- extension/dist/assets.bin.gz, read by the core:
+- dist/assets.bin.gzdata, read by the core:
   - pdflatex.fmt: a LaTeX format built from TeX Live 2026's LaTeX kernel
     (LaTeX Project Public License 1.3c) and Knuth's and TeX Live's
     hyphenation patterns, under their own terms.
@@ -36,20 +36,20 @@ Third-party material:
     exception).
   - TeX Live 2026's LaTeX packages that common documents read (see texmf/
     below), unmodified.
-- extension/fonts/*.otf: Latin Modern and Latin Modern Math (GUST e-foundry),
+- fonts/*.otf (common/fonts/): Latin Modern and Latin Modern Math (GUST e-foundry),
   GUST Font License, unmodified.
-- extension/dist/pdfjs/: pdf.js (pdfjs-dist 5.7.284), Copyright Mozilla
+- dist/pdfjs/: pdf.js (pdfjs-dist 5.7.284), Copyright Mozilla
   Foundation, Apache-2.0 (its LICENSE ships beside it).
-- extension/src/panel.ts: approximateFraction, ported from pdf.js
+- common/src/panel.ts: approximateFraction, ported from pdf.js
   (pdfjs-dist, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
   Apache-2.0.
-- extension/src/panel.ts: icon paths from Google's Material Icons,
+- common/src/panel.ts: icon paths from Google's Material Icons,
   Apache-2.0.
 - The toolbar and popover markup the extension adds to Overleaf's page
   follows Overleaf's own (overleaf/overleaf, services/web/frontend),
   AGPL-3.0.
 
-texmf/ (shipped as extension/texmf/): LaTeX packages from TeX Live 2026
+texmf/ (shipped as texmf/ in each package): LaTeX packages from TeX Live 2026
 (the LaTeX kernel and classes, l3kernel, graphics, tools, amsmath, hyperref,
 ...; texmf/MANIFEST.tsv lists each package and revision), unmodified, each
 under its own license as stated in its files, mostly the LaTeX Project

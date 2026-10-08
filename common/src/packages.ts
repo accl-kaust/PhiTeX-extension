@@ -2,10 +2,10 @@
 // (`\usepackage{amsmath}`'s amsmath.sty, a class, a .def), found elsewhere
 // and handed to the core as files. The core reports them (status JSON's
 // `missing`); the session asks a PackageSource and `set_file`s what it
-// finds. The source is the offscreen document's (shelf.ts: the extension's
-// texmf/, IndexedDB, then Shelf), asked over the core's port: a content
-// script's fetch would be Overleaf's origin (CORS, its CSP). Only what a
-// build reads is fetched. (A .sty is TeX PhiTeX runs, not the extension's
+// finds. The source is the core host's (corehost.ts, shelf.ts: the
+// extension's texmf/, the package cache, then Shelf), asked over the core's
+// transport (`hostPackages`): in Overleaf a content script's fetch would be
+// Overleaf's origin (CORS, its CSP). Only what a build reads is fetched. (A .sty is TeX PhiTeX runs, not the extension's
 // JavaScript: the Web Store's remote-code rule is about the latter.)
 
 /** Where packages come from. */
@@ -21,6 +21,22 @@ export interface PackageSource {
  * handed to the core itself: fetched, but no text for the session to keep.
  */
 export const DELIVERED = "\u0000delivered";
+
+/**
+ * Packages as the core's host resolves them (its `package` op), asked over
+ * `core`, each name once (`cached`): a failure is an error, shown with why;
+ * null is "not in TeX Live".
+ */
+export function hostPackages(core: { request(r: { op: "package"; name: string; engine?: string }): Promise<{ ok: boolean; error?: string; delivered?: boolean; text?: string | null }> }): PackageSource {
+  return cached({
+    label: "TeX Live 2026",
+    resolve: (name, engine) =>
+      core.request({ op: "package", name, engine }).then((r) => {
+        if (!r.ok) throw new Error(r.error ?? "package download failed");
+        return r.delivered ? DELIVERED : (r.text ?? null);
+      }),
+  });
+}
 
 /** No packages (PhiTeX runs no LaTeX yet). */
 export const noPackages: PackageSource = { label: "none", resolve: async () => null };

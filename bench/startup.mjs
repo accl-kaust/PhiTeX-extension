@@ -40,7 +40,7 @@ const profile = path.join(root, "target/startup/profiles", tag);
 const out = path.join(root, "target/startup", tag);
 fs.mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"), "utf8")).version;
+const version = JSON.parse(fs.readFileSync(path.join(root, "overleaf/manifest.json"), "utf8")).version;
 
 // ---- what the harness puts in the extension's contexts (before their scripts) ----
 const WORKER_PATCH = `(() => {
@@ -168,7 +168,7 @@ function onMessage(m) {
 let chrome, mock;
 async function launch() {
   chrome = spawn("chromium", ["--headless=new", `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`, "--no-first-run", "--no-default-browser-check",
-    "--disable-features=DisableLoadExtensionCommandLineSwitch", `--load-extension=${path.join(root, "extension")}`, "about:blank"], { stdio: "ignore", detached: true });
+    "--disable-features=DisableLoadExtensionCommandLineSwitch", `--load-extension=${path.join(root, "overleaf")}`, "about:blank"], { stdio: "ignore", detached: true });
   let v;
   for (let i = 0; i < 80 && !v; i++) {
     await sleep(150);

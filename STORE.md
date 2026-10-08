@@ -118,5 +118,5 @@ repository) and paste its URL.
 Each upload is reviewed again. Code-only updates within the same
 permissions are the quick kind. A new permission or host makes Chrome ask
 existing users again, and disables the extension until they accept. Bump
-`extension/manifest.base.json`'s version and add an entry to
-`extension/src/news.ts`, which users see once after updating.
+`overleaf/manifest.base.json`'s version and add an entry to
+`overleaf/src/news.ts`, which users see once after updating.

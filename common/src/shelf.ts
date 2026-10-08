@@ -1,10 +1,11 @@
-// Where packages come from, in the offscreen document (the extension's
-// origin: no Overleaf CSP, and Shelf allows any origin, so no host
-// permission). A name is looked up in order:
+// Where packages come from, in the core's host (corehost.ts: the offscreen
+// document, the extension's origin: no Overleaf CSP, and Shelf allows any
+// origin, so no host permission; or VS Code's extension host). A name is
+// looked up in order:
 //
 //   1. the extension's own texmf/ (the LaTeX kernel) and packs/ (the packs
 //      of the packages arXiv papers use most);
-//   2. the packs kept in this browser (packstore.ts: fetched before, by a
+//   2. the packs kept on this machine (packstore.ts: fetched before, by a
 //      project or ahead of one by prefetch.ts; no request);
 //   3. Shelf (shelf-phitex.pages.dev): TeX Live's files in packs, one per
 //      package (or per part of a big one), fetched whole: a .sty comes with
@@ -14,7 +15,7 @@
 // is in an index the extension holds (shipped, and newer releases of it
 // fetched daily, release.ts; the rule is resolve.ts's, the worker's too):
 // no request to learn it, and a name the index lacks (a project's own file
-// it doesn't have) never leaves the browser.
+// it doesn't have) never leaves the machine.
 
 // (Cloudflare Pages' own address until there is a domain: shelf.phitex.org)
 export const SHELF = "https://shelf-phitex.pages.dev/tl2026/";
@@ -22,6 +23,7 @@ export const SHELF = "https://shelf-phitex.pages.dev/tl2026/";
 import { indexBytes, packUrl } from "./release.ts";
 import { Index, formatOf, shelfEngine } from "./resolve.ts";
 import { evict, getPack, putPack } from "./packstore.ts";
+import { platform } from "./platform.ts";
 
 const once = <T>(f: () => Promise<T>) => {
   let p: Promise<T> | undefined;
@@ -31,13 +33,13 @@ const once = <T>(f: () => Promise<T>) => {
 const gunzip = async (r: Response) => new Uint8Array(await new Response(r.body!.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
 
 const names = (t: string) => new Set(t.split("\n").filter(Boolean));
-const bundled = once(async () => names(await (await fetch(chrome.runtime.getURL("texmf/names.txt"))).text()));
+const bundled = once(async () => names(await (await platform().asset("texmf/names.txt")).text()));
 /** What the core's assets hold (the format, fonts, the popular packages): never fetched. */
-const inCore = once(async () => names(await (await fetch(chrome.runtime.getURL("dist/assets-names.txt"))).text()));
+const inCore = once(async () => names(await (await platform().asset("dist/assets-names.txt")).text()));
 
 /** Path → pack, from Shelf's newest release this extension has (release.ts), else its own copy. */
 export const index = once(async () => {
-  const { gz, meta } = await indexBytes((n) => fetch(chrome.runtime.getURL(n)));
+  const { gz, meta } = await indexBytes();
   return new Index(await new Response(gz.pipeThrough(new DecompressionStream("gzip"))).text(), meta);
 });
 
@@ -62,7 +64,7 @@ function unpack(b: Uint8Array): [string, Uint8Array][] {
 const packs = new Map<string, Promise<{ files: Map<string, Uint8Array>; from: "bundled" | "cache" | "shelf" }>>();
 /** Shelf packs the extension ships (packs/list.txt): read from it, not Shelf. */
 export const shipped = once(async () => {
-  const r = await fetch(chrome.runtime.getURL("packs/list.txt")).catch(() => null);
+  const r = await platform().asset("packs/list.txt").catch(() => null);
   return new Set(r?.ok ? (await r.text()).split("\n").filter(Boolean) : []);
 });
 
@@ -71,7 +73,7 @@ const isGzip = (b: Uint8Array) => b[0] === 0x1f && b[1] === 0x8b;
 /** A pack Shelf serves, as is (gzip); `priority` "low" for one fetched ahead (a project's own go first). */
 export async function fetchPack(id: string, priority: RequestPriority = "auto"): Promise<Uint8Array> {
   const get = async (cache: RequestCache) => {
-    const r = await fetch(packUrl(id), { cache, priority });
+    const r = await platform().fetch(packUrl(id), { cache, priority });
     return r.ok ? new Uint8Array(await r.arrayBuffer()) : new Uint8Array();
   };
   // (a pack Shelf doesn't have comes back as its home page, 200, and the
@@ -84,19 +86,28 @@ export async function fetchPack(id: string, priority: RequestPriority = "auto"):
   return raw;
 }
 
+/**
+ * A Shelf pack as served (gzip): kept on this machine, no request; else
+ * Shelf's, kept, and the cache kept under its cap (never evicting a pack
+ * this document has read). Also what VS Code's workers read mid-build.
+ */
+export async function packRaw(id: string): Promise<{ raw: Uint8Array; from: "cache" | "shelf" }> {
+  const kept = await getPack(id).catch(() => undefined);
+  const raw = kept ?? (await fetchPack(id));
+  if (!kept) await putPack(id, raw).then(() => evict(new Set([...packs.keys(), id]))).catch(() => undefined);
+  return { raw, from: kept ? "cache" : "shelf" };
+}
+
 function pack(id: string) {
   let p = packs.get(id);
   if (!p) {
     p = (async () => {
       if ((await shipped()).has(id)) {
-        const r = await fetch(chrome.runtime.getURL(`packs/${id}.pack`));
+        const r = await platform().asset(`packs/${id}.pack`);
         return { files: new Map(unpack(await gunzip(r))), from: "bundled" as const };
       }
-      // (kept in this browser: no request; else Shelf's, kept, and the cache kept under its cap)
-      const kept = await getPack(id).catch(() => undefined);
-      const raw = kept ?? (await fetchPack(id));
-      if (!kept) await putPack(id, raw).then(() => evict(new Set(packs.keys()))).catch(() => undefined);
-      return { files: new Map(unpack(await gunzip(new Response(raw as BlobPart)))), from: kept ? ("cache" as const) : ("shelf" as const) };
+      const { raw, from } = await packRaw(id);
+      return { files: new Map(unpack(await gunzip(new Response(raw as BlobPart)))), from };
     })();
     p.catch(() => packs.delete(id));
     packs.set(id, p);
@@ -135,7 +146,7 @@ export async function resolve(name: string, engine?: string): Promise<(Resolved 
   const path = ix.resolve(name, formatOf(name), e);
   // (the bundled texmf/, unless the engine's own tree has the file first, as the worker decides)
   if ((await bundled()).has(name) && !(path && /^tex\/(xe|lua)(la)?tex\//.test(path)))
-    return { text: await (await fetch(chrome.runtime.getURL("texmf/" + name))).text(), from: "bundled" };
+    return { text: await (await platform().asset("texmf/" + name)).text(), from: "bundled" };
   if (!path) return null;
   const [own, ...deps] = ix.packs(path, e);
   const ids = [own, ...deps].filter((id) => !given.has(id));

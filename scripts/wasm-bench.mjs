@@ -3,7 +3,7 @@
 // into a paragraph, each drawing the page it is on. Prints JSON:
 // { open_ms, first_ms, edits: [ms…], median, p90 }.
 //   node scripts/wasm-bench.mjs CORE.wasm DIST_DIR MAIN.tex [--edits N] [--at TEXT] [--packs DIR]
-// DIST_DIR: the built extension (extension/dist/..: assets.bin.gzdata, texmf/,
+// DIST_DIR: the built extension (overleaf/dist/..: assets.bin.gzdata, texmf/,
 // packs/, shelf-index.tsv.gz). Shelf packs not bundled are read from --packs
 // DIR (default target/bench-packs); with --net, a missing one is fetched from
 // Shelf into it, so a run elsewhere needs no network once that has run here.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { diagnose } from "../extension/src/diagnostics.ts";
+import { diagnose } from "../common/src/diagnostics.ts";
 
 const codes = (files: Record<string, string>, main = "a.tex", build?: any) => diagnose(files, main, build).map((d) => `${d.code}@${d.line ?? "-"}`);
 

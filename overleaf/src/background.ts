@@ -2,7 +2,8 @@
 // core's worker) exists, and fetches packs ahead. Content scripts then
 // connect to the offscreen document directly.
 
-import { prefetch } from "./prefetch.ts";
+import "./platform.ts";
+import { prefetch } from "./common/prefetch.ts";
 
 let creating: Promise<void> | null = null;
 

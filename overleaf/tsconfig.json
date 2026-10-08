@@ -1,0 +1,11 @@
+{
+  "//": "The browser extension: src/ (and common/'s sources, through the src/common link) to dist/, as the package loads them (dist/common/…).",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "preserveSymlinks": true,
+    "types": ["chrome"]
+  },
+  "include": ["src"]
+}

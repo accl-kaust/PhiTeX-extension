@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Batch, byteOffset, merge, apply, sequential, utf8Len, type ByteEdit, type Edit } from "../extension/src/edits.ts";
+import { Batch, byteOffset, merge, apply, sequential, utf8Len, type ByteEdit, type Edit } from "../common/src/edits.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

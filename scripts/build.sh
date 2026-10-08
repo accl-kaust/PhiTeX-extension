@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Build the extension into extension/ (load that directory unpacked).
+# Build the browser extension into overleaf/ (load that directory unpacked):
+# its TypeScript (overleaf/src, and common/src through overleaf/src/common)
+# to overleaf/dist, the engine and its assets beside it. VS Code's
+# extension takes the engine's files from there (scripts/build-vscode.sh).
 #
 #   scripts/build.sh          # release
 #   scripts/build.sh --dev    # also match the local mock (http://localhost:<any port>/project/*)
@@ -22,18 +25,18 @@ engine=partex
 for a in "$@"; do [ "$a" = "--phitex" ] && engine=phitex; done
 sysroot=$(scripts/sandbox rustc --print sysroot)
 flags="-C target-feature=+bulk-memory,+simd128,+nontrapping-fptoint,+sign-ext -C link-arg=$sysroot/lib/rustlib/wasm32-wasip1/lib/self-contained/crt1-reactor.o -C link-arg=--export=_initialize"
-rm -rf extension/dist && mkdir -p extension/dist
+rm -rf overleaf/dist && mkdir -p overleaf/dist
 if [ $engine = partex ]; then
   (cd core-partex && CARGO_TARGET_DIR="$PWD/../target/partex" ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
     cargo build --release --target wasm32-wasip1)
-  cp target/partex/wasm32-wasip1/release/phitex_overleaf_partex.wasm extension/dist/core.wasm
+  cp target/partex/wasm32-wasip1/release/phitex_overleaf_partex.wasm overleaf/dist/core.wasm
   # The LaTeX format, made by the same engine (mkfmt), and the fonts'
   # metrics: one gzipped file the worker hands the core.
   if [ ! -f target/fmt/pdflatex.fmt ]; then
     (cd core-partex && CARGO_TARGET_DIR="$PWD/../target/partex" ../scripts/sandbox cargo build --release --bin mkfmt)
     (ulimit -v 8000000; scripts/sandbox target/partex/release/mkfmt target/fmt texmf)
   fi
-  scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt extension/dist/assets.bin.gzdata
+  scripts/sandbox python3 scripts/make-assets.py target/fmt/pdflatex.fmt overleaf/dist/assets.bin.gzdata
   # XeTeX's: its format, made with its font index (the engine's otf-index
   # over the fonts Shelf serves, scripts/font-index.sh), dvipdfmx.cfg and the
   # TECkit mappings; a second file the worker loads for the first xelatex
@@ -46,80 +49,82 @@ if [ $engine = partex ]; then
   if [ ! -f target/fmt-xe/xelatex.fmt ]; then
     (ulimit -v 8000000; scripts/sandbox env MKFMT_XETEX="$PWD/target/fmt-xe/fontindex.pxfi" target/partex/release/mkfmt target/fmt-xe texmf)
   fi
-  scripts/sandbox python3 scripts/make-xe-assets.py target/fmt-xe extension/dist/assets-xelatex.bin.gzdata
+  scripts/sandbox python3 scripts/make-xe-assets.py target/fmt-xe overleaf/dist/assets-xelatex.bin.gzdata
 else
   (cd core && ../scripts/sandbox env CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="$flags" \
     cargo build --release --target wasm32-wasip1)
-  cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm extension/dist/core.wasm
+  cp target/wasm32-wasip1/release/phitex_overleaf_core.wasm overleaf/dist/core.wasm
 fi
 # (the full license, shipped in the extension, where its links point)
 # (packs/: the list fetched ahead, and any Shelf packs shipped: data/bundled-packs.txt, none now)
 scripts/bundle-packs.sh
-cp LICENSE extension/LICENSE.txt
-cp NOTICE extension/NOTICE.txt
+cp LICENSE overleaf/LICENSE.txt
+cp NOTICE overleaf/NOTICE.txt
 # The bundled packages (scripts/fetch-texmf.sh), flat by name: shelf.ts reads
 # them before asking Shelf.
-rm -rf extension/texmf && cp -r texmf extension/texmf
+rm -rf overleaf/texmf && cp -r texmf overleaf/texmf
 # Shelf's index (texmf path -> pack) and its release.json (how names
 # resolve per engine), made by Shelf's release.py: scripts/shelf-index.sh
 # (named .gzdata: Edge's store refuses archives inside a package)
 # (SHELF_INDEX, SHELF_RELEASE: another release's, a local Shelf's for a --dev build)
-cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
-cp "${SHELF_RELEASE:-shelf-release.json}" extension/shelf-release.json
+cp "${SHELF_INDEX:-shelf-index.tsv.gz}" overleaf/shelf-index.tsv.gzdata
+cp "${SHELF_RELEASE:-shelf-release.json}" overleaf/shelf-release.json
 # PhiTeX's latexdiff (phitex-diff) as its own small wasm module, for the
 # compare: diff-wasm/, against its PhiTeX export (scripts/sandbox: DIFF_REPO)
-(cd diff-wasm && ../scripts/sandbox cargo build --release --target wasm32-unknown-unknown)
-cp diff-wasm/target/wasm32-unknown-unknown/release/phitex_diff_wasm.wasm extension/dist/diff.wasm
+(cd diff-wasm && CARGO_TARGET_DIR="$PWD/target" ../scripts/sandbox cargo build --release --target wasm32-unknown-unknown)
+cp diff-wasm/target/wasm32-unknown-unknown/release/phitex_diff_wasm.wasm overleaf/dist/diff.wasm
 # (the page renderer: PhiTeX's viewer/src at the pinned engine commit)
 scripts/vendor-viewer.sh
-scripts/sandbox npx tsc -p .
-# Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts)
+scripts/sandbox npx tsc -p overleaf
+# Latin Modern (GUST Font License), the fonts the pages are drawn in (page2.ts):
+# common/fonts (kept up to date from TeX Live here), and the XeLaTeX stand-ins
+# (common/shims, engines.ts), each frontend's copy
 lm=/usr/share/texmf-dist/fonts/opentype/public
-rm -rf extension/fonts && mkdir -p extension/fonts
-cp $lm/lm/lmroman10-{regular,bold,italic,bolditalic}.otf $lm/lm/lmmono10-regular.otf $lm/lm-math/latinmodern-math.otf extension/fonts/
+cp $lm/lm/lmroman10-{regular,bold,italic,bolditalic}.otf $lm/lm/lmmono10-regular.otf $lm/lm-math/latinmodern-math.otf common/fonts/
+rm -rf overleaf/fonts overleaf/shims && cp -r common/fonts common/shims overleaf/
 # pdf.js (Apache-2.0), the PDF-mode page renderer (pdfrender.ts)
-mkdir -p extension/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs node_modules/pdfjs-dist/build/pdf.worker.min.mjs node_modules/pdfjs-dist/LICENSE extension/dist/pdfjs/
+mkdir -p overleaf/dist/pdfjs && cp node_modules/pdfjs-dist/build/pdf.min.mjs node_modules/pdfjs-dist/build/pdf.worker.min.mjs node_modules/pdfjs-dist/LICENSE overleaf/dist/pdfjs/
 # minted: Pyodide (Python in wasm), the engine's latexminted runner, and TeX
 # Live's four wheels (latexminted, latexrestricted, latex2pydata, Pygments);
 # bundled, loaded by the worker only for a project that uses minted
-mkdir -p extension/dist/pyodide extension/dist/minted extension/minted
-cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,pyodide-lock.json,package.json} extension/dist/pyodide/
+mkdir -p overleaf/dist/pyodide overleaf/dist/minted overleaf/minted
+cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,pyodide-lock.json,package.json} overleaf/dist/pyodide/
 # (.data, not .zip or .whl: Edge's store refuses archives inside a package)
-cp node_modules/pyodide/python_stdlib.zip extension/dist/pyodide/python_stdlib.data
-rm -f extension/minted/*.whl
+cp node_modules/pyodide/python_stdlib.zip overleaf/dist/pyodide/python_stdlib.data
+rm -f overleaf/minted/*.whl
 partex_dir=$(sed -n 's|^partex-core = { path = "\(.*\)/crates/partex-core" }|\1|p' core-partex/Cargo.toml)
-cp "core-partex/$partex_dir/tools/minted-pyodide/runner.mjs" extension/dist/minted/
-: > extension/minted/wheels.txt
-for w in /usr/share/texmf-dist/scripts/minted/*.whl; do cp "$w" "extension/minted/$(basename "$w").data"; basename "$w" >> extension/minted/wheels.txt; done
-echo "minted: $(du -sh extension/dist/pyodide | cut -f1) Pyodide, $(wc -l < extension/minted/wheels.txt) wheels"
+cp "core-partex/$partex_dir/tools/minted-pyodide/runner.mjs" overleaf/dist/minted/
+: > overleaf/minted/wheels.txt
+for w in /usr/share/texmf-dist/scripts/minted/*.whl; do cp "$w" "overleaf/minted/$(basename "$w").data"; basename "$w" >> overleaf/minted/wheels.txt; done
+echo "minted: $(du -sh overleaf/dist/pyodide | cut -f1) Pyodide, $(wc -l < overleaf/minted/wheels.txt) wheels"
 
 # The manifest: manifest.base.json, plus (--dev) the local mock's origin.
 dev=false; for a in "$@"; do [ "$a" = "--dev" ] && dev=true; done
 # (the engine's commit, from the pin, as version_name: debug reports name it)
 engine=$(grep -oE "partex-phitex-[0-9a-f+]+" core-partex/Cargo.toml | head -1 | sed 's/partex-phitex-//')
 scripts/sandbox node -e '
-  const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.base.json"));
+  const fs = require("fs"), m = JSON.parse(fs.readFileSync("overleaf/manifest.base.json"));
   m.version_name = `${m.version_name ?? m.version} (engine ${process.argv[2]})`;
   if (process.argv[1] === "true") {
     for (const c of m.content_scripts) c.matches.push("http://localhost/project/*");
     m.web_accessible_resources[0].matches.push("http://localhost/*");
   }
-  fs.writeFileSync("extension/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
+  fs.writeFileSync("overleaf/manifest.json", JSON.stringify(m, null, 2) + "\n");' "$dev" "$engine"
 # (SHELF_LOCAL=1 with --dev: Shelf from a local server,
 # ../shelf.PhiTeX.org/serve.py, serving a release's h/ packs, with
 # SHELF_INDEX that release's index; else the live Shelf, whose index
 # shelf-index.tsv.gz is)
-$dev && [ "${SHELF_LOCAL:-}" = 1 ] && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' extension/dist/shelf.js
+$dev && [ "${SHELF_LOCAL:-}" = 1 ] && sed -i 's|https://shelf-phitex.pages.dev/|http://localhost:8124/|' overleaf/dist/common/shelf.js
 # Every module the content script imports must be web-accessible.
 scripts/sandbox node -e '
-  const fs = require("fs"), m = JSON.parse(fs.readFileSync("extension/manifest.json"));
+  const fs = require("fs"), m = JSON.parse(fs.readFileSync("overleaf/manifest.json"));
   const listed = new Set(m.web_accessible_resources.flatMap((w) => w.resources));
   const seen = new Set(), todo = ["dist/content-main.js"];
   while (todo.length) {
     const f = todo.pop(); if (seen.has(f)) continue; seen.add(f);
-    for (const [, dep] of fs.readFileSync("extension/" + f, "utf8").matchAll(/^import [^;]*? from "(\.\.?\/[^"]+)";/gm)) todo.push(require("path").posix.join(require("path").posix.dirname(f), dep));
+    for (const [, dep] of fs.readFileSync("overleaf/" + f, "utf8").matchAll(/^import (?:[^;]*? from )?"(\.\.?\/[^"]+)";/gm)) todo.push(require("path").posix.join(require("path").posix.dirname(f), dep));
   }
   const glob = (p) => [...listed].some((l) => l === p || (l.endsWith("/*.js") && p.startsWith(l.slice(0, -4)) && !p.slice(l.length - 4).includes("/")));
   const missing = [...seen].filter((f) => !glob(f));
   if (missing.length) { console.error("not in web_accessible_resources:", missing.join(" ")); process.exit(1); }'
-ls -la extension/dist/core.wasm
+ls -la overleaf/dist/core.wasm

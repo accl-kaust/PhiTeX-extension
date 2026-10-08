@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { older } from "../extension/src/version.ts";
+import { older } from "../common/src/version.ts";
 
 test("older compares versions part by part, numerically", () => {
   assert.equal(older("0.1.0", "0.2.0"), true);

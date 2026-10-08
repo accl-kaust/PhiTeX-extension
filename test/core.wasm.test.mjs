@@ -1,15 +1,15 @@
-// The built core (extension/dist/core.wasm, scripts/build.sh first) under
+// The built core (overleaf/dist/core.wasm, scripts/build.sh first) under
 // node:wasi: the ABI the worker uses, edits in bytes from UTF-16, the
 // invariant against a fresh build, PNG/PDF, and pending detection.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { core } from "./wasm-harness.mjs";
-import { Batch } from "../extension/src/edits.ts";
+import { Batch } from "../common/src/edits.ts";
 import { readFileSync } from "node:fs";
 
 // (PhiTeX's plain-TeX core: `scripts/build.sh --phitex`. The default build is
 // partex's, tested by core-partex/ and test/partex-session.mjs)
-const wasm = new WebAssembly.Module(readFileSync(new URL("../extension/dist/core.wasm", import.meta.url)));
+const wasm = new WebAssembly.Module(readFileSync(new URL("../overleaf/dist/core.wasm", import.meta.url)));
 const partex = WebAssembly.Module.exports(wasm).some((e) => e.name === "ph_assets");
 const test_ = (name, f) => test(name, { skip: partex && "the built core is partex's" }, f);
 
@@ -43,6 +43,6 @@ test_("LaTeX: PhiTeX drops its commands without a trace (so the warning is a sou
   assert.equal(o.pending, 0);
   assert.equal(o.undefined, 0);
   assert.equal(c.status(o.h).pending, 0);
-  const { diagnose } = await import("../extension/src/diagnostics.ts");
+  const { diagnose } = await import("../common/src/diagnostics.ts");
   assert.equal(diagnose({ "main.tex": "\\documentclass{article}\n" }, "main.tex")[0].code, "latex");
 });

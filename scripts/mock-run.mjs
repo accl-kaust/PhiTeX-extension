@@ -224,7 +224,7 @@ try {
 // the onboarded state (scripts/onboarded.mjs: no welcome tip, terms or
 // tour over the page in a fresh profile), then the project again
 {
-  const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"), "utf8")).version;
+  const version = JSON.parse(fs.readFileSync(path.join(root, "overleaf/manifest.json"), "utf8")).version;
   for (let i = 0; i < 40 && !contexts.some((c) => c.auxData?.isDefault); i++) await sleep(250);
   await sleep(1000);
   // (PHITEX_WORKERS=1: the one-worker start, to compare; else the two-worker start where it applies)

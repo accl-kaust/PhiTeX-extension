@@ -178,10 +178,28 @@ bubblewrap (for `scripts/sandbox`, which runs every build step without
 network access or `$HOME`):
 
     scripts/sandbox --net npm ci --ignore-scripts   # TypeScript and @types/chrome (dev only)
-    scripts/build.sh                                # wasm core, LaTeX format, TypeScript → extension/
+    scripts/build.sh                                # wasm core, LaTeX format, TypeScript → overleaf/
 
 Then go to `chrome://extensions`, turn on *Developer mode*, choose *Load
-unpacked*, and pick `extension/`.
+unpacked*, and pick `overleaf/`.
+
+The repository holds the frontends of one engine:
+
+- `common/`: what every frontend shares, nothing of Overleaf's page or of a
+  host's API: the session (`session.ts`), the core's worker (`worker.ts`)
+  and its host (`corehost.ts`: the workers, packages, compares), packages
+  and their cache (`shelf.ts`, `packstore.ts`, `prefetch.ts`,
+  `release.ts`, `resolve.ts`), the preview panel (`panel.ts`, and PhiTeX's
+  page renderer in `vendor/viewer/`), the compare (`compare.ts`, `diff.ts`),
+  and the fonts and XeLaTeX stand-ins. Where it runs is a `Platform`
+  (`platform.ts`): the extension's files, a key-value store, fetch.
+- `overleaf/`: the browser extension (Chrome, Edge, Firefox): the manifest,
+  the content scripts that read Overleaf's editor and dock the panel, the
+  offscreen document, the popup, and the browser's platform (IndexedDB).
+  `overleaf/src/common` links to `common/src`, so the extension's `dist/`
+  holds both (`dist/common/…`).
+- `vscode/`: the VS Code extension over the same engine and `common/`
+  (`vscode/README.md`; `scripts/build-vscode.sh`).
 
 Development:
 

@@ -36,8 +36,15 @@ export function resolve(setting: EngineChoice, project: Engine | undefined, main
   return project ?? (setting !== "auto" ? setting : (needs(main) ?? "pdflatex"));
 }
 
-/** The stand-ins (extension/shims/) a XeLaTeX project is approximated with under pdfLaTeX. */
+/** The stand-ins (common/shims/, the extension's shims/) a XeLaTeX project is approximated with under pdfLaTeX. */
 export const SHIMS = ["fontspec.sty", "unicode-math.sty", "polyglossia.sty", "xltxtra.sty", "mathspec.sty"];
+
+/** The stand-ins' texts, by name, read with `asset` (the platform's: the extension's shims/). */
+export async function shimTexts(asset: (path: string) => Promise<Response>): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const n of SHIMS) out[n] = await (await asset("shims/" + n)).text();
+  return out;
+}
 
 /**
  * Whether a project that needs XeLaTeX can be approximated with pdfLaTeX and

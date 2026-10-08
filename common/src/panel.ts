@@ -82,6 +82,58 @@ export interface PanelEvents {
   onTour?(): void;
   /** "What's new" (settings). */
   onNews?(): void;
+  /** A link to a web address on a page (absent: opened in a new tab). */
+  onLink?(uri: string): void;
+}
+
+/**
+ * What the panel says that depends on where it runs (the defaults:
+ * Overleaf's; VS Code's webview gives its own). `about` and `reading` are
+ * markup, the rest text.
+ */
+export interface PanelWords {
+  /** The header's badge, and its tooltip. */
+  badge: string;
+  badgeTitle: string;
+  /** The line under the page, and what it opens. */
+  byline: string;
+  about: string;
+  /** Where the full license is. */
+  license: string;
+  /** Where the real PDF is, after a stop, an approximation or an engine not yet run. */
+  realPdf: string;
+  stopped: string;
+  notReady: string;
+  openFailed: string;
+  /** The reading card's note, and where packages are kept. */
+  reading: string;
+  keptIn: string;
+}
+
+const OVERLEAF_WORDS: PanelWords = {
+  badge: "Unofficial · experimental",
+  badgeTitle: "An unofficial extension, not part of Overleaf. PhiTeX runs LaTeX (pdfTeX) in your browser; Overleaf's PDF is the real one.",
+  byline: "Unofficial PhiTeX extension · experimental",
+  about: `<b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
+      endorsed or supported by Overleaf: an experimental incremental TeX engine that runs entirely in your browser. Nothing is
+      sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
+      <div class="about-foot">LaTeX, with TeX Live's packages fetched as needed. Free software (AGPL-3.0-only,
+      <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
+      To turn it off: <code>chrome://extensions</code>.</div>`,
+  license: "LICENSE.txt",
+  realPdf: "Overleaf's PDF is the real one.",
+  stopped: "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).",
+  notReady: "Use Overleaf's PDF for it",
+  openFailed: "Overleaf's PDF is one click away. Reload the tab to try again.",
+  reading: "Your project's files stay in this browser: read from Overleaf, typeset here.",
+  keptIn: "this browser",
+};
+
+/** What a host may leave out: a control whose event it doesn't handle is hidden. */
+export interface PanelOptions {
+  words?: Partial<PanelWords>;
+  /** The PDF.js page format offered (default: yes). */
+  pdfjs?: boolean;
 }
 
 /** Where the panel keeps its preferences (chrome.storage.local in the extension). */
@@ -488,9 +540,12 @@ export class Panel {
 
   private $ = <T extends HTMLElement = HTMLElement>(sel: string) => this.root.querySelector(sel) as T;
 
-  constructor(ev: PanelEvents, store?: Prefs) {
+  private words: PanelWords;
+
+  constructor(ev: PanelEvents, store?: Prefs, opts: PanelOptions = {}) {
     this.store = store;
     this.ev = ev;
+    const w = (this.words = { ...OVERLEAF_WORDS, ...opts.words });
     const host = document.createElement("phitex-preview");
     this.root = host.attachShadow({ mode: "open" });
     this.root.innerHTML = (`<style>${VIEWER_CSS}${CSS}</style>
@@ -498,7 +553,7 @@ export class Panel {
   <header>
     <span class="icon" aria-hidden="true">preview</span>
     <span class="title">PhiTeX</span>
-    <span class="badge hide-collapsed" title="An unofficial extension, not part of Overleaf. PhiTeX runs LaTeX (pdfTeX) in your browser; Overleaf's PDF is the real one.">Unofficial · experimental</span>
+    <span class="badge hide-collapsed" title="${w.badgeTitle}">${w.badge}</span>
     <span class="grow"></span>
     <span class="chip" id="chip" title="Status"><span class="dot"></span><span id="chiptext">starting…</span></span>
     <span class="group hide-collapsed">
@@ -534,14 +589,9 @@ export class Panel {
     <div class="diffbar" id="diffbar" role="toolbar" aria-label="Diff"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
-    <button class="byline" id="byline" title="About this preview">Unofficial PhiTeX extension · experimental</button>
+    <button class="byline" id="byline" title="About this preview">${w.byline}</button>
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
-      <b>⚡ Instant is not part of Overleaf.</b> It is added by the <b>unofficial PhiTeX</b> browser extension, not made,
-      endorsed or supported by Overleaf: an experimental incremental TeX engine that runs entirely in your browser. Nothing is
-      sent anywhere; Overleaf's own PDF is on the <b>PDF</b> tab.
-      <div class="about-foot">LaTeX, with TeX Live's packages fetched as needed. Free software (AGPL-3.0-only,
-      <a id="license" target="_blank" rel="noopener">full license</a>), provided as is, without any warranty.
-      To turn it off: <code>chrome://extensions</code>.</div>
+      ${w.about}
     </div>
     <div class="stage" id="stage"><div class="approx" id="approx"></div><div class="banner" id="banner"></div><div class="empty" id="empty"><div class="load"><div class="steps"><span class="now">Project read</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div><h3>Reading the project…</h3><div class="bar busy"><i></i></div></div></div><div class="viewer" id="viewer"></div></div>
   </div>
@@ -559,7 +609,12 @@ export class Panel {
     const dbg = this.$("#dbg");
     dbg.onclick = () => this.toggleDebug();
     this.$("#dbg2").onchange = () => this.toggleDebug();
-    (this.$("#license") as HTMLAnchorElement).href = globalThis.chrome?.runtime?.getURL?.("LICENSE.txt") ?? "LICENSE.txt";
+    const license = this.$("#license") as HTMLAnchorElement | null;
+    if (license) license.href = globalThis.chrome?.runtime?.getURL?.(w.license) ?? w.license;
+    // (what the host doesn't handle, not offered)
+    if (!ev.onTour) this.$("#tour").style.display = "none";
+    if (!ev.onNews) this.$("#news").style.display = "none";
+    if (opts.pdfjs === false) this.$("#fmt").closest("label")!.style.display = "none";
     this.$("#byline").onclick = (e) => {
       e.stopPropagation();
       this.$("#about").classList.toggle("open");
@@ -619,6 +674,7 @@ export class Panel {
       box: (d, w) => pageBox(d, w),
       dbl: (k, x, y) => ev.onSyncSource?.(k, x, y),
       selected: (sel) => ev.onSelectPage?.(sel),
+      link: ev.onLink ? (u) => ev.onLink!(u) : undefined,
     });
     // (keep it on screen when the window shrinks)
     window.addEventListener("resize", () => this.place());
@@ -814,7 +870,7 @@ export class Panel {
     empty.innerHTML = `<div class="load"><h3></h3><div class="count"></div><div class="note"></div></div>`;
     empty.querySelector("h3")!.textContent = "The build stopped before a page could be shown";
     empty.querySelector(".count")!.textContent = e.message + (e.file && e.line ? ` (${e.file}:${e.line})` : "");
-    empty.querySelector(".note")!.textContent = "Open ⓘ diagnostics for the details. Overleaf's PDF is one click away (PDF).";
+    empty.querySelector(".note")!.textContent = this.words.stopped;
     this.reportLink(empty.querySelector(".load")!);
     empty.style.display = "";
     return true;
@@ -841,7 +897,7 @@ export class Panel {
     this.approx = !!e.approx;
     const a = this.$("#approx");
     a.style.display = this.approx ? "block" : "none";
-    a.textContent = `Approximate: needs ${ENGINES[e.engine].label}, shown with pdfLaTeX (fonts substituted, breaks may differ). Overleaf's PDF is the real one.`;
+    a.textContent = `Approximate: needs ${ENGINES[e.engine].label}, shown with pdfLaTeX (fonts substituted, breaks may differ). ${this.words.realPdf}`;
     if (!e.ready) this.stopped();
     else if (this.$("#empty").querySelector(".engine")) this.$("#empty").style.display = "none";
   }
@@ -860,7 +916,7 @@ export class Panel {
     empty.querySelector(".count")!.textContent = error ?? "Its preamble loads a package that pdfLaTeX can't run (fontspec, unicode-math, polyglossia, …), or the engine was chosen for it.";
     empty.querySelector(".note")!.textContent = ready
       ? `Run it with ${ENGINES[want].label}?`
-      : `⚡ Instant doesn't run ${ENGINES[want].label} yet: only pdfLaTeX. Use Overleaf's PDF for it, or try pdfLaTeX if the project can do without those packages.`;
+      : `⚡ Instant doesn't run ${ENGINES[want].label} yet: only pdfLaTeX. ${this.words.notReady}, or try pdfLaTeX if the project can do without those packages.`;
     const btns = empty.querySelector(".btns")!;
     // (a build that stopped: the engines it asks for; running one already: back to pdfLaTeX)
     const offer: Engine[] = this.engineNow?.engine === want ? ["pdflatex"] : want === "xelatex" ? ["xelatex", "lualatex"] : [want];
@@ -1003,7 +1059,7 @@ export class Panel {
       empty.innerHTML =
         `<div class="load reading"><div class="steps"><span class="now">Project</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div>` +
         `<h3></h3><div class="bar busy"><i></i></div><div class="alive" data-phase="read"></div><div class="count"></div><div class="names"></div>` +
-        `<div class="note">Your project's files stay in this browser: read from Overleaf, typeset here.</div></div>`;
+        `<div class="note">${this.words.reading}</div></div>`;
       card = empty.querySelector<HTMLElement>(".load.reading")!;
     }
     card.querySelector("h3")!.textContent = r.h;
@@ -1076,7 +1132,7 @@ export class Panel {
         names.append(c);
       }
       empty.querySelector(".note")!.textContent =
-        `From ${p.source} (fetched once, then kept in this browser). Only package names leave it, never your project's files.`;
+        `From ${p.source} (fetched once, then kept in ${this.words.keptIn}). Only package names leave it, never your project's files.`;
       return;
     }
     this.pkgNow = p.loading.length ? { names: p.loading, done, total, pct, source: p.source } : undefined;
@@ -1312,7 +1368,8 @@ export class Panel {
       clearInterval(this.loadTick);
       this.loadTick = undefined;
       const empty = this.$("#empty");
-      empty.innerHTML = `<div class="load"><h3>Couldn't open the project</h3><div class="count"></div><div class="note">Overleaf's PDF is one click away. Reload the tab to try again.</div></div>`;
+      empty.innerHTML = `<div class="load"><h3>Couldn't open the project</h3><div class="count"></div><div class="note"></div></div>`;
+      empty.querySelector(".note")!.textContent = this.words.openFailed;
       empty.querySelector(".count")!.textContent = t;
       if (this.ev.onReport) {
         const b = document.createElement("button");

@@ -2,21 +2,22 @@
 // page's world) for the editor, the project ZIP for the files, a chrome
 // port to the offscreen document's worker for the core, and the panel.
 
-import { setFontBase } from "./vendor/viewer/page2.ts";
-import type { Edit } from "./edits.ts";
-import { older } from "./version.ts";
-import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost, type PreviewSink } from "./session.ts";
-import { readZip } from "./zip.ts";
+import "./platform.ts";
+import { platform } from "./common/platform.ts";
+import { setFontBase } from "./common/vendor/viewer/page2.ts";
+import type { Edit } from "./common/edits.ts";
+import { older } from "./common/version.ts";
+import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./common/session.ts";
+import { readZip } from "./common/zip.ts";
 import { type DiffRunner, compareButton } from "./diffui.ts";
-import { filesAt } from "./history.ts";
-import type { DiffChange } from "./diff.ts";
-import { charOffset } from "./edits.ts";
+import { filesAt, type Version } from "./history.ts";
+import { Compare, gate } from "./common/compare.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
-import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./panel.ts";
+import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./common/panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
-import { approximable, resolve, SHIMS, type Engine, type EngineChoice } from "./engines.ts";
-import { cached, DELIVERED } from "./packages.ts";
-import { drawPage } from "./tabrender.ts";
+import { approximable, resolve, shimTexts, type Engine, type EngineChoice } from "./common/engines.ts";
+import { hostPackages } from "./common/packages.ts";
+import { drawPage } from "./common/tabrender.ts";
 
 // (the pages' text fonts: the extension's own, Latin Modern)
 setFontBase(chrome.runtime.getURL("fonts/"));
@@ -289,36 +290,6 @@ const diffRunner: DiffRunner = {
   download: (w) => diffImpl?.download(w),
   stop: () => diffImpl?.stop(),
 };
-
-/** A compare's files: the marked-up document only (diff.ts made it), nothing live. */
-class DiffHost implements EditorHost {
-  private readonly tex: Record<string, string>;
-  constructor(tex: Record<string, string>) {
-    this.tex = tex;
-  }
-  loadProject() {
-    return Promise.resolve(this.tex);
-  }
-  onOpen() {}
-  onChanges() {}
-  ready() {}
-}
-
-/**
- * A sink that paints only while `on()`: two sessions, one panel (the
- * editor's and a compare's), the one not shown keeping its pages warm.
- * `drop`: calls never passed on (a compare's jumps to source: its source
- * is the marked-up document, not a project file).
- */
-function gate(sink: PreviewSink, on: () => boolean, drop: string[] = []): PreviewSink {
-  return new Proxy(sink, {
-    get(t, k, r) {
-      const v = Reflect.get(t, k, r);
-      if (typeof v !== "function") return v;
-      return (...a: unknown[]) => (on() && !drop.includes(String(k)) ? v.apply(t, a) : undefined);
-    },
-  });
-}
 
 /** Styles for what we add to Overleaf's own DOM (the switch, the toolbar controls, the tip). */
 const DOCK_CSS = `
@@ -992,11 +963,10 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   if (!EDITOR.test(location.pathname) && !location.hostname.startsWith("localhost")) return;
   let session: PreviewSession;
   let dock: Dock | undefined;
-  /** A compare in progress (diffui.ts): its own session, the marked-up document's. */
-  let compare: { session: PreviewSession; transport: ChromeTransport; base: Record<string, string>; tex: string; changes: DiffChange[] } | undefined;
-  let showing: "diff" | "current" = "current";
+  /** The compare (diffui.ts, compare.ts): its own session, the marked-up document's; set once the session is. */
+  let compare: Compare<Version> | undefined;
   /** The session the panel shows: the compare's while its diff is in view. */
-  const shown = () => (showing === "diff" && compare?.session) || session;
+  const shown = () => compare?.shown() ?? session;
   const ch = channel(project());
   const ask = (a: Ask) => ch.postMessage(a);
   const panel = new Panel({
@@ -1055,95 +1025,38 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
   };
 
   /**
-   * A compare (diffui.ts's runner): the version's files from Overleaf's
-   * history, the diff (diff.ts, in the offscreen document) against the
-   * editor's text, and the marked-up document typeset by a session of its
-   * own, on a port of its own, so the editor's stays warm. Each edit the
-   * editor makes is diffed again, 400 ms after the last, and goes in as an
-   * edit of the marked-up document.
+   * A compare (diffui.ts's runner, compare.ts): the version's files from
+   * Overleaf's history, the marked-up document's session on a port of its
+   * own, its binary files the project's as last read.
    */
-  function compareWith(host: OverleafHost, core: ChromeTransport, opts: ConstructorParameters<typeof PreviewSession>[3]): DiffRunner {
-    const base = (session.main ?? "main.tex").replace(/\.tex$/, "").replace(/.*\//, "");
-    const diffOf = async (old: Record<string, string>): Promise<{ tex: string; changes: DiffChange[] }> => {
-      const r = await core.request({ op: "latexdiff", req: { old, new: session.texts(), main: session.main ?? "main.tex" } });
-      if (!r.ok) throw new Error(r.error ?? "latexdiff failed");
-      if ("error" in r.json) throw new Error(r.json.error);
-      return r.json;
-    };
-    let again: ReturnType<typeof setTimeout> | undefined;
-    let counted: ((n: number) => void) | undefined;
-    host.onChanges(() => {
-      if (!compare) return;
-      clearTimeout(again);
-      again = setTimeout(async () => {
-        const c = compare;
-        const d = c && (await diffOf(c.base).catch(() => null));
-        if (!d || compare !== c) return;
-        c.tex = d.tex;
-        c.changes = d.changes;
-        c.session.sync("diff.tex", d.tex);
-        counted?.(d.changes.length);
-      }, 400);
-    });
-    const save = (bytes: BlobPart, type: string, name: string) => {
-      const url = URL.createObjectURL(new Blob([bytes], { type }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    };
-    const stop = () => {
-      compare?.transport.close();
-      compare = undefined;
-      if (showing === "diff") {
-        showing = "current";
-        void session.resync();
-      }
-    };
-    return {
-      async start(v, say, count) {
-        counted = count;
+  function compareWith(host: OverleafHost, core: ChromeTransport, opts: ConstructorParameters<typeof PreviewSession>[3]): Compare<Version> {
+    return new Compare<Version>({
+      session: () => session,
+      core,
+      onChanges: (cb) => host.onChanges(cb),
+      async files(v, say) {
         say(`Fetching version ${v.v}…`);
-        const { files: old } = await filesAt(project(), v.v, pageFetch);
-        say("Comparing…");
-        const d = await diffOf(old);
-        stop();
+        return (await filesAt(project(), v.v, pageFetch)).files;
+      },
+      async connect() {
         const t = new ChromeTransport();
         await t.connect();
         for (const [p, b] of Object.entries(lastBinaries)) await t.request({ op: "binary", file: p, b64: b64of(b) } as never);
-        const s = new PreviewSession(new DiffHost({ "diff.tex": d.tex }), t, gate(tee(panel, ch, () => mirrored), () => showing === "diff", ["goto"]), opts);
-        compare = { session: s, transport: t, base: old, tex: d.tex, changes: d.changes };
-        showing = "diff";
-        say("Typesetting the diff…");
-        await s.start();
-        return { changes: d.changes.length };
+        return t;
       },
-      show(w) {
-        showing = w;
-        void shown().resync();
+      sink: (on) => gate(tee(panel, ch, () => mirrored), on, ["goto"]),
+      goto: (file, from, to) => window.postMessage({ src: "phitex-content", type: "gotoRange", file, from, to, focus: false }, location.origin),
+      save(bytes, type, name) {
+        const url = URL.createObjectURL(new Blob([bytes], { type }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
       },
-      goto(k) {
-        const c = compare?.changes[k - 1];
-        if (!c || !compare) return;
-        // (the editor at the change, in its file; the page at it, in the diff or the current version)
-        const t = session.text(c.new.file);
-        if (t !== undefined) {
-          const [from, to] = [charOffset(t, c.new.start), charOffset(t, c.new.end)];
-          window.postMessage({ src: "phitex-content", type: "gotoRange", file: c.new.file, from, to, focus: false }, location.origin);
-          if (showing === "current") void session.toPage(c.new.file, from);
-        }
-        if (showing === "diff") void compare.session.toPage("diff.tex", charOffset(compare.tex, c.out[0]));
-      },
-      async download(w) {
-        if (!compare) return;
-        if (w === "tex") return save(compare.tex, "application/x-tex", `${base}-diff.tex`);
-        const pdf = await compare.session.pdf();
-        if (pdf?.length) save(pdf as BlobPart, "application/pdf", `${base}-diff.pdf`);
-        else panel.msg("No diff PDF yet: the marked-up document's build stopped (see ⓘ diagnostics).", true);
-      },
-      stop,
-    };
+      msg: (t) => panel.msg(t, true),
+      options: opts ?? {},
+    });
   }
   chrome.storage.onChanged.addListener((c) => {
     if (c.enabled) {
@@ -1257,26 +1170,13 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       engine: (main) => resolve(engineSetting, projectEngine, main),
       workers: workers === 1 ? 1 : undefined,
       // (a XeLaTeX project: approximated with pdfLaTeX, unless chosen for it)
-      shims: async (main) => {
-        if (projectEngine || !approximable(main)) return null;
-        const out: Record<string, string> = {};
-        for (const n of SHIMS) out[n] = await (await fetch(chrome.runtime.getURL("shims/" + n))).text();
-        return out;
-      },
+      shims: async (main) => (projectEngine || !approximable(main) ? null : shimTexts((p) => platform().asset(p))),
       format: pageFormat((saved as PanelPrefs | undefined)?.format),
-      packages: cached({
-        label: "TeX Live 2026",
-        resolve: (name, engine) =>
-          transport.request({ op: "package", name, engine }).then((r) => {
-            // (a failure is an error, shown with why; null is "not in TeX Live")
-            if (!r.ok) throw new Error(r.error ?? "package download failed");
-            return r.delivered ? DELIVERED : (r.text ?? null);
-          }),
-      }),
+      packages: hostPackages(transport),
     };
-    session = new PreviewSession(host, transport, gate(tee(panel, ch, () => mirrored), () => showing !== "diff"), opts);
+    session = new PreviewSession(host, transport, gate(tee(panel, ch, () => mirrored), () => compare?.showing !== "diff"), opts);
     (globalThis as any).__phitexSession = session; // (tests, devtools)
-    diffImpl = compareWith(host, transport, opts);
+    diffImpl = compare = compareWith(host, transport, opts);
     devMark("start");
     await session.start();
     devMark("started");

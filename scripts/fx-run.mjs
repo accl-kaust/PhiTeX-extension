@@ -11,7 +11,8 @@
 // package, unzipped into target/fx-dev/ with the mock's address added to
 // its matches (the store package matches overleaf.com only). Firefox runs
 // with its own profile in target/fx-profile/ and stays open after
-// (--close to quit it), so a second run reuses it.
+// (--close to quit it), so a second run reuses it. PHITEX_RUN=n: a run
+// beside another, on its own port, profile and add-on folder.
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,14 +24,16 @@ const opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
 const url = opt("--url", "http://localhost:8123/project/mock");
 const wait = +opt("--wait", "30") * 1000;
 const shot = opt("--shot", path.join(root, "target/fx-run.png"));
-const PORT = 9224;
+const RUN = +(process.env.PHITEX_RUN ?? 0);
+const PORT = 9224 + 10 * RUN;
+const tag = RUN ? `-${RUN}` : "";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // the Firefox package, with the mock's address
-const version = JSON.parse(fs.readFileSync(path.join(root, "extension/manifest.json"))).version;
+const version = JSON.parse(fs.readFileSync(path.join(root, "overleaf/manifest.json"))).version;
 const zip = path.join(root, `store/phitex-instant-${version}-firefox.zip`);
 if (!fs.existsSync(zip)) throw new Error(`${zip}: run scripts/package.sh first`);
-const dev = path.join(root, "target/fx-dev");
+const dev = path.join(root, `target/fx-dev${tag}`);
 fs.rmSync(dev, { recursive: true, force: true });
 fs.mkdirSync(dev, { recursive: true });
 execFileSync("unzip", ["-q", zip, "-d", dev]);
@@ -42,7 +45,7 @@ fs.writeFileSync(path.join(dev, "manifest.json"), JSON.stringify(m, null, 1));
 // Firefox with remote debugging (BiDi), started unless already listening
 const up = async () => fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false);
 if (!(await up())) {
-  const profile = path.join(root, "target/fx-profile");
+  const profile = path.join(root, `target/fx-profile${tag}`);
   fs.mkdirSync(profile, { recursive: true });
 
   // (PHITEX_FXLOG=file: every console, the background page's and its workers' too, mirrored to Firefox's stdout, kept there)
@@ -78,7 +81,7 @@ ws.addEventListener("message", (e) => {
 });
 await send("session.new", { capabilities: {} }).catch((e) => {
   if (/Maximum number of active sessions/.test(e.message)) {
-    try { execFileSync("pkill", ["-f", "target/fx-profile"]); } catch {}
+    try { execFileSync("pkill", ["-f", "--", `--profile ${path.join(root, `target/fx-profile${tag}`)}( |$)`]); } catch {}
     console.error("fx-run: a stale session held Firefox; it was quit: run again");
     process.exit(2);
   }
@@ -115,6 +118,6 @@ try {
   process.exitCode = 1;
 } finally {
   await send("session.end", {}).catch(() => {});
-  if (args.includes("--close")) execFileSync("pkill", ["-f", "target/fx-profile"]);
+  if (args.includes("--close")) execFileSync("pkill", ["-f", "--", `--profile ${path.join(root, `target/fx-profile${tag}`)}( |$)`]);
   process.exit(process.exitCode ?? 0);
 }

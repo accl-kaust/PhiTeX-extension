@@ -12,7 +12,7 @@ into the PhiTeX repo.
   with a raw C ABI (`ph_open`, `ph_edit`, `ph_status`, `ph_png`, `ph_pdf`,
   `ph_check`, `ph_set_file`, `ph_text`). Each `Doc` sits behind a session
   handle, so a threaded build can keep one per thread.
-- **`extension/`**: MV3.
+- **`extension/`** (now `overleaf/`, its shared parts in `common/`): MV3.
   - `hook.ts` runs in the page's world. It finds CodeMirror 6's `EditorView`
     (`.cm-content` → `cmView.view`) and wraps `update` and `setState` to
     read each transaction's changes and file switches.

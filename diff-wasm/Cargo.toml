@@ -13,7 +13,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-phitex-diff = { path = "../../../tmp/partex-phitex-8d09fc1/crates/phitex-diff" }
+phitex-diff = { path = "../../../tmp/partex-phitex-171ff74/crates/phitex-diff" }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [profile.release]

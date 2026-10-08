@@ -12,3 +12,4 @@ extension/minted/
 extension/shelf-index.tsv.gzdata
 extension/shelf-release.json
 mock/build/
+diff-wasm/target/

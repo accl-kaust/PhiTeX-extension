@@ -6,6 +6,11 @@
 import type { Req, Res } from "./worker.ts";
 import { index, resolve } from "./shelf.ts";
 import { refresh, type Release } from "./release.ts";
+import { type DiffReply, type DiffReq, loadDiff } from "./diff.ts";
+
+/** diff.wasm, loaded at the first compare. */
+let diffRun: Promise<(r: DiffReq) => DiffReply> | undefined;
+const latexdiff = () => (diffRun ??= fetch(new URL("diff.wasm", import.meta.url)).then(async (r) => loadDiff(await r.arrayBuffer())));
 
 /** Shelf's release as last read (release.ts): each tab is told on connecting. */
 let release: Release | undefined;
@@ -105,6 +110,14 @@ chrome.runtime.onConnect.addListener((port) => {
       binaries.set(m.file, bytes);
       give(m.file, bytes);
       port.postMessage({ id: m.id, ok: true });
+      return;
+    }
+    // (a compare: PhiTeX's latexdiff, diff.wasm, run here, an extension page)
+    if (m.op === "latexdiff") {
+      latexdiff().then(
+        (run) => port.postMessage({ id: m.id, ok: true, json: run(m.req) }),
+        (e) => port.postMessage({ id: m.id, ok: false, error: `latexdiff: ${e}` }),
+      );
       return;
     }
     // (packages: answered here, not by the worker)

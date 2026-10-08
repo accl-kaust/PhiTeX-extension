@@ -8,6 +8,7 @@
 // is drawn by a PreviewSink (the shadow-DOM panel; a webview).
 
 import { Batch, byteOffset, charOffset, type Edit } from "./edits.ts";
+import type { DiffReq } from "./diff.ts";
 import { ENGINES, type Engine } from "./engines.ts";
 import { report } from "./report.ts";
 
@@ -49,7 +50,9 @@ export type CoreReq =
   | { op: "auxdump" }
   | { op: "check"; file?: string; expect?: string }
   /** (answered by the offscreen document, shelf.ts: not the core) */
-  | { op: "package"; name: string; engine?: string };
+  | { op: "package"; name: string; engine?: string }
+  /** (answered by the offscreen document, diff.ts: PhiTeX's latexdiff) */
+  | { op: "latexdiff"; req: DiffReq };
 
 // (the page types the renderer shares: PhiTeX's viewer/src, vendored)
 import type { Draws, PageImage } from "./vendor/viewer/types.ts";
@@ -1137,5 +1140,12 @@ export class PreviewSession {
   /** The texts the session has sent (tests). */
   text(file: string): string | undefined {
     return this.batches.get(file)?.text ?? this.files[file];
+  }
+
+  /** Every project file's text as it is now (queued edits in): a compare's new side. */
+  texts(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of Object.keys(this.files)) out[f] = this.text(f)!;
+    return out;
   }
 }

@@ -66,6 +66,10 @@ rm -rf extension/texmf && cp -r texmf extension/texmf
 # (SHELF_INDEX, SHELF_RELEASE: another release's, a local Shelf's for a --dev build)
 cp "${SHELF_INDEX:-shelf-index.tsv.gz}" extension/shelf-index.tsv.gzdata
 cp "${SHELF_RELEASE:-shelf-release.json}" extension/shelf-release.json
+# PhiTeX's latexdiff (phitex-diff) as its own small wasm module, for the
+# compare: diff-wasm/, against its PhiTeX export (scripts/sandbox: DIFF_REPO)
+(cd diff-wasm && ../scripts/sandbox cargo build --release --target wasm32-unknown-unknown)
+cp diff-wasm/target/wasm32-unknown-unknown/release/phitex_diff_wasm.wasm extension/dist/diff.wasm
 # (the page renderer: PhiTeX's viewer/src at the pinned engine commit)
 scripts/vendor-viewer.sh
 scripts/sandbox npx tsc -p .

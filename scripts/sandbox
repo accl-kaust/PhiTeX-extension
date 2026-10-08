@@ -14,6 +14,8 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
 partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-44b4a63}"
+# (phitex-diff, diff-wasm's: its own PhiTeX export until the engine's pin has it)
+diffrepo="${DIFF_REPO:-$HOME/code/tmp/partex-phitex-8d09fc1}"
 # (Shelf's checkout, read-only: scripts/bundle-packs.sh takes the bundled
 # packs from its releases; keep-packs.txt is written outside the sandbox)
 shelf="${SHELF_REPO:-$HOME/code/flinner/shelf.PhiTeX.org}"
@@ -49,6 +51,7 @@ args=(
   --bind "$repo" "$repo"
   --ro-bind "$phitex" "$phitex"
   --ro-bind-try "$partex" "$partex"
+  --ro-bind-try "$diffrepo" "$diffrepo"
   --ro-bind-try "$shelf" "$shelf"
   --chdir "$PWD"
   --clearenv

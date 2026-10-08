@@ -10,8 +10,8 @@ import type { DiffBar, DiffBarActions, Panel } from "./panel.ts";
 import { type Version, versions } from "./history.ts";
 
 export interface DiffRunner {
-  /** Diff the version against the editor's text: its changes, `say` while it works. */
-  start(v: Version, say: (busy: string) => void): Promise<{ changes: number }>;
+  /** Diff the version against the editor's text: its changes; `say` while it works, `count` as edits change them. */
+  start(v: Version, say: (busy: string) => void, count: (n: number) => void): Promise<{ changes: number }>;
   /** Show the diff or the current version. */
   show(which: "diff" | "current"): void;
   /** Go to change `k` (1-based). */
@@ -228,9 +228,18 @@ export function compareButton(host: HTMLElement, panel: Panel, base: () => strin
     state = { title: v.title, when: `${ago(v.at)} · v${v.v}`, changes: 0, at: 0, showing: "diff", busy: "Fetching that version…" };
     bar();
     try {
-      const r = await run.start(v, (busy) => {
-        if (state) (state.busy = busy), bar();
-      });
+      const r = await run.start(
+        v,
+        (busy) => {
+          if (state) (state.busy = busy), bar();
+        },
+        (n) => {
+          if (!state || state.busy) return;
+          state.changes = n;
+          state.at = Math.min(state.at, n);
+          bar();
+        },
+      );
       if (!state) return;
       state.busy = undefined;
       state.changes = r.changes;

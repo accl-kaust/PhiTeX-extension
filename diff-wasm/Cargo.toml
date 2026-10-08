@@ -1,0 +1,24 @@
+# phitex-diff (PhiTeX's latexdiff) as a small wasm module of its own, for the
+# extension: two versions' files in, the marked-up .tex and the changes out
+# (diff.ts). Built by scripts/build.sh into dist/diff.wasm; pinned to a PhiTeX
+# commit like core-partex (a git archive under ~/code/tmp).
+[package]
+name = "phitex-diff-wasm"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+phitex-diff = { path = "../../../tmp/partex-phitex-8d09fc1/crates/phitex-diff" }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

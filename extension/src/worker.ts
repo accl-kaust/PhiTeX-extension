@@ -265,11 +265,24 @@ function shelfImports(mem: () => WebAssembly.Memory) {
           parts.push(one);
         }
       } else {
-        for (const id of shelfIndex?.packs(name, engine) ?? []) {
+        // (the packs this client's session has: every file of each is kept,
+        // by path, shelf.rs; sent again they were only copied in again, and
+        // said again as fetching: ltxcmds 42 times in one session. The
+        // key's own pack always goes: it is why the core asked)
+        const given = running === null ? undefined : (packsGiven.get(running) ?? packsGiven.set(running, new Set()).get(running)!);
+        for (const [i, id] of (shelfIndex?.packs(name, engine) ?? []).entries()) {
+          if (i > 0 && given?.has(id)) continue;
           const here = bundledPacks.has(id);
-          if (!here) (self as unknown as Worker).postMessage({ fetching: id, name });
+          // (said as fetching only when it was one: from the browser's cache, a
+          // few ms, it is not, and the tab's card said "Fetching LaTeX
+          // packages" on every open; said after, as files arriving)
+          const t = performance.now();
           const b = getSync(here ? new URL(`../packs/${id}.pack`, import.meta.url).href : packUrl(id));
-          if (b && b[0] === 0x1f && b[1] === 0x8b) parts.push(b);
+          if (!here && performance.now() - t > 40) (self as unknown as Worker).postMessage({ fetching: id, name });
+          if (b && b[0] === 0x1f && b[1] === 0x8b) {
+            parts.push(b);
+            given?.add(id);
+          }
           // (a pack that did not come: said, not taken for fetched)
           else (self as unknown as Worker).postMessage({ fetching: id, name, failed: true });
         }
@@ -476,6 +489,10 @@ const outJson = () => JSON.parse(new TextDecoder().decode(outBytes()));
 
 /** Client → session handle; and what opened it, to reopen after a trap. */
 const sessions = new Map<string, number>();
+/** The client whose request is running (the `fetch` import's packs go to its session); null in the idle work, shared. */
+let running: string | null = null;
+/** Per client: the Shelf packs its session's core was given (shelf.rs keeps their files): not sent again. */
+const packsGiven = new Map<string, Set<string>>();
 
 function handle(r: Req): Res {
   const h = sessions.get(r.client) ?? 0;
@@ -484,6 +501,8 @@ function handle(r: Req): Res {
       // (one core: pdfLaTeX's or XeTeX's; LuaTeX's not yet)
       if (r.engine && r.engine !== "pdflatex" && r.engine !== "xelatex") return { id: r.id, ok: false, error: `${r.engine} is not available in this version` };
       imagesSent.delete(r.client);
+      // (a new session: a new store of Shelf's files)
+      packsGiven.delete(r.client);
       if (r.engine === "xelatex") xetexClients.add(r.client);
       else xetexClients.delete(r.client);
       if (h) core.ph_close(h);
@@ -593,6 +612,7 @@ function handle(r: Req): Res {
     case "close":
       if (h) core.ph_close(h);
       sessions.delete(r.client);
+      packsGiven.delete(r.client);
       return { id: r.id, ok: true };
   }
 }
@@ -742,6 +762,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     const why = idleTrap;
     idleTrap = undefined;
     sessions.clear();
+    packsGiven.clear();
     shipped.clear();
     await load().catch(() => undefined);
     (self as unknown as Worker).postMessage({ id: r.id, ok: false, error: `core trapped: ${why}` } as Res);
@@ -763,7 +784,12 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     // as \\write18 runs synchronously inside it)
     if (r.op === "open" && !r.noMinted && usesMinted(r.files)) await loadMinted().catch((e) => console.warn("minted: not loaded:", e));
     if (r.op === "open" && r.engine === "xelatex") await loadXe();
-    res = handle(r);
+    running = r.client;
+    try {
+      res = handle(r);
+    } finally {
+      running = null;
+    }
     shipPdf(r);
     // (the partex core draws pages only as draw lists, whatever the dpi)
     if (res.png && (("dpi" in r && r.dpi === 0) || (core.ph_assets && res.png[0] !== 0x89))) {
@@ -783,6 +809,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     const why = panicText();
     res = { id: r.id, ok: false, error: `${/partex_xdvipdfmx|xdvipdfmx/.test(why) ? "PDF driver failed" : "core trapped"}: ${e}${why}` };
     sessions.clear();
+    packsGiven.clear();
     await load().catch((l) => (res.error = `core failed to load: ${l}`));
   }
   const transfer = [res.png?.buffer, res.pdf?.buffer].filter((b): b is ArrayBuffer => !!b);

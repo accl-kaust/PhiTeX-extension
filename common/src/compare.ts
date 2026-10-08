@@ -8,10 +8,13 @@
 // history, history.ts; a git revision) and how a file is saved are the
 // host's (CompareHost); the version picker's DOM too (overleaf/src/diffui.ts).
 
-import type { DiffChange } from "./diff.ts";
+import type { DiffChange, DiffMarkup, DiffSubtype } from "./diff.ts";
 import { charOffset } from "./edits.ts";
 import { PreviewSession, type CoreTransport, type EditorHost, type Options, type PreviewSink } from "./session.ts";
-import type { DiffBar, DiffBarActions } from "./panel.ts";
+import type { DiffBar, DiffBarActions, DiffLook } from "./panel.ts";
+
+/** latexdiff's own: UNDERLINE, SAFE, xcolor's blue and red. */
+export const LATEXDIFF_LOOK: DiffLook = { markup: "underline", subtype: "safe", add_color: "#0000ff", del_color: "#ff0000" };
 
 /**
  * A sink that paints only while `on()`: two sessions, one panel (the
@@ -52,6 +55,10 @@ export interface DiffRunner<V> {
   /** Go to change `k` (1-based). */
   goto(k: number): void;
   download(what: "pdf" | "tex"): void;
+  /** The diff's look as the user left it. */
+  look(): Promise<DiffLook>;
+  /** The diff's look changed: kept, and diffed again with it. */
+  restyle(look: DiffLook): void;
   stop(): void;
 }
 
@@ -74,6 +81,9 @@ export interface CompareHost<V> {
   msg(text: string): void;
   /** The marked-up document's session's options (the editor's). */
   options: Partial<Options>;
+  /** The diff's look as kept (any part not kept: LATEXDIFF_LOOK's), and keeping it. */
+  loadLook(): Promise<Partial<DiffLook> | undefined>;
+  saveLook(l: DiffLook): void;
 }
 
 type DiffJson = { tex: string; changes: DiffChange[] };
@@ -85,6 +95,7 @@ export class Compare<V> implements DiffRunner<V> {
   private c: { session: PreviewSession; transport: CoreTransport & { close(): void }; base: Record<string, string>; tex: string; changes: DiffChange[] } | undefined;
   private h: CompareHost<V>;
   private counted: ((n: number) => void) | undefined;
+  private looks: DiffLook | undefined;
 
   constructor(h: CompareHost<V>) {
     this.h = h;
@@ -92,16 +103,30 @@ export class Compare<V> implements DiffRunner<V> {
     h.onChanges(() => {
       if (!this.c) return;
       clearTimeout(again);
-      again = setTimeout(async () => {
-        const c = this.c;
-        const d = c && (await this.diffOf(c.base).catch(() => null));
-        if (!d || this.c !== c) return;
-        c.tex = d.tex;
-        c.changes = d.changes;
-        c.session.sync("diff.tex", d.tex);
-        this.counted?.(d.changes.length);
-      }, 400);
+      again = setTimeout(() => void this.rediff(), 400);
     });
+  }
+
+  /** Diffed again (an edit, a new look): the marked-up document's session given the new text. */
+  private async rediff(): Promise<void> {
+    const c = this.c;
+    const d = c && (await this.diffOf(c.base).catch(() => null));
+    if (!d || this.c !== c) return;
+    c.tex = d.tex;
+    c.changes = d.changes;
+    c.session.sync("diff.tex", d.tex);
+    this.counted?.(d.changes.length);
+  }
+
+  async look(): Promise<DiffLook> {
+    this.looks ??= { ...LATEXDIFF_LOOK, ...(await this.h.loadLook().catch(() => undefined)) };
+    return this.looks;
+  }
+
+  restyle(l: DiffLook): void {
+    this.looks = l;
+    this.h.saveLook(l);
+    void this.rediff();
   }
 
   /** The session the panel shows: the compare's while its diff is in view. */
@@ -114,7 +139,9 @@ export class Compare<V> implements DiffRunner<V> {
 
   private async diffOf(old: Record<string, string>): Promise<DiffJson> {
     const s = this.h.session();
-    const r = await this.h.core.request({ op: "latexdiff", req: { old, new: s.texts(), main: s.main ?? "main.tex" } });
+    const l = await this.look();
+    const style = { markup: l.markup as DiffMarkup, subtype: l.subtype as DiffSubtype, add_color: l.add_color, del_color: l.del_color };
+    const r = await this.h.core.request({ op: "latexdiff", req: { old, new: s.texts(), main: s.main ?? "main.tex", ...style } });
     if (!r.ok) throw new Error(r.error ?? "latexdiff failed");
     if ("error" in r.json) throw new Error(r.json.error);
     return r.json as DiffJson;
@@ -176,18 +203,26 @@ export class Compare<V> implements DiffRunner<V> {
   }
 }
 
+/** What of the panel the diff bar uses (Panel). */
+export interface DiffPanel {
+  diffBar(d: DiffBar | null, on?: DiffBarActions): void;
+  diffSettings(look: DiffLook | null, change?: (l: DiffLook) => void, defaults?: DiffLook): void;
+}
+
 /**
  * The diff bar (Panel.diffBar) while comparing: against which version, the
  * changes and the one at, and its controls and keys: d (diff / current), n
- * and Shift+N (next / previous change), Escape (stop).
+ * and Shift+N (next / previous change), Escape (the look's popover, else
+ * stop). Its ⚙: the look (Panel.diffSettings), diffed again on each pick.
  */
 export class DiffControls<V> {
   private state: DiffBar | null = null;
-  private panel: { diffBar(d: DiffBar | null, on?: DiffBarActions): void };
+  private panel: DiffPanel;
   private run: DiffRunner<V>;
   private actions: DiffBarActions;
+  private lookOpen = false;
 
-  constructor(panel: { diffBar(d: DiffBar | null, on?: DiffBarActions): void }, run: DiffRunner<V>) {
+  constructor(panel: DiffPanel, run: DiffRunner<V>) {
     this.panel = panel;
     this.run = run;
     this.actions = {
@@ -202,8 +237,18 @@ export class DiffControls<V> {
       },
       pdf: () => run.download("pdf"),
       tex: () => run.download("tex"),
+      settings: async () => {
+        if (this.lookOpen) return this.closeLook();
+        this.lookOpen = true;
+        panel.diffSettings(await run.look(), (l) => run.restyle(l), LATEXDIFF_LOOK);
+      },
       close: () => this.stop(),
     };
+  }
+
+  private closeLook(): void {
+    this.lookOpen = false;
+    this.panel.diffSettings(null);
   }
 
   /** A compare is on (its bar shown). */
@@ -253,6 +298,7 @@ export class DiffControls<V> {
   }
 
   stop(): void {
+    this.closeLook();
     this.state = null;
     this.run.stop();
     this.bar();
@@ -266,7 +312,7 @@ export class DiffControls<V> {
     if (e.key === "d" || e.key === "D") this.actions.toggle!();
     else if (e.key === "n") this.step(1);
     else if (e.key === "N") this.step(-1);
-    else if (e.key === "Escape") this.stop();
+    else if (e.key === "Escape") this.lookOpen ? this.closeLook() : this.stop();
     else return false;
     e.preventDefault();
     return true;

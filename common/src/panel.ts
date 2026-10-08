@@ -31,7 +31,15 @@ export interface DiffBar {
   /** What it is doing, until it is done ("Fetching version 42…"). */
   busy?: string;
 }
-export type DiffBarActions = Partial<Record<"prev" | "next" | "toggle" | "pdf" | "tex" | "close", () => void>>;
+export type DiffBarActions = Partial<Record<"prev" | "next" | "toggle" | "pdf" | "tex" | "settings" | "close", () => void>>;
+
+/** The diff's look, as diff.ts's DiffStyle (latexdiff's type and subtype, the colors). */
+export interface DiffLook {
+  markup: string;
+  subtype: string;
+  add_color: string;
+  del_color: string;
+}
 
 /** What the panel shows, for controls that live outside it (a host's own toolbar). */
 export interface ViewState {
@@ -473,6 +481,22 @@ footer .msg.err { color: var(--danger); }
 .diffbar button:hover:not(:disabled) { background: rgb(255 255 255 / 16%); }
 .diffbar button:disabled { opacity: .4; cursor: default; }
 .diffbar button.cur { background: rgb(255 255 255 / 22%); }
+.diffset { display: none; position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 5; width: 300px; max-width: calc(100% - 24px);
+  box-sizing: border-box; padding: 12px; border-radius: 12px; font-size: 12px; color: #fff; background: rgb(27 34 44 / 96%); box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.diffset.on { display: block; }
+.diffset h4 { margin: 0 0 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: rgb(255 255 255 / 60%); }
+.diffset h4:not(:first-child) { margin-top: 12px; }
+.diffset .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.diffset button { all: unset; cursor: pointer; padding: 3px 9px; border-radius: 10px; background: rgb(255 255 255 / 10%); color: #fff; }
+.diffset button:hover { background: rgb(255 255 255 / 18%); }
+.diffset button[aria-pressed=true] { background: var(--accent); }
+.diffset .pair { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 3px; }
+.diffset .pair i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 30%); }
+.diffset .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.diffset input[type=color] { width: 30px; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; }
+.diffset .sample { margin-top: 10px; padding: 6px 8px; border-radius: 6px; background: #fff; color: #1b222c; font: 13px/1.4 "Noto Serif", serif; }
+.diffset .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+.diffset .foot small { opacity: .6; }
 .diffbar .sep { width: 1px; align-self: stretch; margin: 2px 2px; background: rgb(255 255 255 / 25%); }
 .pkgs.on ~ .warmup { top: 56px; } /* below the strip, both said */
 .warmup .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: phx-pulse .6s ease-in-out infinite alternate; }
@@ -587,6 +611,7 @@ export class Panel {
     </div>
     <div class="speedchip" id="speedchip" aria-live="off">⚡ – ms</div>
     <div class="diffbar" id="diffbar" role="toolbar" aria-label="Diff"></div>
+    <div class="diffset" id="diffset" role="dialog" aria-label="Diff style"></div>
     <div class="pkgs" id="pkgs" role="status" aria-live="polite"></div>
     <div class="warmup" id="warmup" role="status" aria-live="polite"></div>
     <button class="byline" id="byline" title="About this preview">${w.byline}</button>
@@ -1312,11 +1337,68 @@ export class Panel {
       `<button data-a="prev" title="Previous change (Shift+N)" ${d.busy || !d.changes ? "disabled" : ""}>‹</button>${n}<button data-a="next" title="Next change (N)" ${d.busy || !d.changes ? "disabled" : ""}>›</button>` +
       `<span class="sep"></span><button data-a="toggle" class="${d.showing === "current" ? "cur" : ""}" title="Show the ${d.showing === "diff" ? "current version" : "diff"} (D)">${d.showing === "diff" ? "Current" : "Diff"}</button>` +
       `<button data-a="pdf" title="Download the diff PDF" ${d.busy ? "disabled" : ""}>⬇ PDF</button><button data-a="tex" title="Download diff.tex" ${d.busy ? "disabled" : ""}>⬇ .tex</button>` +
+      `<button data-a="settings" title="Diff style: colors, markup" aria-label="Diff style">⚙</button>` +
       `<button data-a="close" title="Stop comparing" aria-label="Stop comparing">✕</button>`;
     el.className = "diffbar on";
     el.onclick = (e) => {
       const a = (e.target as HTMLElement).closest<HTMLElement>("button[data-a]")?.dataset.a as keyof DiffBarActions | undefined;
       if (a) on?.[a]?.();
+    };
+  }
+
+  /**
+   * The diff's style, a popover under the bar (null: shut): latexdiff's
+   * markup and subtype, and the two colors, `change` called on each pick.
+   */
+  diffSettings(look: DiffLook | null, change?: (l: DiffLook) => void, defaults?: DiffLook): void {
+    const el = this.$("#diffset");
+    if (!look) {
+      el.className = "diffset";
+      return;
+    }
+    const MARKUP: [string, string][] = [
+      ["underline", "Underline"], ["ctraditional", "Color + font"], ["traditional", "Font"], ["cfont", "Color + size"],
+      ["fontstrike", "Strike"], ["bold", "Bold"], ["changebar", "Change bars"], ["culinechbar", "Underline + bars"], ["invisible", "Hide deletions"],
+    ];
+    const SUB: [string, string][] = [["safe", "Plain"], ["color", "Colored"], ["marker", "Margin marks"]];
+    const PAIRS: [string, string, string][] = [
+      ["#0000ff", "#ff0000", "Blue / red"], ["#15803d", "#b91c1c", "Green / red"], ["#0072b2", "#d55e00", "Colorblind-safe"], ["#7e22ce", "#6b7280", "Purple / gray"],
+    ];
+    const seg = (key: "markup" | "subtype", opts: [string, string][]) =>
+      `<div class="opts">${opts.map(([v, t]) => `<button data-k="${key}" data-v="${v}" aria-pressed="${look[key] === v}">${t}</button>`).join("")}</div>`;
+    const deco = (add: boolean) => {
+      const c = add ? look.add_color : look.del_color;
+      if (look.markup === "invisible" && !add) return "display:none";
+      const strike = !add && /^(underline|fontstrike|culinechbar)$/.test(look.markup);
+      const line = add && /^(underline|culinechbar)$/.test(look.markup) ? `text-decoration: underline wavy ${c}; text-underline-offset: 3px;` : "";
+      return `color:${c};${strike ? `text-decoration: line-through ${c};` : ""}${line}${look.markup === "bold" && add ? "font-weight:700;" : ""}`;
+    };
+    el.innerHTML =
+      `<h4>Style</h4>${seg("markup", MARKUP)}` +
+      `<h4>Colors</h4><div class="opts">${PAIRS.map(([a, d, t]) => `<button class="pair" data-pair="${a},${d}" aria-pressed="${look.add_color === a && look.del_color === d}"><i style="background:${a}"></i><i style="background:${d}"></i>${t}</button>`).join("")}</div>` +
+      `<div class="row"><span>Added</span><input type="color" data-c="add_color" value="${look.add_color}"><span>Deleted</span><input type="color" data-c="del_color" value="${look.del_color}"></div>` +
+      `<h4>Mode</h4>${seg("subtype", SUB)}` +
+      `<div class="sample">The results are <span style="${deco(false)}">good</span> <span style="${deco(true)}">excellent</span>.</div>` +
+      `<div class="foot"><small>As latexdiff's --type, --subtype</small><button data-reset="1">Reset</button></div>`;
+    el.className = "diffset on";
+    const set = (l: Partial<DiffLook>) => {
+      const next = { ...look, ...l };
+      change?.(next);
+      this.diffSettings(next, change, defaults);
+    };
+    el.onclick = (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("button");
+      if (!b) return;
+      if (b.dataset.reset && defaults) return set(defaults);
+      if (b.dataset.pair) {
+        const [a, d] = b.dataset.pair.split(",");
+        return set({ add_color: a, del_color: d });
+      }
+      if (b.dataset.k) set({ [b.dataset.k]: b.dataset.v } as Partial<DiffLook>);
+    };
+    el.onchange = (e) => {
+      const i = e.target as HTMLInputElement;
+      if (i.dataset.c) set({ [i.dataset.c]: i.value } as Partial<DiffLook>);
     };
   }
 

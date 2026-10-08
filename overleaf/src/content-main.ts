@@ -11,9 +11,9 @@ import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type Co
 import { readZip } from "./common/zip.ts";
 import { type DiffRunner, compareButton } from "./diffui.ts";
 import { filesAt, type Version } from "./history.ts";
-import { Compare, gate } from "./common/compare.ts";
+import { Compare, gate, LATEXDIFF_LOOK } from "./common/compare.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
-import { Panel, pageFormat, type PanelPrefs, type Prefs } from "./common/panel.ts";
+import { Panel, pageFormat, type DiffLook, type PanelPrefs, type Prefs } from "./common/panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
 import { approximable, resolve, shimTexts, type Engine, type EngineChoice } from "./common/engines.ts";
 import { hostPackages } from "./common/packages.ts";
@@ -288,6 +288,8 @@ const diffRunner: DiffRunner = {
   show: (w) => diffImpl?.show(w),
   goto: (k) => diffImpl?.goto(k),
   download: (w) => diffImpl?.download(w),
+  look: () => (diffImpl ? diffImpl.look() : Promise.resolve(LATEXDIFF_LOOK)),
+  restyle: (l) => diffImpl?.restyle(l),
   stop: () => diffImpl?.stop(),
 };
 
@@ -1056,6 +1058,9 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
       },
       msg: (t) => panel.msg(t, true),
       options: opts ?? {},
+      // (the look: chrome.storage, every project's)
+      loadLook: async () => ((await chrome.storage.local.get("diffLook")) as { diffLook?: Partial<DiffLook> }).diffLook,
+      saveLook: (l) => void chrome.storage.local.set({ diffLook: l }),
     });
   }
   chrome.storage.onChanged.addListener((c) => {

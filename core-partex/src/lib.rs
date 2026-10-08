@@ -31,6 +31,7 @@ pub mod draws;
 pub mod dvi;
 mod bib;
 pub mod shelf;
+mod stream;
 pub mod system;
 pub mod xetex;
 
@@ -75,6 +76,13 @@ pub struct MemHost {
     /// (pdftex, xetex): a name the host lacks resolved to its texmf path
     /// as kpathsea would for that engine, fetched, kept by path.
     pub shelf: Option<(shelf::Cache, &'static str)>,
+    /// A streamed build's (`stream.rs`): the pages and forms shipped so
+    /// far (`Host::stream_shipped`), and the pages shipped since asked.
+    pub shipments: Option<partex_core::pagepdf::Shipments>,
+    pub shipped_new: Vec<usize>,
+    /// The files the job named ahead (`Host::will_need`), not yet asked
+    /// for: what the host can fetch while the build runs.
+    pub hints: Option<Vec<(Vec<u8>, FileKind)>>,
 }
 
 fn suffix(kind: FileKind) -> &'static [u8] {
@@ -326,6 +334,25 @@ impl Host for MemHost {
     fn deflate(&mut self, level: i32, data: &[u8]) -> Option<Vec<u8>> {
         Some(miniz_oxide::deflate::compress_to_vec_zlib(data, u8::try_from(level.clamp(0, 9)).unwrap_or(6)))
     }
+    fn wants_streams(&self) -> bool {
+        self.shipments.is_some()
+    }
+    fn stream_shipped(&mut self, page: Option<usize>, stream: partex_core::pagepdf::ShippedStream) {
+        if let Some(s) = &mut self.shipments {
+            s.add(page, stream);
+            if let Some(k) = page {
+                self.shipped_new.push(k);
+            }
+        }
+    }
+    fn wants_hints(&self) -> bool {
+        self.hints.is_some()
+    }
+    fn will_need(&mut self, files: &[(Vec<u8>, FileKind)]) {
+        if let Some(h) = &mut self.hints {
+            h.extend_from_slice(files);
+        }
+    }
 }
 
 /// TeX Live's `texmf.cnf` sizes for pdfTeX (LaTeX needs more than
@@ -511,6 +538,8 @@ pub struct Session {
     faces: phitex_draw::xetex::Faces,
     /// (XeTeX) xdvipdfmx started, gone on from for each XDV.
     dpx: xetex::Started,
+    /// A build streamed, running (`stream.rs`).
+    stream: Option<stream::Stream>,
 }
 
 #[derive(Debug)]
@@ -703,6 +732,7 @@ impl Session {
             xread: xetex::Read::default(),
             faces: phitex_draw::xetex::Faces::new(),
             dpx: None,
+            stream: None,
         }
     }
 
@@ -792,7 +822,7 @@ impl Session {
     /// decoded): once per cold build, when idle; the first keystroke would
     /// pay it. True if there was anything to do.
     pub fn prepare(&mut self) -> bool {
-        if self.plain_only {
+        if self.plain_only || self.streaming() {
             return false;
         }
         // (after a plain first paint: the SSA program, now, while idle; from
@@ -899,7 +929,8 @@ impl Session {
     /// Build if anything changed since the last build: a rebuild of the
     /// engine there is, else (none yet, or the last job stopped) cold.
     pub fn build(&mut self) {
-        if !self.stale {
+        // (a build streamed runs: it is the build; queries answer from it)
+        if !self.stale || self.streaming() {
             return;
         }
         self.stale = false;
@@ -979,35 +1010,41 @@ impl Session {
                 r.log.iter().take(8).map(|l| format!("\n  {l}")).collect::<String>()
             );
         } else {
-            self.changed.clear();
-            let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
-            host.fallback = self.fallback();
-            host.shelf = self.shelf_for();
-            let tracker = SsaTracker::new(Recorder::new());
-            // (a keystroke whose job ends fatally, no legal \end: its cut
-            // .aux is not the next keystroke's, the last complete trip's
-            // streams stay, and it leaves no PDF: the last good pages stay)
-            tracker.keep_complete.set(true);
-            let mut tex = Tex::new(host, tracker, engine_params(self.xetex, false));
-            // (windows: steps cut inside long runs, a tikzpicture's say, at
-            // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
-            tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
-            // (each glyph's source bytes: double-click on the page → the
-            // editor, the cursor → the page; rebuilds keep them mapped)
-            tex.set_origins(true);
-            let main = self.main.strip_suffix(".tex").unwrap_or(&self.main);
-            // (DVI mode: the pages are read from the DVI the link writes;
-            // nonstop, as Overleaf runs pdflatex: an error is reported and
-            // the job goes on, where without a terminal it would end)
-            // (PDF mode uncompressed: pdfdraw reads the content streams back)
-            let mode = if pdf_mode() { "\\pdfcompresslevel=0 \\pdfobjcompresslevel=0 " } else { "\\pdfoutput=0 " };
-            // (the main file by the primitive \input, as `pdflatex main.tex`
-            // opens it: LaTeX's \input{main} tests it with \pdffilesize,
-            // which every keystroke changes, and re-ran that lookup)
-            let cmd = if self.xetex { self.command() } else { format!("&pdflatex \\nonstopmode{mode}\\csname @@input\\endcsname{{{main}}}") };
+            let mut tex = self.cold_tex();
+            let cmd = self.command();
             let r = ssa::run_applying(&mut tex, cmd.as_bytes(), false, 0, false);
             let run_ms = ms(t.elapsed());
             let s = ssa::settle(&mut tex, false, false, &mut trips, r.commands, 0);
+            self.cold_done(tex, &r, &s, t, run_ms);
+        }
+        self.built(t);
+    }
+
+    /// A cold SSA build's engine, its job not started.
+    fn cold_tex(&mut self) -> Tex<MemHost, SsaTracker> {
+        self.changed.clear();
+        let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
+        host.fallback = self.fallback();
+        host.shelf = self.shelf_for();
+        let tracker = SsaTracker::new(Recorder::new());
+        // (a keystroke whose job ends fatally, no legal \end: its cut
+        // .aux is not the next keystroke's, the last complete trip's
+        // streams stay, and it leaves no PDF: the last good pages stay)
+        tracker.keep_complete.set(true);
+        let mut tex = Tex::new(host, tracker, engine_params(self.xetex, false));
+        // (windows: steps cut inside long runs, a tikzpicture's say, at
+        // most every 4096 commands; PHITEX_WINDOW overrides, 0 = off)
+        tex.set_window(std::env::var("PHITEX_WINDOW").ok().and_then(|v| v.parse().ok()).unwrap_or(4096));
+        // (each glyph's source bytes: double-click on the page → the
+        // editor, the cursor → the page; rebuilds keep them mapped)
+        tex.set_origins(true);
+        tex
+    }
+
+    /// A cold SSA build's trips ran (`r` the first, `s` the settle; `t`
+    /// when it began, the first trip `run_ms`): the engine kept.
+    fn cold_done(&mut self, tex: Tex<MemHost, SsaTracker>, r: &ssa::SsaReport, s: &ssa::RebuildReport, t: Instant, run_ms: f64) {
+        {
             self.history_log.extend(s.tools.iter().map(|l| format!("tool: {l}")));
             if !s.settled {
                 self.history_log.push(format!("cold: not settled after {} trips: {:?}; stopped: {:?}", s.trips, s.unsettled.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect::<Vec<_>>(), s.unsupported));
@@ -1032,6 +1069,10 @@ impl Session {
             // (a new job: its first link lays out from cold)
             self.lk = LinkState::default();
         }
+    }
+
+    /// A build's run ended (begun at `t`): linked, counted, logged.
+    fn built(&mut self, t: Instant) {
         let t_run = ms(t.elapsed());
         self.link();
         self.build_ms = ms(t.elapsed());
@@ -1067,16 +1108,26 @@ impl Session {
     /// A build without the SSA program (an untracked run, ~3x faster than
     /// a cold SSA build): the first paint. The SSA program is built at the first edit or when idle.
     fn plain_build(&mut self) {
+        let mut tex = self.plain_tex();
+        let h = tex.run(self.command().as_bytes());
+        self.plain_done(&mut tex, h);
+    }
+
+    /// A plain build's engine, its job not started.
+    fn plain_tex(&mut self) -> Tex<MemHost, Untracked> {
         self.changed.clear();
         self.tex = None;
         self.plain = true;
-        let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
         let mut host = MemHost { files: self.host_files(), project: self.project_names(), now: Some(self.started.clone()), ..MemHost::default() };
         host.fallback = self.fallback();
         host.shelf = self.shelf_for();
+        Tex::new(host, Untracked, engine_params(self.xetex, false))
+    }
+
+    /// A plain build's job ended (`h` its history): its files and pages kept.
+    fn plain_done(&mut self, tex: &mut Tex<MemHost, Untracked>, h: i32) {
+        let job = self.main.strip_suffix(".tex").unwrap_or(&self.main).to_string();
         // (its command count, beside the tracked build's: the two compared)
-        let mut tex = Tex::new(host, Untracked, engine_params(self.xetex, false));
-        let h = tex.run(self.command().as_bytes());
         let commands = tex.commands();
         let host = std::mem::take(tex.host_mut());
         self.history = h;
@@ -1410,6 +1461,7 @@ impl Session {
             self.files.insert(name.to_string(), text.to_string());
             self.changed.push(name.to_string());
             self.stale = true;
+            self.stream_edited();
         }
     }
 
@@ -1424,6 +1476,7 @@ impl Session {
             self.bytes.insert(name.to_string(), Arc::from(bytes));
             self.changed.push(name.to_string());
             self.stale = true;
+            self.stream_edited();
         }
     }
 
@@ -1432,6 +1485,7 @@ impl Session {
         self.files.get_mut(name).unwrap().replace_range(range, text);
         self.changed.push(name.to_string());
         self.stale = true;
+        self.stream_edited();
         // (the writer is typing: the program that makes keystrokes cheap;
         // not here when another worker builds it, `plain_only`)
         self.want_ssa = !self.plain_only;
@@ -1439,6 +1493,11 @@ impl Session {
     }
 
     pub fn status(&mut self) -> Status {
+        if self.streaming() {
+            // (the build running: the pages it shipped so far)
+            let pages = self.stream_hashes().len();
+            return Status { pages, history: 0, missing: Vec::new(), tail: String::new(), error: None };
+        }
         self.build();
         let term = String::from_utf8_lossy(&self.term);
         let lines: Vec<&str> = term.lines().collect();
@@ -1448,7 +1507,10 @@ impl Session {
     }
 
     /// Pages shipped by the last build.
-    fn page_count(&self) -> usize {
+    fn page_count(&mut self) -> usize {
+        if self.streaming() {
+            return self.stream_hashes().len();
+        }
         if self.pdf.is_empty() { self.pages.len() } else { self.shipped }
 
     }
@@ -1458,6 +1520,9 @@ impl Session {
     /// the whole file's, with the page's number: every page is drawn again
     /// after a change, by the host's PDF renderer.)
     pub fn page_hashes(&mut self) -> Vec<u64> {
+        if self.streaming() {
+            return self.stream_hashes();
+        }
         self.build();
         if !self.pdf.is_empty() {
             return self.pdf_hashes().to_vec();
@@ -1505,6 +1570,9 @@ impl Session {
     }
 
     pub fn draws(&mut self, page: usize) -> Option<String> {
+        if self.streaming() {
+            return self.stream_draw(page);
+        }
         self.build();
         if !self.pdf.is_empty() {
             // (only the page asked for is drawn, its fonts parsed once per session)
@@ -1882,7 +1950,7 @@ mod abi {
         let mut r = Reader(unsafe { input(ptr, len) });
         // (fuel, main, the text files, then the binary ones, figures: all
         // there before the first build)
-        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>, bool, u32)> {
+        let mut parse = || -> Option<(String, BTreeMap<String, String>, Vec<(String, &[u8])>, bool, u32, bool)> {
             let _fuel = r.u32()?;
             let main = r.str()?.to_string();
             let n = r.u32()?;
@@ -1901,9 +1969,12 @@ mod abi {
             // program at the first edit or when idle; 1 plain builds only
             // (another worker builds the program); 2 the SSA program at once)
             let start = r.u32().unwrap_or(0);
-            Some((main, files, bins, xetex, start))
+            // (then 1: the build streamed, `ph_step` runs it on; absent or
+            // 0: built before the open answers)
+            let streamed = r.u32().unwrap_or(0) == 1;
+            Some((main, files, bins, xetex, start, streamed))
         };
-        let Some((main, files, bins, xetex, start)) = parse() else {
+        let Some((main, files, bins, xetex, start, streamed)) = parse() else {
             out_json("{\"error\":\"bad open input\"}".into());
             return 0;
         };
@@ -1917,15 +1988,39 @@ mod abi {
             2 => {}
             _ => s.fast_start(),
         }
-        let st = s.status();
         let h = NEXT.with_borrow_mut(|n| {
             *n += 1;
             *n - 1
         });
+        if streamed {
+            // (the build begun, its first slice run: the rest by `ph_step`)
+            s.stream_begin();
+            out_json(s.stream_json(h));
+            SESSIONS.with_borrow_mut(|m| m.insert(h, s));
+            return h;
+        }
+        let st = s.status();
         // (`how`: "plain: …" a first paint, the SSA program still to come)
         out_json(format!("{{\"handle\":{h},\"build_ms\":{},\"how\":{},{}}}", s.build_ms, esc(&s.how), st.json()));
         SESSIONS.with_borrow_mut(|m| m.insert(h, s));
         h
+    }
+
+    /// Run session `h`'s streamed build on for `budget_ms` (out: its state,
+    /// `Session::stream_json`: the pages shipped so far, or, done, what
+    /// `ph_open` answers). Returns 1 while there is more to do, 0 when it
+    /// is done (or there is no streamed build).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ph_step(h: u32, budget_ms: u32) -> u32 {
+        let r = with(h, |s| {
+            let more = s.stream_step(f64::from(budget_ms));
+            out_json(s.stream_json(h));
+            u32::from(more)
+        });
+        if r.is_none() {
+            out_json(NO_HANDLE.into());
+        }
+        r.unwrap_or(0)
     }
 
     /// Plain builds only, on or off (`Session::plain_only`): off, the SSA
@@ -1963,10 +2058,10 @@ mod abi {
             let painted = hashes.get(k).map_or("null".into(), |h| format!("\"{h:016x}\""));
             let total = ms(t.elapsed());
             LAST.with_borrow_mut(|l| *l = d.map(String::into_bytes));
+            let pages = s.page_count();
             Ok::<_, String>(format!(
-                "{{\"stats\":{stats},\"painted_hash\":{painted},\"paint_ms\":{total},\"total_ms\":{total},\"call_ms\":{total},\"wrong\":false,\"build_ms\":{},\"pages\":{}}}",
-                s.build_ms,
-                s.page_count()
+                "{{\"stats\":{stats},\"painted_hash\":{painted},\"paint_ms\":{total},\"total_ms\":{total},\"call_ms\":{total},\"wrong\":false,\"build_ms\":{},\"pages\":{pages}}}",
+                s.build_ms
             ))
         });
         match res {

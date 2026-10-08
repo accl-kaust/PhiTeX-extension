@@ -842,6 +842,13 @@ export class Panel {
   }
 
   /** A build started (`on`) or ended: past 400 ms the strip says so, with its time. */
+  /** A streamed open's pages so far (the strip: which page it is on). */
+  private streamed: number | undefined;
+  streaming(s: { pages: number; phase: string } | null): void {
+    this.streamed = s ? s.pages : undefined;
+    this.activity();
+  }
+
   busy(on: boolean): void {
     this.$("#chip").classList.toggle("busy", on);
     this.buildSince = on ? this.buildSince || performance.now() : 0;
@@ -872,7 +879,8 @@ export class Panel {
     } else {
       const s = (performance.now() - this.buildSince) / 1000;
       el.innerHTML = `${icon("sync", 16)}<span></span><span class="mini busy"><i></i></span>`;
-      el.querySelector("span")!.textContent = `Typesetting… ${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+      const page = this.streamed ? ` page ${this.streamed + 1}` : "";
+      el.querySelector("span")!.textContent = `Typesetting…${page} ${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
     }
   }
 

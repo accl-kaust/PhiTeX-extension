@@ -64,6 +64,8 @@ export class CoreHost {
   private nextId = 1;
   /** Every client's end: the worker's progress (a Shelf pack fetched mid-build) goes to each. */
   private clients = new Set<(m: any) => void>();
+  /** Each client's `say`, by its name: what is for it alone (a streamed build's events). */
+  private saying = new Map<string, (m: any) => void>();
   private spawn: CoreHostOptions["spawn"];
   /** diff.wasm, loaded at the first compare. */
   private diffRun: Promise<(r: DiffReq) => DiffReply> | undefined;
@@ -91,7 +93,12 @@ export class CoreHost {
     };
   }
 
-  private fromWorker(d: Res & { fetching?: string; name?: string; failed?: boolean; drawPdf?: boolean; client?: string; pdf?: Uint8Array; preparing?: boolean; settled?: boolean }): void {
+  private fromWorker(d: Res & { fetching?: string; name?: string; failed?: boolean; drawPdf?: boolean; client?: string; pdf?: Uint8Array; preparing?: boolean; settled?: boolean; event?: string }): void {
+    // (a streamed build's pages, progress and end: its client's only)
+    if (d.event && d.client) {
+      this.saying.get(d.client)?.(d);
+      return;
+    }
     if (d.fetching) {
       for (const p of this.clients) p({ event: "fetching", pack: d.fetching, name: d.name, failed: d.failed });
       return;
@@ -130,6 +137,7 @@ export class CoreHost {
       }
     };
     this.clients.add(say);
+    this.saying.set(client, say);
     if (this.release) say({ event: "release", release: this.release });
     // (binary files, font metrics: given to this client's core session here;
     // again after each open, a new session)
@@ -198,7 +206,9 @@ export class CoreHost {
         }
         const open = this.nextId++;
         dual.set(client, { phase: "plain", open });
-        worker.postMessage({ ...m, id, client, binaries: bins, start: 1, noMinted: true } as Req);
+        // (A's plain build streamed: each page as it is shipped. B's SSA one
+        // is not, until streamed SSA builds are exact)
+        worker.postMessage({ ...m, id, client, binaries: bins, start: 1, noMinted: true, stream: true } as Req);
         // (B: the SSA program at once; ready when its open answers)
         replies.set(open, (r) => {
           if (dual.get(client)?.open !== open) return;
@@ -225,6 +235,7 @@ export class CoreHost {
     };
     const close = () => {
       this.clients.delete(say);
+      this.saying.delete(client);
       worker.postMessage({ id: this.nextId++, client, op: "close" });
       this.ssa?.postMessage({ id: this.nextId++, client, op: "close" });
       dual.delete(client);

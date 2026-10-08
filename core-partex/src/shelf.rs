@@ -65,17 +65,7 @@ pub fn format(kind: FileKind) -> &'static str {
 /// host's files: a project's prefetched packages, by path), the packs
 /// fetched before, or fetched now.
 pub fn find(cache: &Cache, name: &[u8], format: &str, engine: &str, have: &dyn Fn(&[u8]) -> Option<Arc<[u8]>>) -> Option<(Vec<u8>, Arc<[u8]>)> {
-    let mut q = format!("{engine}\t{format}\t").into_bytes();
-    q.extend_from_slice(name);
-    let known = cache.borrow().names.get(&q).cloned();
-    let key = match known {
-        Some(k) => k?,
-        None => {
-            let k = call(|p, l| unsafe_resolve(p, l), &q);
-            cache.borrow_mut().names.insert(q, k.clone());
-            k?
-        }
-    };
+    let key = key(cache, name, format, engine)?;
     if let Some(b) = have(&key).or_else(|| cache.borrow().files.get(&key).cloned()) {
         return Some((key, b));
     }
@@ -92,6 +82,27 @@ pub fn find(cache: &Cache, name: &[u8], format: &str, engine: &str, have: &dyn F
     }
     let b = c.files.get(&key).cloned()?;
     Some((key, b))
+}
+
+/// `name`'s key for `engine` and `format` (resolved by the worker once a
+/// name), or None if Shelf has none.
+pub fn key(cache: &Cache, name: &[u8], format: &str, engine: &str) -> Option<Vec<u8>> {
+    let mut q = format!("{engine}\t{format}\t").into_bytes();
+    q.extend_from_slice(name);
+    let known = cache.borrow().names.get(&q).cloned();
+    match known {
+        Some(k) => k,
+        None => {
+            let k = call(|p, l| unsafe_resolve(p, l), &q);
+            cache.borrow_mut().names.insert(q, k.clone());
+            k
+        }
+    }
+}
+
+/// Whether a pack fetched before holds `key`.
+pub fn has(cache: &Cache, key: &[u8]) -> bool {
+    cache.borrow().files.contains_key(key)
 }
 
 #[cfg(target_arch = "wasm32")]

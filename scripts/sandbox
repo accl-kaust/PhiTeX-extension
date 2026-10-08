@@ -13,7 +13,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 phitex="${PHITEX_REPO:-$HOME/code/tmp/phitex-0ae189b}"
-partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-44b4a63}"
+partex="${PARTEX_REPO:-$HOME/code/tmp/partex-phitex-61b8de5}"
 # (phitex-diff, diff-wasm's: its own PhiTeX export until the engine's pin has it)
 diffrepo="${DIFF_REPO:-$HOME/code/tmp/partex-phitex-171ff74}"
 # (Shelf's checkout, read-only: scripts/bundle-packs.sh takes the bundled

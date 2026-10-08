@@ -103,7 +103,16 @@ function traceRes(r: CoreRes): Record<string, unknown> {
   };
 }
 
-export type CoreEvent = { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "switched" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
+/**
+ * A streamed open's (the plain build's): each page as it is shipped, how far
+ * it is, and its end, with what the open would have answered.
+ */
+export type StreamEvent =
+  | { event: "page"; pages: number; hashes: string[] }
+  | { event: "progress"; phase: string; pass?: number; pages: number; ms?: number }
+  | { event: "done"; ok: boolean; json?: any; error?: string };
+
+export type CoreEvent = StreamEvent | { event: "fetching"; pack: string; name: string; failed?: boolean } | { event: "preparing"; on: boolean } | { event: "settled" } | { event: "switched" } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
 
 export interface CoreTransport {
   request(req: CoreReq): Promise<CoreRes>;
@@ -145,6 +154,8 @@ export interface PreviewSink {
    * (a plain rebuild); then "ready", once.
    */
   warmup?(w: { state: "preparing" | "ready"; since?: number; slow?: boolean }): void;
+  /** A streamed open: the pages shipped so far (null: it ended). */
+  streaming?(s: { pages: number; phase: string } | null): void;
   /** A repaint is on screen, `ms` after the keystroke that made it. */
   painted?(ms: number): void;
   /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
@@ -310,6 +321,7 @@ export class PreviewSession {
         return;
       }
       if (e.event === "fetching") this.onFetching(e);
+      if (e.event === "page" || e.event === "progress" || e.event === "done") this.onStream(e);
     });
     this.core = {
       request: async (r) => {
@@ -485,6 +497,19 @@ export class PreviewSession {
     this.minted = Object.values(this.files).some(usesMinted);
     const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine, workers: this.o.workers });
     if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
+    // (streamed: the pages come as they are shipped, onStream; then its end,
+    // with what a blocking open would have answered)
+    if (r.json.building) {
+      this.tr("open: streaming", {});
+      this.opened = true;
+      this.sink.busy?.(true);
+      this.sink.streaming?.({ pages: 0, phase: r.json.phase ?? "typesetting" });
+      const d = await new Promise<Extract<StreamEvent, { event: "done" }>>((res) => (this.streamEnd = res));
+      this.sink.busy?.(false);
+      this.sink.streaming?.(null);
+      if (!d.ok || !d.json) return this.sink.error(d.error ?? "the build stopped");
+      r.json = d.json;
+    }
     this.opened = true;
     const latex = r.json.engine === "partex";
     // (diagnosed before this was known: say it again with it)
@@ -505,6 +530,31 @@ export class PreviewSession {
     this.pkg.building = false;
     this.tellPackages();
     this.statusSoon();
+  }
+
+  /** A streamed open's end, awaited by `open`. */
+  private streamEnd: ((d: Extract<StreamEvent, { event: "done" }>) => void) | undefined;
+  /** The streamed open's first page was traced. */
+  private streamFirst = false;
+
+  private onStream(e: StreamEvent): void {
+    if (e.event === "done") {
+      this.tr("open: streamed", { ok: e.ok });
+      this.streamFirst = false;
+      this.streamEnd?.(e);
+      this.streamEnd = undefined;
+      return;
+    }
+    if (!this.streamEnd) return;
+    if (e.event === "progress") return this.sink.streaming?.({ pages: e.pages, phase: e.phase });
+    // (a page shipped: laid out and drawn, as after an edit)
+    if (!this.streamFirst) {
+      this.streamFirst = true;
+      this.tr("open: first page", { pages: e.pages });
+    }
+    this.setPages(e.pages);
+    this.sink.streaming?.({ pages: e.pages, phase: "typesetting" });
+    if (this.sink.layout) this.chain = this.chain.then(() => this.layout(e.hashes));
   }
 
   /** When the plain first paint came, while the SSA program is still to come (0: not warming). */

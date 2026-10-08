@@ -12,7 +12,7 @@
 // extension page, isolated by the manifest's COOP/COEP) and never from the
 // Overleaf page.
 
-import { indexBytes } from "./release.ts";
+import { indexBytes, packUrl } from "./release.ts";
 import { Index } from "./resolve.ts";
 import { platform } from "./platform.ts";
 
@@ -38,8 +38,12 @@ export type Req =
    * edit or when idle; 1 plain builds only (another worker builds the
    * program: the offscreen's two-worker start); 2 the SSA program at once.
    * `noMinted`: minted's runner not loaded (the other worker loads it).
+   * `stream`: the build streamed (the core's `ph_step`): the open answers
+   * at once (`json.building`), each page comes as it is shipped
+   * (`{event:"page"}`, `{event:"progress"}`), then `{event:"done"}` with
+   * what the open answered before, and `{settled:true}`.
    */
-  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string; start?: 0 | 1 | 2; noMinted?: boolean }
+  | { id: number; client: string; op: "open"; main: string; files: Record<string, string>; fuel: number; binaries?: Record<string, Uint8Array>; engine?: string; start?: 0 | 1 | 2; noMinted?: boolean; stream?: boolean }
   /** Plain builds only, on or off (off: this worker builds the SSA program after all). */
   | { id: number; client: string; op: "plain_only"; on: boolean }
   | { id: number; client: string; op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
@@ -80,6 +84,7 @@ interface Core {
   ph_out_ptr(): number;
   ph_out_len(): number;
   ph_open(p: number, n: number): number;
+  ph_step?(h: number, budgetMs: number): number;
   /** The worker has a \\write18 runner (minted). */
   ph_set_system?(on: number): void;
   ph_close(h: number): void;
@@ -522,9 +527,18 @@ function handle(r: Req): Res {
       f.u32(bins.length);
       for (const [n, b] of bins) f.str(n).bytes(b);
       // (the engine: 1 XeTeX; then how to start)
-      f.u32(r.engine === "xelatex" ? 1 : 0).u32(r.start ?? 0);
+      const stream = !!r.stream && !!core.ph_step;
+      f.u32(r.engine === "xelatex" ? 1 : 0).u32(r.start ?? 0).u32(stream ? 1 : 0);
+      building.delete(r.client);
       const nh = call(f, (p, n) => core.ph_open(p, n));
       const json = outJson();
+      // (streamed: the build goes on in slices between requests, `stepOnce`)
+      if (nh && stream && json.building) {
+        sessions.set(r.client, nh);
+        building.set(r.client, { h: nh, queue: [], phase: json.phase ?? "typesetting", pages: (json.hashes ?? []).join(), t0: performance.now() });
+        wantPacks(json.want);
+        return { id: r.id, ok: true, json };
+      }
       // (the pages' hashes with it: the tab lays them out now, not after
       // a request that would wait behind readying the first rebuild)
       if (nh && json) {
@@ -562,6 +576,12 @@ function handle(r: Req): Res {
       return { id: r.id, ok: ok === 1 };
     }
     case "png": {
+      if (building.has(r.client)) {
+        // (the build running: the page drawn from its shipped stream, or not shipped yet)
+        core.ph_png(h, r.page, 0);
+        const png = outBytes();
+        return png.length ? { id: r.id, ok: true, png } : { id: r.id, ok: false, error: "page not shipped yet" };
+      }
       if (r.dpi < 0 && core.ph_assets) return { id: r.id, ok: true, ...pdfPage(h, r.page, 0) };
       core.ph_png(h, r.page, r.dpi);
       const png = outBytes();
@@ -622,11 +642,129 @@ function handle(r: Req): Res {
       if (h) core.ph_close(h);
       sessions.delete(r.client);
       packsGiven.delete(r.client);
+      building.delete(r.client);
       return { id: r.id, ok: true };
   }
 }
 
 let ready: Promise<void>;
+
+/**
+ * A streamed build per client: its handle, the requests that wait for it
+ * (an edit or a file set while the first trip runs: each answered once its
+ * own build has painted), its phase and the page hashes last told.
+ */
+const building = new Map<string, { h: number; queue: Req[]; phase: string; pages: string; t0: number }>();
+
+/** Packs named ahead by the core (`want`), fetched in the background, at most 4 at a time. */
+const wantQueue: string[] = [];
+const wantAsked = new Set<string>();
+let wantInFlight = 0;
+function wantPacks(keys: string[] | undefined): void {
+  for (const k of keys ?? []) {
+    const [engine, key] = k.split("\t");
+    if (!key || (!key.includes("/") && bundledNames?.has(key))) continue;
+    for (const id of shelfIndex?.packs(key, engine) ?? []) {
+      if (bundledPacks.has(id) || wantAsked.has(id)) continue;
+      wantAsked.add(id);
+      wantQueue.push(id);
+    }
+  }
+  while (wantInFlight < 4 && wantQueue.length) {
+    const id = wantQueue.shift()!;
+    wantInFlight++;
+    // (into the HTTP cache: the host's synchronous read, readSync, finds it
+    // there, or waits on it, the browser's cache lock)
+    platform()
+      .fetch(packUrl(id), { priority: "low" })
+      .then((r) => r.arrayBuffer())
+      .catch(() => undefined)
+      .finally(() => {
+        wantInFlight--;
+        wantPacks([]);
+      });
+  }
+}
+
+/** Whether request `r` waits for its client's streamed build to end. */
+function waits(r: Req): boolean {
+  const b = building.get(r.client);
+  if (!b || r.op === "open" || r.op === "close") return false;
+  // (while it settles, an edit stops the settle at its next step: served now)
+  return (r.op === "edit" || r.op === "set_file" || r.op === "set_bytes" || r.op === "plain_only") && b.phase !== "settling";
+}
+
+/** One slice of one client's streamed build (round robin): its pages and progress told; at its end, the PDF to the drawer, `done`, `settled`, and the requests that waited. */
+let turn = 0;
+function stepOnce(): void {
+  const clients = [...building.keys()];
+  if (!clients.length) return;
+  const client = clients[turn++ % clients.length];
+  const b = building.get(client)!;
+  let more: number;
+  let json: any;
+  try {
+    more = core.ph_step!(b.h, 40);
+    json = outJson();
+  } catch (e) {
+    // (a trap: as a request's, the instance is new and every client opens again)
+    const why = panicText();
+    const waiting = [...building.values()].flatMap((x) => x.queue);
+    building.clear();
+    sessions.clear();
+    shipped.clear();
+    host.post({ event: "done", client, ok: false, error: `core trapped: ${e}${why}` });
+    for (const q of waiting) host.post({ id: q.id, ok: false, error: `core trapped: ${e}${why}` } as Res);
+    void load().catch(() => undefined);
+    return;
+  }
+  wantPacks(json.want);
+  b.phase = json.phase ?? b.phase;
+  const pages = (json.hashes ?? []).join();
+  if (more) {
+    if (pages !== b.pages) {
+      b.pages = pages;
+      host.post({ event: "page", client, pages: json.pages, hashes: json.hashes });
+    }
+    host.post({ event: "progress", client, phase: json.phase, pass: json.pass, pages: json.pages, ms: json.ms });
+    return;
+  }
+  building.delete(client);
+  // (the finished PDF to the drawer first: later page requests go there)
+  shipped.delete(client);
+  shipFor(client);
+  host.post({ event: "done", client, ok: !!json.done, json });
+  host.post({ settled: true });
+  inbox.unshift(...b.queue);
+}
+
+/**
+ * One queue for the requests and the slices: a request is served whole
+ * (never while a slice runs), and between requests a slice of a streamed
+ * build runs; the next turn is a MessageChannel message (not a timer:
+ * unclamped, and not throttled in the background).
+ */
+const inbox: Req[] = [];
+const tick = new MessageChannel();
+let ticking = false;
+function kick(): void {
+  if (ticking) return;
+  ticking = true;
+  tick.port2.postMessage(0);
+}
+tick.port1.onmessage = async () => {
+  const r = inbox.shift();
+  if (r) {
+    const b = building.get(r.client);
+    if (b && waits(r)) b.queue.push(r);
+    else await onRequest(r);
+  } else {
+    await ready;
+    stepOnce();
+  }
+  ticking = false;
+  if (inbox.length || building.size) kick();
+};
 
 /**
  * PhiTeX's PNGs are stored, not deflated (~0.9 MB a page at 96 dpi), and a
@@ -655,7 +793,8 @@ function shipPdf(r: Req): void {
 /** Client `client`'s PDF to the drawer, if its pages changed since the last one sent. */
 function shipFor(client: string): void {
   const h = sessions.get(client);
-  if (!h || !core.ph_draw_set || xetexClients.has(client)) return;
+  // (a streamed build running has no PDF yet: its end sends it)
+  if (!h || !core.ph_draw_set || xetexClients.has(client) || building.has(client)) return;
   core.ph_pages(h);
   const key = new TextDecoder().decode(outBytes());
   if (shipped.get(client) === key) return;
@@ -826,6 +965,7 @@ async function onRequest(r: Req): Promise<void> {
   // first keystroke after a cold build doesn't pay it; a message arriving
   // meanwhile waits that long, once per cold build)
   setTimeout(() => {
+    if (building.size) return;
     try {
       // (readying the next rebuild: the tab says so, not "Typesetting", while it runs)
       host.post({ preparing: true });
@@ -850,5 +990,8 @@ export function startWorker(h: WorkerHost): void {
   host = h;
   DRAW = h.name === "draw";
   ready = load();
-  h.listen((r) => void onRequest(r));
+  h.listen((r) => {
+    inbox.push(r);
+    kick();
+  });
 }

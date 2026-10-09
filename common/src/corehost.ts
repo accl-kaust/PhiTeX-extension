@@ -198,8 +198,7 @@ export class CoreHost {
         const bins = Object.fromEntries(binaries);
         const was = dual.get(client);
         // (an open after B took over: B goes on alone, as one worker would)
-        // (one worker opens alone, plain then SSA or SSA after B took over: streamed,
-        // PhiTeX's SSA streams being exact since 1944023)
+        // (one worker opens alone: its plain first paint streamed, as A's)
         if (!this.two || m.workers === 1 || was?.phase === "ssa") return this.route(client).postMessage({ ...m, id, client, binaries: bins, stream: true } as Req);
         if (was) this.ssa!.postMessage({ id: this.nextId++, client, op: "close" } as Req);
         if (!this.ssa) {

@@ -527,7 +527,10 @@ function handle(r: Req): Res {
       f.u32(bins.length);
       for (const [n, b] of bins) f.str(n).bytes(b);
       // (the engine: 1 XeTeX; then how to start)
-      const stream = !!r.stream && !!core.ph_step;
+      // (an SSA build at once, start 2, never streamed: PhiTeX's streamed SSA
+      // builds are not yet exact, its first round's PDF differing on an LNCS
+      // paper; plain builds, start 0's first paint and start 1, are)
+      const stream = !!r.stream && !!core.ph_step && (r.start ?? 0) !== 2;
       f.u32(r.engine === "xelatex" ? 1 : 0).u32(r.start ?? 0).u32(stream ? 1 : 0);
       building.delete(r.client);
       const nh = call(f, (p, n) => core.ph_open(p, n));

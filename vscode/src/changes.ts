@@ -9,7 +9,7 @@
 // is also where it is once the later ones are in. Offsets and lengths are
 // UTF-16 code units, as the session's are; it makes the bytes.
 
-import type { Edit } from "../../common/src/edits.ts";
+import type { Edit } from "../../common/src/vendor/viewer/edits.ts";
 
 /** What a change says (TextDocumentContentChangeEvent, less its Range). */
 export interface Change {

@@ -5,18 +5,18 @@
 import "./platform.ts";
 import { platform } from "./common/platform.ts";
 import { setFontBase } from "./common/vendor/viewer/page2.ts";
-import type { Edit } from "./common/edits.ts";
+import type { Edit } from "./common/vendor/viewer/edits.ts";
 import { older } from "./common/version.ts";
-import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./common/session.ts";
+import { PreviewSession, type CoreReq, type CoreRes, type CoreTransport, type CoreEvent, type EditorHost } from "./common/vendor/viewer/session.ts";
 import { readZip } from "./common/zip.ts";
 import { type DiffRunner, compareButton } from "./diffui.ts";
 import { filesAt, type Version } from "./history.ts";
-import { Compare, gate, LATEXDIFF_LOOK } from "./common/compare.ts";
+import { Compare, gate, LATEXDIFF_LOOK } from "./common/vendor/viewer/compare.ts";
 import { SUPPORT, unseen, type News } from "./news.ts";
-import { Panel, pageFormat, type DiffLook, type PanelPrefs, type Prefs } from "./common/panel.ts";
+import { Panel, pageFormat, type DiffLook, type PanelPrefs, type Prefs } from "./common/vendor/viewer/panel.ts";
 import { channel, follow, tee, type Ask } from "./mirror.ts";
-import { approximable, resolve, shimTexts, type Engine, type EngineChoice } from "./common/engines.ts";
-import { hostPackages } from "./common/packages.ts";
+import { approximable, resolve, shimTexts, type Engine, type EngineChoice } from "./common/vendor/viewer/engines.ts";
+import { hostPackages } from "./common/vendor/viewer/packages.ts";
 import { drawPage } from "./common/tabrender.ts";
 
 // (the pages' text fonts: the extension's own, Latin Modern)
@@ -1016,7 +1016,7 @@ const EDITOR = /^\/project\/[0-9a-f]{24}(\/detached)?\/?$/;
     onShortcut: () => dock?.toggle() ?? false,
     onTour: () => dock?.tour(),
     onNews: () => dock?.news(),
-  }, prefs);
+  }, prefs, { fileUrl: (p) => chrome.runtime.getURL(p) });
   // (off in the popup: nothing at all, not even the project fetched; on again, live)
   let { enabled } = await chrome.storage.local.get("enabled");
   let started = false;

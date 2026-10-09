@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { core } from "./wasm-harness.mjs";
-import { Batch } from "../common/src/edits.ts";
+import { Batch } from "../common/src/vendor/viewer/edits.ts";
 import { readFileSync } from "node:fs";
 
 // (PhiTeX's plain-TeX core: `scripts/build.sh --phitex`. The default build is
@@ -43,6 +43,6 @@ test_("LaTeX: PhiTeX drops its commands without a trace (so the warning is a sou
   assert.equal(o.pending, 0);
   assert.equal(o.undefined, 0);
   assert.equal(c.status(o.h).pending, 0);
-  const { diagnose } = await import("../common/src/diagnostics.ts");
+  const { diagnose } = await import("../common/src/vendor/viewer/diagnostics.ts");
   assert.equal(diagnose({ "main.tex": "\\documentclass{article}\n" }, "main.tex")[0].code, "latex");
 });

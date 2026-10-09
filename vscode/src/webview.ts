@@ -3,8 +3,8 @@
 // what the panel is asked (a page in view, a page wanted, a double-click, a
 // download) sent back to it (extension.ts's Ask).
 
-import { apply, type Told } from "../../common/src/remote.ts";
-import { Panel, type PanelPrefs } from "../../common/src/panel.ts";
+import { apply, type Told } from "../../common/src/vendor/viewer/remote.ts";
+import { Panel, type PanelPrefs } from "../../common/src/vendor/viewer/panel.ts";
 import { setFontBase } from "../../common/src/vendor/viewer/page2.ts";
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): unknown; setState(s: unknown): void };
@@ -37,6 +37,7 @@ const panel = new Panel(
   },
   {
     pdfjs: false,
+    header: true,
     // (VS Code's words: no Overleaf here, nothing to disclaim; the license a click away)
     words: {
       badge: "Instant",

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { boxes, from, glyphs, lineAt, nearest } from "../common/src/vendor/viewer/sync.ts";
-import { byteOffset, charOffset } from "../common/src/edits.ts";
+import { byteOffset, charOffset } from "../common/src/vendor/viewer/edits.ts";
 
 // "main" (the job's name for main.tex) and a file not in the project; one glyph with no source.
 const gs = glyphs(

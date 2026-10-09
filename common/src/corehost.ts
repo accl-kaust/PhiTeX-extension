@@ -9,7 +9,7 @@
 import type { Req, Res } from "./worker.ts";
 import { index, resolve } from "./shelf.ts";
 import { refresh, type Release } from "./release.ts";
-import { type DiffReply, type DiffReq, loadDiff } from "./diff.ts";
+import { type DiffReply, type DiffReq, loadDiff } from "./vendor/viewer/diff.ts";
 import { platform } from "./platform.ts";
 
 /** A worker: the browser's, or worker_threads' as the host adapts it. */

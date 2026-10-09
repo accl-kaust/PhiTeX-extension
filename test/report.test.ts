@@ -1,7 +1,7 @@
 // The debug report (report.ts): anonymized before anyone sees it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { anonymizer, report } from "../common/src/report.ts";
+import { anonymizer, report } from "../common/src/vendor/viewer/report.ts";
 
 const paths = ["Thesis.tex", "chapters/Intro.tex", "References.bib", "figures/plot.png"];
 

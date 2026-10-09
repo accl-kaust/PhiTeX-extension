@@ -6,8 +6,8 @@
 // phitex-diff markup, typeset) is the runner's: `start` gets the version
 // picked.
 
-import type { Panel } from "./common/panel.ts";
-import { DiffControls, type DiffRunner as Runner } from "./common/compare.ts";
+import type { Panel } from "./common/vendor/viewer/panel.ts";
+import { DiffControls, type DiffRunner as Runner } from "./common/vendor/viewer/compare.ts";
 import { type Version, versions } from "./history.ts";
 
 export type DiffRunner = Runner<Version>;

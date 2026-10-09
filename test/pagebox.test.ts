@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { approximateFraction, pageBox } from "../common/src/panel.ts";
+import { approximateFraction, pageBox } from "../common/src/vendor/viewer/panel.ts";
 
 test("approximateFraction, as pdf.js", () => {
   assert.deepEqual(approximateFraction(1), [1, 1]);

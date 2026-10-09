@@ -11,8 +11,11 @@
 import type { Draws, PageImage, Status } from "./session.ts";
 import type { PackageState } from "./packages.ts";
 import { ENGINES, errorNeeds, type Engine } from "./engines.ts";
-import { Viewer } from "./vendor/viewer/viewer.ts";
-import { VIEWER_CSS } from "./vendor/viewer/css.ts";
+import { Viewer } from "./viewer.ts";
+import { VIEWER_CSS } from "./css.ts";
+import { PROBLEMS_CSS, problemHtml } from "./problems.ts";
+import { OUTLINE_CSS, Outline, type Entry } from "./outline.ts";
+import { KEYS, bindKeys } from "./keys.ts";
 import { REPORT_TO } from "./report.ts";
 
 /** How long a build may ship no page before the last good one is dimmed (typing through `{`). */
@@ -137,11 +140,24 @@ const OVERLEAF_WORDS: PanelWords = {
   keptIn: "this browser",
 };
 
+/** `c` if it is a #rrggbb color (what goes into a style or value attribute), else `or`. */
+export function safeColor(c: unknown, or: string): string {
+  return typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c) ? c : or;
+}
+
 /** What a host may leave out: a control whose event it doesn't handle is hidden. */
 export interface PanelOptions {
   words?: Partial<PanelWords>;
   /** The PDF.js page format offered (default: yes). */
   pdfjs?: boolean;
+  /** One of the host's own files by its path (the license): its address (default: the path as it is). */
+  fileUrl?(path: string): string;
+  /** The document's contents beside the pages (outline.ts: the host gives them, `outline`), `t` or ☰ to show or hide. */
+  outline?: boolean;
+  /** The pages' keys (keys.ts: PDF viewers' and vim's, `?` lists them), and `e` for the problems; where the page owns the keyboard (the CLI's), not under an editor. */
+  keys?: boolean;
+  /** Docked where the host has no toolbar of its own (the CLI's page, VS Code's webview): the panel's header and footer shown. */
+  header?: boolean;
 }
 
 /** Where the panel keeps its preferences (chrome.storage.local in the extension). */
@@ -331,6 +347,16 @@ button.btn:hover { background: var(--accent2); }
 .sum .caret { margin-left: auto; transition: transform .15s; }
 .win.diags-open .sum .caret { transform: rotate(90deg); }
 .body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* (the contents beside the pages: PanelOptions.outline) */
+.win.has-side .body { flex-direction: row; }
+.side { display: none; flex: none; width: 240px; overflow: auto; background: var(--light); border-right: 1px solid var(--light3); color: var(--fg); }
+.win.side-on .side { display: block; }
+.keyhelp { position: absolute; z-index: 6; top: 12px; right: 12px; padding: 10px 14px; border-radius: 10px; background: rgb(27 34 44 / 96%); color: #fff; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.keyhelp td { padding: 1px 8px 1px 0; vertical-align: top; }
+.keyhelp kbd { font: 11px ui-monospace, monospace; background: rgb(255 255 255 / 12%); border-radius: 4px; padding: 1px 5px; }
+/* (a problem told whole, in the drawer: problems.ts's card, as a row) */
+.diags .phx-inline { margin: 0; padding: 0; border-radius: 0; border-top: 0; box-shadow: none; max-width: none; list-style: none; }
+.diags .phx-inline li { border-bottom: 1px solid #2c2e33; }
 .diags { position: absolute; z-index: 2; left: 0; right: 0; top: 0; max-height: 50%; overflow: auto; background: var(--light);
   border-bottom: 1px solid var(--divider); box-shadow: 0 6px 16px rgba(27,34,44,.18); display: none; }
 .win.diags-open .diags { display: block; }
@@ -392,6 +418,8 @@ footer .msg.err { color: var(--danger); }
 .win.docked.light .sum .n.error { color: var(--danger); } .win.docked.light .sum .n.warning { color: var(--warn); } .win.docked.light .sum .n.info { color: var(--info); }
 .win.docked.light .empty { color: var(--fg2); }
 .win.docked > header, .win.docked > footer { display: none; }
+/* (a host with no toolbar of its own: the panel's header and footer kept, PanelOptions.header) */
+.win.docked.own-header > header, .win.docked.own-header > footer { display: flex; }
 .win.docked > .bar { display: none; }
 .win.docked.sheet-open > .bar { display: flex; position: absolute; z-index: 4; top: 6px; right: 8px; width: min(340px, calc(100% - 16px));
   flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; border-radius: var(--r2); border: 1px solid var(--divider);
@@ -572,7 +600,7 @@ export class Panel {
     const w = (this.words = { ...OVERLEAF_WORDS, ...opts.words });
     const host = document.createElement("phitex-preview");
     this.root = host.attachShadow({ mode: "open" });
-    this.root.innerHTML = (`<style>${VIEWER_CSS}${CSS}</style>
+    this.root.innerHTML = (`<style>${VIEWER_CSS}${PROBLEMS_CSS}${OUTLINE_CSS}${CSS}</style>
 <div class="win" role="dialog" aria-label="PhiTeX preview">
   <header>
     <span class="icon" aria-hidden="true">preview</span>
@@ -618,6 +646,8 @@ export class Panel {
     <div class="about" id="about" role="dialog" aria-label="About the PhiTeX preview">
       ${w.about}
     </div>
+    <nav class="side" id="side" aria-label="Contents"></nav>
+    <div class="keyhelp" id="keyhelp" role="dialog" aria-label="Keys" hidden></div>
     <div class="stage" id="stage"><div class="approx" id="approx"></div><div class="banner" id="banner"></div><div class="empty" id="empty"><div class="load"><div class="steps"><span class="now">Project read</span><i></i><span>Packages</span><i></i><span>Typesetting</span></div><h3>Reading the project…</h3><div class="bar busy"><i></i></div></div></div><div class="viewer" id="viewer"></div></div>
   </div>
   <footer><span class="lat" id="lat" title="Click for details">–</span><span class="grow"></span><span class="msg" id="msg">all local</span></footer>
@@ -635,7 +665,7 @@ export class Panel {
     dbg.onclick = () => this.toggleDebug();
     this.$("#dbg2").onchange = () => this.toggleDebug();
     const license = this.$("#license") as HTMLAnchorElement | null;
-    if (license) license.href = globalThis.chrome?.runtime?.getURL?.(w.license) ?? w.license;
+    if (license) license.href = opts.fileUrl?.(w.license) ?? w.license;
     // (what the host doesn't handle, not offered)
     if (!ev.onTour) this.$("#tour").style.display = "none";
     if (!ev.onNews) this.$("#news").style.display = "none";
@@ -669,11 +699,17 @@ export class Panel {
       this.save();
     };
     this.$("#diags").onclick = (e) => {
+      // (a problem card's place)
+      const at = (e.target as HTMLElement).closest<HTMLElement>(".phx-place[data-file]");
+      if (at) {
+        e.preventDefault();
+        return ev.onGoto(at.dataset.file!, Number(at.dataset.line) || 1);
+      }
       const d = (e.target as HTMLElement).closest<HTMLElement>(".diag[data-line]");
       if (d) ev.onGoto(d.dataset.file!, Number(d.dataset.line));
     };
     const sum = this.$("#sum");
-    sum.onclick = () => this.diagsOpen(!this.win.classList.contains("diags-open"));
+    sum.onclick = () => this.diagnostics();
     sum.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), sum.click());
     this.$("#stage").addEventListener("pointerdown", () => {
       this.diagsOpen(false);
@@ -691,6 +727,7 @@ export class Panel {
       need: (k) => ev.onNeed?.(k),
       inView: (k) => {
         this.at = k;
+        this.contents?.at(k);
         this.nav();
         ev.onPage(k);
       },
@@ -701,6 +738,7 @@ export class Panel {
       selected: (sel) => ev.onSelectPage?.(sel),
       link: ev.onLink ? (u) => ev.onLink!(u) : undefined,
     });
+    this.extras(opts);
     // (keep it on screen when the window shrinks)
     window.addEventListener("resize", () => this.place());
     new ResizeObserver(() => {
@@ -981,6 +1019,15 @@ export class Panel {
     const list = this.$("#diags");
     list.innerHTML = "";
     for (const d of diags.slice(0, 50)) {
+      // (a problem the build told whole: its card, its places links)
+      if (d.problem) {
+        const card = document.createElement("ol");
+        card.className = "phx-card phx-inline";
+        card.setAttribute("role", "listitem");
+        card.innerHTML = problemHtml(d.problem);
+        list.append(card);
+        continue;
+      }
       const row = document.createElement("div");
       row.className = `diag ${d.severity}`;
       row.setAttribute("role", "listitem");
@@ -1023,6 +1070,11 @@ export class Panel {
       .map((k) => `<span class="n ${k}">${icon(k, 14)}${count(k)}</span>`)
       .join("") + `<span class="first"></span>${icon("chevron_right", 16).replace('class="icon"', 'class="icon caret"')}`;
     if (diags[0]) sum.querySelector(".first")!.textContent = diags[0].message;
+    // (problems told whole, as the CLI's are: the drawer opens by itself
+    // when their errors change, unless these were closed by hand)
+    const errs = JSON.stringify(diags.filter((d) => d.problem && d.severity === "error").map((d) => [d.message, d.file, d.line]));
+    if (errs !== "[]" && errs !== this.errsClosed) this.diagsOpen(true);
+    if (errs === "[]") this.errsClosed = "";
     this.stale(s);
     queueMicrotask(() => this.emit());
   }
@@ -1257,8 +1309,110 @@ export class Panel {
     this.zoomTo(String(next ?? now));
   }
 
+  /** The contents beside the pages (PanelOptions.outline). */
+  private contents?: Outline;
+
+  /** The document's outline (its PDF's bookmarks), from the host after each build. */
+  outline(items: Entry[]): void {
+    this.contents?.set(items);
+    this.contents?.at(this.at);
+  }
+
+  /** The contents shown or hidden (remembered on this machine). */
+  side(on = !this.win.classList.contains("side-on")): void {
+    if (!this.contents) return;
+    this.win.classList.toggle("side-on", on);
+    try {
+      localStorage.setItem("phitex.side", on ? "1" : "0");
+    } catch {
+      /* (no storage: not remembered) */
+    }
+    if (this.prefs.zoom === "fit") this.redraw();
+  }
+
+  /** A button of the host's in the header, before the page controls (the CLI's Compare). */
+  headerButton(label: string, title: string, onclick: (b: HTMLButtonElement) => void): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.className = "ib";
+    b.style.cssText = "width:auto;padding:0 8px;font-size:12px";
+    b.title = title;
+    b.textContent = label;
+    b.onclick = () => onclick(b);
+    this.$("header .grow").after(b);
+    return b;
+  }
+
+  /** The contents and the keys, as the host asked (PanelOptions). */
+  private extras(opts: PanelOptions): void {
+    if (opts.header) this.win.classList.add("own-header");
+    if (opts.outline) {
+      this.win.classList.add("has-side");
+      this.contents = new Outline(this.$("#side"), { goToPlace: (k, top) => this.viewer.goToPlace(k, top) });
+      const b = document.createElement("button");
+      b.className = "ib";
+      b.title = "Contents (t)";
+      b.setAttribute("aria-label", "Contents");
+      b.textContent = "☰";
+      b.onclick = () => this.side();
+      this.$("header .title").before(b);
+      let on = true;
+      try {
+        on = localStorage.getItem("phitex.side") !== "0";
+      } catch {
+        /* (shown) */
+      }
+      this.win.classList.toggle("side-on", on);
+    }
+    if (!opts.keys) return;
+    const help = this.$("#keyhelp");
+    const extra: [string, string][] = [["e", "the build's errors and warnings"], ...(opts.outline ? ([["t", "the contents beside the pages"]] as [string, string][]) : [])];
+    help.innerHTML = `<b>Keys</b><table>${[...KEYS, ...extra].map(([k, w]) => `<tr><td><kbd>${k}</kbd></td><td>${w}</td></tr>`).join("")}</table>`;
+    // (the problems' and the contents' keys first: Esc closes the drawer before anything else)
+    addEventListener(
+      "keydown",
+      (e) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable=true]")) return;
+        const drawer = this.win.classList.contains("diags-open");
+        if (e.key === "Escape" && drawer) this.diagnostics(false);
+        else if (e.key === "e") this.diagnostics();
+        else if (e.key === "t" && this.contents) this.side();
+        else return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      },
+      { capture: true },
+    );
+    const stage = this.$("#stage");
+    const pageH = () => {
+      const d = this.last && "draws" in this.last ? this.last.draws : null;
+      return (d?.h ?? 792) * (96 / 72);
+    };
+    const panel = this;
+    bindKeys(window, {
+      get pages() {
+        return panel.viewer.pages;
+      },
+      get page() {
+        return panel.viewer.page;
+      },
+      goTo: (k) => this.viewer.goTo(k),
+      turn: (n) => this.viewer.turn(n),
+      scroller: stage,
+      zoom: (f) => this.zoomTo(String(Math.min(5, Math.max(0.25, this.scale() * f)))),
+      fitWidth: () => this.zoomTo("fit"),
+      fitPage: () => this.zoomTo(String(Math.max(0.2, Math.min((stage.clientHeight - 24) / pageH(), this.scale())))),
+      help: (show) => {
+        help.hidden = !show;
+      },
+    });
+  }
+
+  /** The errors last closed by hand (the drawer opens again when they change). */
+  private errsClosed = "";
+
   /** The diagnostics drawer. */
   diagnostics(on = !this.win.classList.contains("diags-open")): void {
+    if (!on) this.errsClosed = JSON.stringify((this.lastStatus?.diagnostics ?? []).filter((d) => d.problem && d.severity === "error").map((d) => [d.message, d.file, d.line]));
     this.diagsOpen(on);
     this.emit();
   }
@@ -1364,6 +1518,9 @@ export class Panel {
       el.className = "diffset";
       return;
     }
+    // (the look comes from a host, a store or a server: its colors go into
+    // attributes, so only #rrggbb is taken, its names only as the lists have them)
+    look = { ...look, add_color: safeColor(look.add_color, "#0000ff"), del_color: safeColor(look.del_color, "#ff0000") };
     const MARKUP: [string, string][] = [
       ["underline", "Underline"], ["ctraditional", "Color + font"], ["traditional", "Font"], ["cfont", "Color + size"],
       ["fontstrike", "Strike"], ["bold", "Bold"], ["changebar", "Change bars"], ["culinechbar", "Underline + bars"], ["invisible", "Hide deletions"],

@@ -11,7 +11,7 @@ import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { CoreHost, type CoreClient, type CoreWorker } from "../../common/src/corehost.ts";
 import { packRaw } from "../../common/src/shelf.ts";
-import type { CoreEvent, CoreReq, CoreRes, CoreTransport } from "../../common/src/session.ts";
+import type { CoreEvent, CoreReq, CoreRes, CoreTransport } from "../../common/src/vendor/viewer/session.ts";
 import type { WorkerData } from "./worker.ts";
 
 /** The host and its workers, for the extension at `root`, its store in `store`. */

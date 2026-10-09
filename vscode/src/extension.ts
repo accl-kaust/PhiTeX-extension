@@ -19,7 +19,7 @@ import { HostTransport, startCore } from "./core.ts";
 import { nodePlatform } from "./platform.ts";
 
 /** The webview → extension host messages (overleaf/src/mirror.ts's Ask, less the channel's own). */
-type Ask = { t: "hello" } | { t: "need"; k: number } | { t: "page"; k: number } | { t: "goto"; file: string; line: number } | { t: "range"; file: string; from: number; to: number } | { t: "sync"; k: number; x: number; y: number } | { t: "pdf" } | { t: "clean" } | { t: "main"; m: string };
+type Ask = { t: "hello" } | { t: "need"; k: number } | { t: "page"; k: number } | { t: "goto"; file: string; line: number } | { t: "range"; file: string; from: number; to: number } | { t: "sync"; k: number; x: number; y: number } | { t: "select"; sel: { k: number; rects: [number, number, number, number][] }[] } | { t: "pdf" } | { t: "clean" } | { t: "main"; m: string };
 
 /** The project's text files (what the core reads as source), and the binary ones it is given apart. */
 const TEXT = /\.(tex|sty|cls|bib|bst|cfg|def|clo|fd|ltx|bbx|cbx|lbx|dtx|ins|txt|csv|dat|tikz|pgf|bbl)$/i;
@@ -178,6 +178,7 @@ async function preview(ctx: vscode.ExtensionContext, root: string, log: vscode.O
     if (a.t === "need") void session.fetch(a.k);
     if (a.t === "page") void session.setPage(a.k);
     if (a.t === "sync") void session.toSource(a.k, a.x, a.y);
+    if (a.t === "select") void session.selectPage(a.sel);
     if (a.t === "goto") void goto(a.file, (d) => d.lineAt(Math.max(0, Math.min(a.line - 1, d.lineCount - 1))).range);
     if (a.t === "range") void goto(a.file, (d) => new vscode.Range(d.positionAt(a.from), d.positionAt(a.to)), false);
     if (a.t === "main") void session.setMain(a.m);
@@ -189,12 +190,15 @@ async function preview(ctx: vscode.ExtensionContext, root: string, log: vscode.O
       if (to) await vscode.workspace.fs.writeFile(to, pdf);
     }
   });
-  // (a double-click in the editor: that place on the page)
+  // (the editor's cursor: its word highlighted on the page, as it moves;
+  // a selection: what came from it highlighted, on every page)
   const subs = [
     vscode.window.onDidChangeTextEditorSelection((e) => {
       const r = host.rel(e.textEditor.document.uri);
-      if (!r || e.kind !== vscode.TextEditorSelectionChangeKind.Mouse) return;
-      void session.follow(r, e.textEditor.document.offsetAt(e.selections[0].active));
+      if (!r) return;
+      const d = e.textEditor.document, s = e.selections[0];
+      if (s.isEmpty) session.follow(r, d.offsetAt(s.active));
+      else void session.selectSource(r, d.offsetAt(s.start), d.offsetAt(s.end));
     }),
   ];
   view.onDidDispose(() => {

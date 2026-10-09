@@ -27,6 +27,8 @@ const panel = new Panel(
     onGoto: (file, line) => ask({ t: "goto", file, line }),
     onGotoRange: (file, from, to) => ask({ t: "range", file, from, to }),
     onSyncSource: (k, x, y) => ask({ t: "sync", k, x, y }),
+    // (text selected on the pages: the editor selects its source)
+    onSelectPage: (sel) => ask({ t: "select", sel }),
   },
   // (the panel's settings: kept in the webview's own state)
   {

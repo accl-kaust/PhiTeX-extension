@@ -54,6 +54,9 @@ fn main() {
         loop {
             let st = s.status();
             let want: Vec<String> = st.missing.iter().filter(|n| asked.insert((*n).clone())).cloned().collect();
+            if std::env::var("FIRSTPAGE_TERM").is_ok() {
+                eprintln!("discovery: {} pages, history {}, missing {:?}", st.pages, st.history, st.missing);
+            }
             if want.is_empty() {
                 eprintln!("{}: {} pages, history {}, {} files found", dir.display(), st.pages, st.history, extra.len());
                 break;
@@ -62,9 +65,32 @@ fn main() {
                 if let Some(b) = find(texmf, &n) {
                     give(&mut s, &n, &b);
                     extra.push((n, b));
+                } else if std::env::var("FIRSTPAGE_TERM").is_ok() {
+                    eprintln!("not found: {n}");
                 }
             }
         }
+    }
+    // (and what a fresh session lacks: discovery's later builds read the
+    // .aux the earlier ones wrote, a fresh one none, its undefined
+    // references set in other fonts)
+    for _ in 0..20 {
+        let mut s = Session::open(files.clone(), main);
+        for (n, b) in &binary {
+            s.set_bytes(n, b);
+        }
+        for (n, b) in &extra {
+            give(&mut s, n, b);
+        }
+        s.plain_only(true);
+        let st = s.status();
+        let have: std::collections::BTreeSet<&str> = extra.iter().map(|(n, _)| n.as_str()).collect();
+        let more: Vec<(String, Vec<u8>)> = st.missing.iter().filter(|n| !have.contains(n.as_str())).filter_map(|n| Some((n.clone(), find(texmf, n)?))).collect();
+        if more.is_empty() {
+            eprintln!("fresh: {} pages, history {}", st.pages, st.history);
+            break;
+        }
+        extra.extend(more);
     }
     let session = || {
         let mut s = Session::open(files.clone(), main);
@@ -80,7 +106,8 @@ fn main() {
         s
     };
     let mut rows = Vec::new();
-    for round in 0..3 {
+    let rounds = std::env::var("FIRSTPAGE_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    for round in 0..rounds {
         // blocking
         let mut s = session();
         let t = Instant::now();
@@ -91,9 +118,9 @@ fn main() {
         let pdf_a = s.pdf.clone();
         let hashes_a = s.page_hashes();
         let log_a: Vec<String> = s.builds_log().to_vec();
-        if pdf_a.is_empty() && round == 0 {
+        if (pdf_a.is_empty() || std::env::var("FIRSTPAGE_TERM").is_ok()) && round == 0 {
             let t = s.term();
-            eprintln!("no PDF; the terminal ends:\n{}", &t[t.len().saturating_sub(1500)..]);
+            eprintln!("no PDF ({} bytes, history {}); the terminal ends:\n{}", pdf_a.len(), st.history, &t[t.len().saturating_sub(1500)..]);
         }
         drop(s);
         // streamed
@@ -130,6 +157,10 @@ fn main() {
         let pdf_b = s.pdf.clone();
         let hashes_b = s.page_hashes();
         let same = pdf_a == pdf_b;
+        if !same && std::env::var("FIRSTPAGE_DIFF").is_ok() {
+            std::fs::write("../../../a.pdf", &pdf_a).unwrap();
+            std::fs::write("../../../b.pdf", &pdf_b).unwrap();
+        }
         if std::env::var("FIRSTPAGE_LOG").is_ok() {
             eprintln!("--- blocking log:\n{}\n--- streamed log:\n{}", log_a.join("\n"), s.builds_log().join("\n"));
         }

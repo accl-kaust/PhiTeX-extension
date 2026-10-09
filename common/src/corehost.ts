@@ -198,7 +198,9 @@ export class CoreHost {
         const bins = Object.fromEntries(binaries);
         const was = dual.get(client);
         // (an open after B took over: B goes on alone, as one worker would)
-        if (!this.two || m.workers === 1 || was?.phase === "ssa") return this.route(client).postMessage({ ...m, id, client, binaries: bins } as Req);
+        // (one worker opens alone, plain then SSA or SSA after B took over: streamed,
+        // PhiTeX's SSA streams being exact since 1944023)
+        if (!this.two || m.workers === 1 || was?.phase === "ssa") return this.route(client).postMessage({ ...m, id, client, binaries: bins, stream: true } as Req);
         if (was) this.ssa!.postMessage({ id: this.nextId++, client, op: "close" } as Req);
         if (!this.ssa) {
           this.ssa = this.spawn();
@@ -206,8 +208,7 @@ export class CoreHost {
         }
         const open = this.nextId++;
         dual.set(client, { phase: "plain", open });
-        // (A's plain build streamed: each page as it is shipped. B's SSA one
-        // is not, until streamed SSA builds are exact)
+        // (A's plain build streamed: each page as it is shipped)
         worker.postMessage({ ...m, id, client, binaries: bins, start: 1, noMinted: true, stream: true } as Req);
         // (B: the SSA program at once; ready when its open answers)
         replies.set(open, (r) => {
@@ -223,6 +224,7 @@ export class CoreHost {
           drawn.delete(client);
           say({ event: "switched" });
         });
+        // (B builds behind A's pages: not streamed, its open answers when it is in)
         this.ssa.postMessage({ ...m, id: open, client, binaries: bins, start: 2 } as Req);
         return;
       }

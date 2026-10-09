@@ -54,7 +54,10 @@ pub(crate) struct Stream {
     begun: Instant,
     /// The pages shipped so far, and each one's hash as shown.
     shipped: Shipments,
-    hashes: Vec<Option<u64>>,
+    /// (each with whether it was whole: a page that was not is hashed
+    /// again when forms come, which a page's stream may draw before
+    /// they are shipped)
+    hashes: Vec<Option<(u64, bool)>>,
     /// When page 1 was shipped (ms from `begun`), and the pages there were
     /// at the end of that slice.
     first_page_ms: Option<f64>,
@@ -110,6 +113,10 @@ impl Session {
 
     /// A host that keeps the pages shipped and the files named ahead.
     fn host_streams(&self, h: &mut MemHost) {
+        // (PHITEX_STREAM_NO_TAP: no streams or hints kept, a test's)
+        if std::env::var("PHITEX_STREAM_NO_TAP").is_ok() {
+            return;
+        }
         h.shipments = Some(Shipments::default());
         h.hints = Some(Vec::new());
     }
@@ -169,7 +176,10 @@ impl Session {
                     let mut t = ssa::Trips { max, tools: &mut no_tools, native: Some(&native), clock: None };
                     let tex = self.tex.as_mut().unwrap();
                     SLICE_END.store(end, Ordering::Relaxed);
-                    tex.tracker().cancel.set(Some(slice_over));
+                    // (PHITEX_STREAM_SETTLE_WHOLE: the settle not stopped, a test's)
+                    if std::env::var("PHITEX_STREAM_SETTLE_WHOLE").is_err() {
+                        tex.tracker().cancel.set(Some(slice_over));
+                    }
                     let mut s = ssa::settle(tex, false, false, &mut t, if *first { r.commands } else { 0 }, 0);
                     tex.tracker().cancel.set(None);
                     *first = false;
@@ -291,19 +301,19 @@ impl Session {
         let Some(st) = self.stream.as_mut() else { return Vec::new() };
         (0..st.shipped.pages())
             .map(|k| {
-                if let Some(h) = st.hashes.get(k).copied().flatten() {
+                if let Some((h, _)) = st.hashes.get(k).copied().flatten() {
                     return h;
                 }
-                let h = st.shipped.page_pdf(k, &mut |_, _| None).map_or(0, |(pdf, whole)| {
+                let (h, whole) = st.shipped.page_pdf(k, &mut |_, _| None).map_or((0, false), |(pdf, whole)| {
                     let h = phitex_draw::Pdf::open(&std::sync::Arc::from(pdf)).and_then(|d| d.hashes().first().copied()).unwrap_or(0);
                     // (a page not drawn whole from its stream: a hash no
                     // built page has, so the PDF's page replaces it)
-                    if whole { h } else { provisional(h) }
+                    (if whole { h } else { provisional(h) }, whole)
                 });
                 if st.hashes.len() <= k {
                     st.hashes.resize(k + 1, None);
                 }
-                st.hashes[k] = Some(h);
+                st.hashes[k] = Some((h, whole));
                 h
             })
             .collect()
@@ -395,7 +405,15 @@ fn took(host: &mut MemHost) -> Option<(Shipments, Vec<usize>)> {
 /// Streams shipped (`took`) into `st`.
 fn absorb(st: &mut Stream, got: Option<(Shipments, Vec<usize>)>) {
     let Some((got, new)) = got else { return };
-    // (the forms too: they come before the pages that draw them)
+    // (a form may come after the page that draws it: the pages not whole
+    // are hashed and drawn again, the form with them now)
+    if got.forms() > 0 {
+        for h in &mut st.hashes {
+            if h.is_some_and(|(_, whole)| !whole) {
+                *h = None;
+            }
+        }
+    }
     st.shipped.extend(got);
     for k in new {
         if let Some(h) = st.hashes.get_mut(k) {

@@ -214,3 +214,33 @@ fn an_edit_while_settling_stops_the_settle() {
         assert_eq!(s.draws(k), fresh.draws(k), "page {}: settled after the edit, not a fresh build's", k + 1);
     }
 }
+
+/// A form not `\immediate` is shipped after the page that draws it (at its
+/// first use, after the page object): the page, hashed before the form
+/// came, is hashed again with it, and keeps its PDF page's hash.
+#[test]
+fn a_form_shipped_after_its_page() {
+    assets();
+    let f = found();
+    let mut files = BTreeMap::new();
+    let d = doc().replace(
+        "\\tableofcontents\n",
+        "\\setbox0\\hbox{FORM}\\pdfxform0 \\edef\\f{\\the\\pdflastxform}\\noindent\\pdfrefxform\\f\\par\n",
+    );
+    files.insert("main.tex".to_string(), d);
+    let mut s = Session::open(files.clone(), "main.tex");
+    for (n, b) in &f {
+        give(&mut s, n, b);
+    }
+    s.plain_only(true);
+    s.stream_begin();
+    let mut last = Vec::new();
+    while s.stream_step(1.0) {
+        last = s.page_hashes();
+    }
+    s.stream_json(1);
+    let fin = s.page_hashes();
+    assert!(!fin.is_empty());
+    assert_eq!(last.first(), fin.first(), "page 1 kept the hash it had without its form");
+    assert!(s.draws(0).unwrap().contains("FORM"));
+}

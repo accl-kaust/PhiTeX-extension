@@ -1708,9 +1708,13 @@ fn clock_ns() -> u64 {
 
 /// The clock, as the host's WASI shim gives it (UTC).
 fn now() -> DateTime {
-    let s = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    // (SOURCE_DATE_EPOCH, natively: builds compared byte for byte share
+    // their \time and PDF dates, as pdfTeX's)
+    let s = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    });
     let days = i64::try_from(s / 86_400).unwrap_or(0);
     // (Howard Hinnant's civil_from_days)
     let z = days + 719_468;
